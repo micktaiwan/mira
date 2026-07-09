@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: mira
+appId: com.mira.app
+productName: Mira
 directories:
   buildResources: build
 files:

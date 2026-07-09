@@ -13,14 +13,25 @@ function setup(): {
     getTargetWebContents: () => ({
       loadURL: (url: string) => {
         loaded.push(url)
-      }
+      },
+      goBack: () => {},
+      goForward: () => {}
     }),
-    getTargetProfile: () => focused,
-    openProfile: (name: string) => {
-      focused = name
-      return { profile: name, created: true }
+    getTargetProfile: () => ({ id: focused, label: focused }),
+    openProfile: (id: string) => {
+      focused = id
+      return { id, created: true }
     },
-    listProfiles: () => ({ profiles: [focused], focused })
+    createProfile: (label?: string) => ({ id: 'new', label: label ?? 'Profile 2' }),
+    renameProfile: (id: string, label: string) => ({ id, label }),
+    listProfiles: () => ({ profiles: [{ id: focused, label: focused, open: true }], focused }),
+    openSettings: () => {},
+    // Tab slice: minimal stubs, not exercised by these socket-dispatch tests.
+    newTab: (url?: string) => ({ id: 'tab', title: '', url: url ?? 'home', favicon: null }),
+    closeTab: () => ({ closed: true }),
+    selectTab: (id: string) => ({ id }),
+    listTabs: () => ({ tabs: [], activeId: null, panelCollapsed: false }),
+    toggleTabsPanel: (collapsed?: boolean) => ({ collapsed: collapsed ?? true })
   }
   return { registry: createCommandRegistry(), ctx, loaded }
 }
