@@ -14,6 +14,12 @@ export interface TabMeta {
   title: string
   url: string
   favicon: string | null
+  /** Pinned tabs render as compact squares in a wrapping grid at the head of
+   * the strip. Optional so plain (unpinned) tabs need not carry the flag:
+   * absent means not pinned — always test with `=== true`. Invariant: pinned
+   * tabs form a contiguous block at the head of the list (pinTab / unpinTab
+   * place them there, moveTab never crosses the boundary). */
+  pinned?: boolean
 }
 
 /** A window's tab list plus its active tab. `activeId` is null only when there
@@ -63,4 +69,104 @@ export function closeTab(state: TabState, id: string): TabState {
   // the left neighbor, then to nothing.
   const neighbor = tabs[index] ?? tabs[index - 1] ?? null
   return { tabs, activeId: neighbor ? neighbor.id : null }
+}
+
+/** Where focus goes when the active tab is discarded (its page torn down to
+ * reclaim RAM, the tab kept in the list). Discarding must never wake a sleeping
+ * tab — that would reload a page, the opposite of freeing memory — so it lands on
+ * the nearest OTHER *already-loaded* tab, searched rightward first then leftward
+ * (no wrap). `loaded` is the set of tab ids that currently have a live view.
+ * Returns null when no other loaded tab exists (the caller then opens a fresh tab
+ * to land on). Does not mutate the list. */
+export function nextLoadedTab(state: TabState, loaded: ReadonlySet<string>): string | null {
+  const index = state.tabs.findIndex((t) => t.id === state.activeId)
+  if (index === -1) return null
+  for (let i = index + 1; i < state.tabs.length; i++) {
+    if (loaded.has(state.tabs[i].id)) return state.tabs[i].id
+  }
+  for (let i = index - 1; i >= 0; i--) {
+    if (loaded.has(state.tabs[i].id)) return state.tabs[i].id
+  }
+  return null
+}
+
+/** The tab one step from the active one in the strip: `direction` -1 for the
+ * previous (arrow up), +1 for the next (arrow down). Steps through EVERY tab,
+ * asleep or not — this is deliberate navigation (selecting a sleeper wakes it),
+ * unlike discard which skips sleepers. Wraps around the ends: past the last tab
+ * comes the first, before the first comes the last. Returns null only on an empty
+ * list or when nothing is active. */
+export function adjacentTab(state: TabState, direction: 1 | -1): string | null {
+  const n = state.tabs.length
+  const index = state.tabs.findIndex((t) => t.id === state.activeId)
+  if (index === -1) return null
+  return state.tabs[(index + direction + n) % n].id
+}
+
+/** Move a tab to `toIndex` (its final position in the resulting order). The
+ * active tab and every id are unchanged — only the order shifts. `toIndex` is
+ * clamped into range AND into the tab's own zone: a move never crosses the
+ * pinned/regular boundary, so the pinned block stays contiguous at the head
+ * whatever a caller (drag, socket, MCP) asks for. An unknown id is a no-op. */
+export function moveTab(state: TabState, id: string, toIndex: number): TabState {
+  const from = state.tabs.findIndex((t) => t.id === id)
+  if (from === -1) return state
+  const tabs = [...state.tabs]
+  const [moved] = tabs.splice(from, 1)
+  const boundary = tabs.filter((t) => t.pinned === true).length
+  const min = moved.pinned === true ? 0 : boundary
+  const max = moved.pinned === true ? boundary : tabs.length
+  const insertAt = Math.min(Math.max(toIndex, min), max)
+  tabs.splice(insertAt, 0, moved)
+  return { ...state, tabs }
+}
+
+/** Pin a tab: flag it and move it to the end of the pinned block at the head
+ * of the strip. Order changes, focus does not. No-op on an unknown id or an
+ * already pinned tab. */
+export function pinTab(state: TabState, id: string): TabState {
+  const from = state.tabs.findIndex((t) => t.id === id)
+  if (from === -1 || state.tabs[from].pinned === true) return state
+  const tabs = [...state.tabs]
+  const [tab] = tabs.splice(from, 1)
+  // With the tab removed, the pinned count is exactly the end of the block.
+  const insertAt = tabs.filter((t) => t.pinned === true).length
+  tabs.splice(insertAt, 0, { ...tab, pinned: true })
+  return { ...state, tabs }
+}
+
+/** Unpin a tab: unflag it and move it to the head of the regular tabs, right
+ * under the pinned block. Order changes, focus does not. No-op on an unknown
+ * id or a tab that is not pinned. */
+export function unpinTab(state: TabState, id: string): TabState {
+  const from = state.tabs.findIndex((t) => t.id === id)
+  if (from === -1 || state.tabs[from].pinned !== true) return state
+  const tabs = [...state.tabs]
+  const [tab] = tabs.splice(from, 1)
+  // The remaining pinned tabs end exactly where the regular zone begins.
+  const insertAt = tabs.filter((t) => t.pinned === true).length
+  tabs.splice(insertAt, 0, { ...tab, pinned: false })
+  return { ...state, tabs }
+}
+
+/** What Cmd+W (close-active-tab) does right now. A pinned tab must be asked
+ * twice: the first press only ARMS it, and a second consecutive press on the
+ * same tab closes it — the guard against losing a pinned tab to a reflex
+ * Cmd+W (its square has no close button). A regular tab closes immediately.
+ * `armedId` is the tab armed by the previous press (null when none); callers
+ * own that bit of state and must reset it whenever the active tab changes
+ * (select / new tab), so only truly consecutive presses close. */
+export type CloseActiveDecision =
+  | { action: 'none' }
+  | { action: 'arm'; id: string }
+  | { action: 'close'; id: string }
+
+export function closeActiveDecision(
+  state: TabState,
+  armedId: string | null
+): CloseActiveDecision {
+  const active = state.tabs.find((t) => t.id === state.activeId)
+  if (!active) return { action: 'none' }
+  if (active.pinned === true && armedId !== active.id) return { action: 'arm', id: active.id }
+  return { action: 'close', id: active.id }
 }

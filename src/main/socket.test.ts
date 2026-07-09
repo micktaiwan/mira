@@ -26,12 +26,63 @@ function setup(): {
     renameProfile: (id: string, label: string) => ({ id, label }),
     listProfiles: () => ({ profiles: [{ id: focused, label: focused, open: true }], focused }),
     openSettings: () => {},
+    getSettings: () => ({ homeUrl: 'home' }),
+    setHomeUrl: (url: string) => ({ homeUrl: url }),
+    getMemoryUsage: () => ({ rss: 0, processes: 1 }),
+    getTabCounts: () => ({ total: 0, loaded: 0, asleep: 0 }),
     // Tab slice: minimal stubs, not exercised by these socket-dispatch tests.
-    newTab: (url?: string) => ({ id: 'tab', title: '', url: url ?? 'home', favicon: null }),
+    newTab: (url?: string) => ({
+      id: 'tab',
+      title: '',
+      url: url ?? 'home',
+      favicon: null,
+      loaded: true,
+      kind: 'web' as const,
+      pinned: false
+    }),
     closeTab: () => ({ closed: true }),
+    closeActiveTab: () => ({ closed: true, id: 'tab' }),
+    discardTab: (id: string) => ({ discarded: true, id }),
+    discardActiveTab: () => ({ discarded: true, id: 'tab' }),
     selectTab: (id: string) => ({ id }),
-    listTabs: () => ({ tabs: [], activeId: null, panelCollapsed: false }),
-    toggleTabsPanel: (collapsed?: boolean) => ({ collapsed: collapsed ?? true })
+    selectPrevTab: () => ({ id: null }),
+    selectNextTab: () => ({ id: null }),
+    moveTab: (id: string) => ({ id }),
+    pinTab: (id: string) => ({ id, pinned: true }),
+    unpinTab: (id: string) => ({ id, pinned: false }),
+    listTabs: () => ({
+      tabs: [
+        {
+          id: 'tab',
+          title: '',
+          url: 'home',
+          favicon: null,
+          loaded: true,
+          kind: 'web' as const,
+          pinned: false
+        }
+      ],
+      activeId: 'tab',
+      panelCollapsed: false
+    }),
+    toggleTabsPanel: (collapsed?: boolean) => ({ collapsed: collapsed ?? true }),
+    // Bookmark slice: minimal stubs, not exercised by these socket-dispatch tests.
+    addBookmark: (url?: string, title?: string) => ({
+      node: { id: 'bm', kind: 'url' as const, url: url ?? 'home', title: title ?? '' },
+      created: true
+    }),
+    addFolder: (title: string) => ({
+      node: { id: 'f', kind: 'folder' as const, title, children: [] }
+    }),
+    removeBookmark: () => ({ removed: true }),
+    renameBookmark: (id: string, title: string) => ({
+      node: { id, kind: 'url' as const, url: 'home', title }
+    }),
+    moveBookmark: () => ({ moved: true }),
+    listBookmarks: () => ({ tree: [] }),
+    openBookmark: (id: string) => ({ tabId: 'tab', url: id }),
+    showTooltip: () => ({ shown: true }),
+    hideTooltip: () => ({ hidden: true })
   }
   return { registry: createCommandRegistry(), ctx, loaded }
 }

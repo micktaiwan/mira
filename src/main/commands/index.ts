@@ -14,27 +14,37 @@
 
 import { buildRegistry, type CommandMap, type CommandRegistryOf } from './registry'
 import type { CommandContext } from './context'
+import { bookmarksCommands } from './bookmarks'
 import { navigationCommands } from './navigation'
 import { profileCommands } from './profiles'
 import { settingsCommands } from './settings'
+import { statusCommands } from './status'
 import { tabsCommands } from './tabs'
+import { tooltipCommands } from './tooltip'
 
 // Public types, re-exported so consumers keep importing from './commands'.
 export type { CommandContext } from './context'
 export type { NavigableContents, ProfileInfo, CommandResult, CommandHandler } from './registry'
+export type { BookmarkContext } from './bookmarks'
+export type { BookmarkNode, BookmarkUrl, BookmarkFolder, BookmarkTree } from '../bookmark-store'
 export type { NavContext } from './navigation'
 export type { ProfileContext } from './profiles'
 export type { SettingsContext } from './settings'
-export type { TabsContext, TabInfo } from './tabs'
+export type { StatusContext, MemoryUsage, TabCounts } from './status'
+export type { TabsContext, TabInfo, TabKind } from './tabs'
+export type { TooltipContext } from './tooltip'
 
 export type CommandRegistry = CommandRegistryOf<CommandContext>
 
 export function createCommandRegistry(): CommandRegistry {
   const commands: CommandMap<CommandContext> = {
+    ...bookmarksCommands,
     ...navigationCommands,
     ...profileCommands,
     ...settingsCommands,
-    ...tabsCommands
+    ...statusCommands,
+    ...tabsCommands,
+    ...tooltipCommands
   }
   return buildRegistry(commands)
 }

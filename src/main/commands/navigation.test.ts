@@ -30,6 +30,30 @@ describe('navigate', () => {
     })
     expect(loaded).toEqual([])
   })
+
+  it('opens a fresh tab when the window has no active tab', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    // Close the only tab so the window is empty (activeId null).
+    registry.execute('close-active-tab', {}, ctx)
+    expect(tabState().activeId).toBeNull()
+    const result = registry.execute('navigate', { url: 'example.com' }, ctx)
+    expect(result).toEqual({ ok: true, url: 'https://example.com', id: 'tab-2' })
+    expect(tabState().tabs.map((t) => t.url)).toEqual(['https://example.com'])
+    expect(tabState().activeId).toBe('tab-2')
+  })
+
+  it('opens a fresh tab when the Settings tab is active (it has no web view)', () => {
+    const { ctx, tabState, loaded } = makeContext()
+    const registry = createCommandRegistry()
+    // open-settings makes the (view-less) Settings tab active.
+    registry.execute('open-settings', {}, ctx)
+    const result = registry.execute('navigate', { url: 'example.com' }, ctx)
+    expect(result).toEqual({ ok: true, url: 'https://example.com', id: 'tab-3' })
+    // Nothing was loaded into the settings tab; a new web tab took the destination.
+    expect(loaded).toEqual([])
+    expect(tabState().activeId).toBe('tab-3')
+  })
 })
 
 describe('back / forward', () => {

@@ -6,6 +6,12 @@ export interface TabInfo {
   title: string
   url: string
   favicon: string | null
+  /** Lazy-load state: false for an asleep tab (no web view yet). */
+  loaded: boolean
+  /** 'settings' for the internal Settings tab (chrome-rendered), else 'web'. */
+  kind: 'web' | 'settings'
+  /** Pinned: rendered as a compact square in the grid at the head of the strip. */
+  pinned: boolean
 }
 
 /** The tab strip main pushes to a profile window's chrome. */
@@ -13,6 +19,24 @@ export interface TabsState {
   tabs: TabInfo[]
   activeId: string | null
   panelCollapsed: boolean
+}
+
+/** A favorites tree node (mirrors BookmarkNode in the registry). The full tree
+ * is rendered in the native Bookmarks menu; the chrome uses it only to drive the
+ * address-bar star. */
+export interface BookmarkNode {
+  id: string
+  kind: 'url' | 'folder'
+  title: string
+  /** Present on url nodes. */
+  url?: string
+  /** Present on folder nodes. */
+  children?: BookmarkNode[]
+}
+
+/** The (global) favorites tree main pushes to every window's chrome. */
+export interface BookmarksState {
+  tree: BookmarkNode[]
 }
 
 export interface MiraAPI {
@@ -24,6 +48,10 @@ export interface MiraAPI {
   onProfilesChanged: (callback: () => void) => () => void
   /** Subscribe to this window's tab strip changing. Returns unsubscribe. */
   onTabsChanged: (callback: (state: TabsState) => void) => () => void
+  /** Subscribe to the "focus the address bar" push (new tab opened). Returns unsubscribe. */
+  onFocusAddressBar: (callback: () => void) => () => void
+  /** Subscribe to the (global) favorites list changing. Returns unsubscribe. */
+  onBookmarksChanged: (callback: (state: BookmarksState) => void) => () => void
 }
 
 declare global {

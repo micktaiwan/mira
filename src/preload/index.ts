@@ -30,6 +30,20 @@ const mira = {
     const listener = (_event: unknown, state: unknown): void => callback(state)
     ipcRenderer.on('mira:tabs-changed', listener)
     return () => ipcRenderer.removeListener('mira:tabs-changed', listener)
+  },
+  // Main asks the chrome to focus the address bar when a new tab opens (click or
+  // Cmd+T), so a url can be typed without clicking first. Returns unsubscribe.
+  onFocusAddressBar: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('mira:focus-address-bar', listener)
+    return () => ipcRenderer.removeListener('mira:focus-address-bar', listener)
+  },
+  // Main pushes the (global) favorites list on every add / remove — the sidebar
+  // and address-bar star render it, holding no bookmark state. Returns unsubscribe.
+  onBookmarksChanged: (callback: (state: unknown) => void): (() => void) => {
+    const listener = (_event: unknown, state: unknown): void => callback(state)
+    ipcRenderer.on('mira:bookmarks-changed', listener)
+    return () => ipcRenderer.removeListener('mira:bookmarks-changed', listener)
   }
 }
 

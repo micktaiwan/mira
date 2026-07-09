@@ -56,20 +56,269 @@ describe('close-tab', () => {
     expect(tabState().activeId).toBe('tab-1')
   })
 
-  it('refuses to close the last tab', () => {
+  it('closes the last tab, leaving the window empty', () => {
     const { ctx, tabState } = makeContext()
     const registry = createCommandRegistry()
-    expect(registry.execute('close-tab', { id: 'tab-1' }, ctx)).toEqual({
-      ok: false,
-      error: 'cannot close the last tab'
-    })
-    expect(tabState().tabs).toHaveLength(1)
+    expect(registry.execute('close-tab', { id: 'tab-1' }, ctx)).toEqual({ ok: true, id: 'tab-1' })
+    expect(tabState().tabs).toHaveLength(0)
+    expect(tabState().activeId).toBeNull()
   })
 
   it('fails on an unknown id', () => {
     const { ctx } = makeContext()
     const registry = createCommandRegistry()
     expect(registry.execute('close-tab', { id: 'nope' }, ctx).ok).toBe(false)
+  })
+})
+
+describe('prev-tab / next-tab', () => {
+  it('steps down then up the strip', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // tab-2
+    registry.execute('new-tab', {}, ctx) // tab-3, active, list [tab-1, tab-2, tab-3]
+    // Up from the last tab → tab-2.
+    expect(registry.execute('prev-tab', {}, ctx)).toEqual({ ok: true, id: 'tab-2' })
+    expect(tabState().activeId).toBe('tab-2')
+    // Down again → tab-3.
+    expect(registry.execute('next-tab', {}, ctx)).toEqual({ ok: true, id: 'tab-3' })
+    expect(tabState().activeId).toBe('tab-3')
+  })
+
+  it('wraps around the ends', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // active tab-2 (last), list [tab-1, tab-2]
+    // Down from the last tab wraps to the first.
+    expect(registry.execute('next-tab', {}, ctx)).toEqual({ ok: true, id: 'tab-1' })
+    expect(tabState().activeId).toBe('tab-1')
+    // Up from the first tab wraps to the last.
+    expect(registry.execute('prev-tab', {}, ctx)).toEqual({ ok: true, id: 'tab-2' })
+    expect(tabState().activeId).toBe('tab-2')
+  })
+})
+
+describe('move-tab', () => {
+  it('reorders a tab to the given index', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // tab-2
+    registry.execute('new-tab', {}, ctx) // tab-3 -> [tab-1, tab-2, tab-3]
+    expect(registry.execute('move-tab', { id: 'tab-1', toIndex: 2 }, ctx)).toEqual({
+      ok: true,
+      id: 'tab-1',
+      toIndex: 2
+    })
+    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-2', 'tab-3', 'tab-1'])
+  })
+
+  it('rejects a non-integer index', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('move-tab', { id: 'tab-1', toIndex: 1.5 }, ctx)).toEqual({
+      ok: false,
+      error: '"toIndex" must be an integer'
+    })
+  })
+
+  it('fails on an unknown id', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('move-tab', { id: 'nope', toIndex: 0 }, ctx).ok).toBe(false)
+  })
+})
+
+describe('pin-tab / unpin-tab', () => {
+  it('pins into the head block and unpins back under it', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // tab-2
+    registry.execute('new-tab', {}, ctx) // tab-3 -> [tab-1, tab-2, tab-3]
+    expect(registry.execute('pin-tab', { id: 'tab-3' }, ctx)).toEqual({
+      ok: true,
+      id: 'tab-3',
+      pinned: true
+    })
+    expect(registry.execute('pin-tab', { id: 'tab-2' }, ctx)).toEqual({
+      ok: true,
+      id: 'tab-2',
+      pinned: true
+    })
+    // Each pin appends to the pinned block at the head of the strip.
+    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-3', 'tab-2', 'tab-1'])
+    // Unpinning drops the tab to the head of the regular tabs.
+    expect(registry.execute('unpin-tab', { id: 'tab-3' }, ctx)).toEqual({
+      ok: true,
+      id: 'tab-3',
+      pinned: false
+    })
+    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-2', 'tab-3', 'tab-1'])
+  })
+
+  it('reports the pinned flag in list-tabs', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // tab-2
+    registry.execute('pin-tab', { id: 'tab-2' }, ctx)
+    const result = registry.execute('list-tabs', {}, ctx) as {
+      ok: true
+      tabs: Array<{ id: string; pinned: boolean }>
+    }
+    expect(result.tabs.map((t) => [t.id, t.pinned])).toEqual([
+      ['tab-2', true],
+      ['tab-1', false]
+    ])
+  })
+
+  it('fails on an unknown or missing id', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('pin-tab', { id: 'nope' }, ctx).ok).toBe(false)
+    expect(registry.execute('pin-tab', {}, ctx)).toEqual({ ok: false, error: 'missing "id"' })
+    expect(registry.execute('unpin-tab', { id: 'nope' }, ctx).ok).toBe(false)
+    expect(registry.execute('unpin-tab', {}, ctx)).toEqual({ ok: false, error: 'missing "id"' })
+  })
+})
+
+describe('close-active-tab', () => {
+  it('closes whatever tab is active and activates its neighbor', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // active tab-2
+    expect(registry.execute('close-active-tab', {}, ctx)).toMatchObject({
+      ok: true,
+      closed: true,
+      id: 'tab-2'
+    })
+    expect(tabState().activeId).toBe('tab-1')
+  })
+
+  it('reports nothing to close when the window is empty', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('close-tab', { id: 'tab-1' }, ctx) // now empty
+    expect(registry.execute('close-active-tab', {}, ctx)).toEqual({
+      ok: true,
+      closed: false,
+      id: null
+    })
+  })
+
+  it('arms a pinned tab on the first press and closes on the second', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // tab-2, active
+    registry.execute('pin-tab', { id: 'tab-2' }, ctx)
+    // First Cmd+W: nothing closes, the pinned tab is only armed.
+    expect(registry.execute('close-active-tab', {}, ctx)).toEqual({
+      ok: true,
+      closed: false,
+      id: 'tab-2',
+      armed: true
+    })
+    expect(tabState().tabs).toHaveLength(2)
+    // Second consecutive Cmd+W: the pinned tab closes.
+    expect(registry.execute('close-active-tab', {}, ctx)).toEqual({
+      ok: true,
+      closed: true,
+      id: 'tab-2'
+    })
+    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-1'])
+  })
+
+  it('disarms a pinned tab when another tab is selected in between', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // tab-2, active
+    registry.execute('pin-tab', { id: 'tab-2' }, ctx)
+    registry.execute('close-active-tab', {}, ctx) // arms tab-2
+    // Switching away and back breaks the "twice in a row" chain.
+    registry.execute('select-tab', { id: 'tab-1' }, ctx)
+    registry.execute('select-tab', { id: 'tab-2' }, ctx)
+    expect(registry.execute('close-active-tab', {}, ctx)).toEqual({
+      ok: true,
+      closed: false,
+      id: 'tab-2',
+      armed: true
+    })
+    expect(tabState().tabs).toHaveLength(2)
+  })
+
+  it('still closes a pinned tab immediately via an explicit close-tab', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // tab-2
+    registry.execute('pin-tab', { id: 'tab-2' }, ctx)
+    // The double-press guard is Cmd+W-only; close-tab by id is deliberate.
+    expect(registry.execute('close-tab', { id: 'tab-2' }, ctx)).toEqual({ ok: true, id: 'tab-2' })
+    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-1'])
+  })
+})
+
+describe('discard-active-tab', () => {
+  it('keeps the tab but moves focus to the neighbor', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // active tab-2, list [tab-1, tab-2]
+    expect(registry.execute('discard-active-tab', {}, ctx)).toEqual({
+      ok: true,
+      discarded: true,
+      id: 'tab-2'
+    })
+    // The tab is NOT removed (unlike close), focus falls to its left neighbor.
+    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-1', 'tab-2'])
+    expect(tabState().activeId).toBe('tab-1')
+  })
+
+  it('opens a fresh tab when the discarded one was the only tab', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('discard-active-tab', {}, ctx)).toEqual({
+      ok: true,
+      discarded: true,
+      id: 'tab-1'
+    })
+    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-1', 'tab-2'])
+    expect(tabState().activeId).toBe('tab-2')
+  })
+
+  it('reports nothing to discard when the window is empty', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('close-tab', { id: 'tab-1' }, ctx) // now empty
+    expect(registry.execute('discard-active-tab', {}, ctx)).toEqual({
+      ok: true,
+      discarded: false,
+      id: null
+    })
+  })
+})
+
+describe('discard-tab', () => {
+  it('discards a specific tab by id', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // active tab-2
+    expect(registry.execute('discard-tab', { id: 'tab-1' }, ctx)).toEqual({
+      ok: true,
+      discarded: true,
+      id: 'tab-1'
+    })
+    // A background tab stays in the list; the active tab is untouched.
+    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-1', 'tab-2'])
+    expect(tabState().activeId).toBe('tab-2')
+  })
+
+  it('fails on an unknown id', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('discard-tab', { id: 'nope' }, ctx).ok).toBe(false)
+  })
+
+  it('fails on a missing id', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('discard-tab', {}, ctx)).toEqual({ ok: false, error: 'missing "id"' })
   })
 })
 
