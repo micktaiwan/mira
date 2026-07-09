@@ -1,93 +1,93 @@
-import { app, shell, BrowserWindow, ipcMain, WebContentsView } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
+import { createCommandRegistry } from './commands'
+import { startCommandSocket, cleanupSocket } from './socket'
+import { ProfileManager, DEFAULT_PROFILE } from './profiles'
+import { nextProfileName } from './profile-name'
+import { buildAppMenu } from './menu'
 
-// Increment 1: a single WebContentsView loading a hardcoded URL.
 const HOME_URL = 'https://www.example.com'
 
-function createWindow(): void {
-  // Create the browser window.
-  const mainWindow = new BrowserWindow({
-    width: 900,
-    height: 670,
-    show: false,
-    autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
-    }
-  })
+// External control socket (see CLAUDE.md, "tout pilotable"). Override with the
+// MIRA_SOCKET env var; defaults to a fixed path for the single-instance case.
+const SOCKET_PATH = process.env.MIRA_SOCKET ?? '/tmp/mira.sock'
 
-  // The web content layer: a native view laid over the window at explicit
-  // coordinates. It is NOT a DOM element, so we reposition it by hand whenever
-  // the window resizes.
-  const contentView = new WebContentsView()
-  mainWindow.contentView.addChildView(contentView)
+// Height of the React address bar (the "chrome") at the top of each window.
+// The WebContentsView is laid out below it. Must match --toolbar-height in the
+// renderer CSS (src/renderer/src/assets/main.css).
+const TOOLBAR_HEIGHT = 48
 
-  const layoutContentView = (): void => {
-    const { width, height } = mainWindow.getContentBounds()
-    // Increment 1: cover the whole window. Later this sits below the address bar.
-    contentView.setBounds({ x: 0, y: 0, width, height })
-  }
-  layoutContentView()
-  mainWindow.on('resize', layoutContentView)
-
-  contentView.webContents.loadURL(HOME_URL)
-
-  mainWindow.on('ready-to-show', () => {
-    mainWindow.show()
-  })
-
-  mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
-    return { action: 'deny' }
-  })
-
-  // HMR for renderer base on electron-vite cli.
-  // Load the remote URL for development or the local html file for production.
+/** Load the chrome (React) into a profile window. Each window statically knows
+ * its profile via the `?profile=` query, so the badge needs no round-trip. */
+function loadRenderer(window: BrowserWindow, profile: string): void {
+  const search = `profile=${encodeURIComponent(profile)}`
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
-    mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    window.loadURL(`${process.env['ELECTRON_RENDERER_URL']}?${search}`)
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    window.loadFile(join(__dirname, '../renderer/index.html'), { search })
   }
 }
 
-// This method will be called when Electron has finished
-// initialization and is ready to create browser windows.
-// Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
-  // Default open or close DevTools by F12 in development
-  // and ignore CommandOrControl + R in production.
-  // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // IPC test
-  ipcMain.on('ping', () => console.log('pong'))
+  // One profile = one window with its own session partition. The manager owns
+  // window creation, layout and the window<->profile mapping.
+  const profiles = new ProfileManager({
+    toolbarHeight: TOOLBAR_HEIGHT,
+    homeUrl: HOME_URL,
+    preloadPath: join(__dirname, '../preload/index.js'),
+    ...(process.platform === 'linux' ? { icon } : {}),
+    loadRenderer,
+    onChange: () => rebuildMenu()
+  })
 
-  createWindow()
+  // Profile switching lives in the native app menu (not the toolbar). Rebuilt on
+  // every profile change via the manager's onChange hook above.
+  function rebuildMenu(): void {
+    buildAppMenu({
+      listProfiles: () => profiles.listProfiles(),
+      openProfile: (name) => profiles.openProfile(name),
+      newProfile: () => profiles.openProfile(nextProfileName(profiles.listProfiles().profiles))
+    })
+  }
+  rebuildMenu()
 
-  app.on('activate', function () {
-    // On macOS it's common to re-create a window in the app when the
-    // dock icon is clicked and there are no other windows open.
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+  // The command registry: the single bus every transport calls into. Each
+  // transport builds the context so commands target the right window — IPC uses
+  // the sender window, the socket uses the focused window.
+  const registry = createCommandRegistry()
+  ipcMain.handle('command', (event, name: string, params?: unknown) => {
+    return registry.execute(name, params, profiles.contextForChrome(event.sender))
+  })
+  startCommandSocket(SOCKET_PATH, registry, () => profiles.contextForFocused())
+  console.log(`[mira] control socket listening on ${SOCKET_PATH}`)
+
+  // Open the default profile window at startup.
+  profiles.openProfile(DEFAULT_PROFILE)
+
+  app.on('activate', () => {
+    // On macOS, re-open the default window when the dock icon is clicked and no
+    // windows are open.
+    if (BrowserWindow.getAllWindows().length === 0) profiles.openProfile(DEFAULT_PROFILE)
   })
 })
 
-// Quit when all windows are closed, except on macOS. There, it's common
-// for applications and their menu bar to stay active until the user quits
-// explicitly with Cmd + Q.
+// Quit when all windows are closed, except on macOS.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
 })
 
-// In this file you can include the rest of your app's specific main process
-// code. You can also put them in separate files and require them here.
+// Remove the control socket file on exit so a restart starts clean.
+app.on('will-quit', () => {
+  cleanupSocket(SOCKET_PATH)
+})
