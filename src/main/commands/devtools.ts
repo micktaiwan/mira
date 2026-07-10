@@ -17,6 +17,17 @@ export interface DevtoolsContext {
   /** Evaluate `code` in the active tab's page and resolve its (JSON-serializable)
    * value. Throws when there is no active web page (empty window / Settings tab). */
   execJsInActiveTab: (code: string) => Promise<unknown>
+  /** Toggle the DevTools inspector on the active tab's OWN webContents, opened in
+   * a detached window. Returns whether DevTools are open afterwards. Throws when
+   * there is no active web page (empty window / Settings tab).
+   *
+   * Two reasons this must target the active tab explicitly rather than reuse
+   * Electron's `role: 'toggleDevTools'` (which hits the *focused* webContents):
+   *   1. Once DevTools open, focus leaves the page, so a second keypress on the
+   *      role can no longer find the page to close it — the toggle gets stuck.
+   *   2. Docked DevTools draw inside the WebContentsView bounds (below the
+   *      toolbar) and overlap the chrome; detached opens a clean separate window. */
+  toggleDevToolsInActiveTab: () => boolean
 }
 
 export interface ExecJsParams {
@@ -32,6 +43,15 @@ export const devtoolsCommands: CommandMap<CommandContext> = {
     try {
       const result = await ctx.execJsInActiveTab(code)
       return { ok: true, result }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  'toggle-devtools': async (ctx) => {
+    try {
+      const open = ctx.toggleDevToolsInActiveTab()
+      return { ok: true, result: { open } }
     } catch (error) {
       return fail(error)
     }

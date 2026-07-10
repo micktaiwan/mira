@@ -8,5 +8,11 @@
     <true/>
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
+    <!-- Required so the hardened runtime lets CoreLocation deliver the location
+         authorization prompt. Without it, locationd logs "Client has supported the
+         hardened runtime but doesn't have the entitlement, not sending #AuthPrompt"
+         and no prompt ever appears (verified from a live locationd capture). -->
+    <key>com.apple.security.personal-information.location</key>
+    <true/>
   </dict>
 </plist>

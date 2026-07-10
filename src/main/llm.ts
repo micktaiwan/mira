@@ -88,3 +88,66 @@ export function buildClaudeCliArgs(config: LlmConfig): string[] {
   if (config.model && config.model.trim() !== '') args.push('--model', config.model.trim())
   return args
 }
+
+// --- Chat (multi-turn) --------------------------------------------------------
+// The pane is a conversation: the free-form prompt box (run-prompt) sends the
+// whole thread each turn, so the model keeps context. A skill is still one-shot
+// (buildAnthropicRequest / composePrompt above); these are the chat path.
+
+/** One turn of the pane conversation. Crosses IPC as part of SkillPaneState (see
+ * commands/pane.ts, which re-exports this type). */
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  text: string
+}
+
+/** Base instruction for the free-form page chat. The current page's extracted
+ * text is appended (when there is one) so answers can draw on what the user is
+ * looking at. */
+export const CHAT_SYSTEM_PROMPT =
+  "You are a helpful assistant embedded in a web browser. Answer the user's " +
+  'questions clearly and concisely. When page content is provided below, use it ' +
+  'as the context for the conversation.'
+
+/** The system prompt for a chat turn: the base instruction plus the current
+ * page's text as context (omitted when the page yields nothing). Pure. */
+export function chatSystemPrompt(pageText: string): string {
+  const t = pageText.trim()
+  return t === '' ? CHAT_SYSTEM_PROMPT : `${CHAT_SYSTEM_PROMPT}\n\n---\n\nPage content:\n\n${t}`
+}
+
+/** The Anthropic Messages API request for a chat turn: the page context is the
+ * `system`, the whole thread is the `messages` array. Pure. */
+export function buildAnthropicChatRequest(
+  config: LlmConfig,
+  systemPrompt: string,
+  messages: ChatMessage[]
+): { url: string; headers: Record<string, string>; body: Record<string, unknown> } {
+  if (!config.apiKey || config.apiKey.trim() === '') {
+    throw new Error('Anthropic API key is not set (Settings → AI)')
+  }
+  return {
+    url: 'https://api.anthropic.com/v1/messages',
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': config.apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: {
+      model: config.model?.trim() || DEFAULT_ANTHROPIC_MODEL,
+      max_tokens: 1024,
+      system: systemPrompt,
+      messages: messages.map((m) => ({ role: m.role, content: m.text }))
+    }
+  }
+}
+
+/** Flatten a chat into a single prompt string for the CLI path (`claude -p` has
+ * no separate roles): the page context, then the labelled transcript, ending on
+ * an "Assistant:" cue so the model continues the last (user) turn. Pure. */
+export function composeChatPrompt(systemPrompt: string, messages: ChatMessage[]): string {
+  const transcript = messages
+    .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.trim()}`)
+    .join('\n\n')
+  return `${systemPrompt.trim()}\n\n---\n\n${transcript}\n\nAssistant:`
+}

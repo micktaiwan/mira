@@ -4,8 +4,13 @@ import {
   buildAnthropicRequest,
   parseAnthropicResponse,
   buildClaudeCliArgs,
+  chatSystemPrompt,
+  buildAnthropicChatRequest,
+  composeChatPrompt,
+  CHAT_SYSTEM_PROMPT,
   DEFAULT_ANTHROPIC_MODEL,
-  type LlmConfig
+  type LlmConfig,
+  type ChatMessage
 } from './llm'
 
 describe('composePrompt', () => {
@@ -74,5 +79,55 @@ describe('buildClaudeCliArgs', () => {
       '--model',
       'claude-sonnet-5'
     ])
+  })
+})
+
+const THREAD: ChatMessage[] = [
+  { role: 'user', text: 'What is this about?' },
+  { role: 'assistant', text: 'A deadline.' },
+  { role: 'user', text: 'When?' }
+]
+
+describe('chatSystemPrompt', () => {
+  it('appends the page text as context when there is one', () => {
+    const s = chatSystemPrompt('  The launch is on Friday.  ')
+    expect(s).toContain(CHAT_SYSTEM_PROMPT)
+    expect(s).toContain('Page content:\n\nThe launch is on Friday.')
+  })
+
+  it('omits the page section when the page yields nothing', () => {
+    expect(chatSystemPrompt('   ')).toBe(CHAT_SYSTEM_PROMPT)
+  })
+})
+
+describe('buildAnthropicChatRequest', () => {
+  const cfg: LlmConfig = { provider: 'anthropic-api', apiKey: 'sk-test' }
+
+  it('maps the whole thread to the messages array with the context as system', () => {
+    const req = buildAnthropicChatRequest(cfg, 'CONTEXT', THREAD)
+    expect(req.body.system).toBe('CONTEXT')
+    expect(req.body.messages).toEqual([
+      { role: 'user', content: 'What is this about?' },
+      { role: 'assistant', content: 'A deadline.' },
+      { role: 'user', content: 'When?' }
+    ])
+  })
+
+  it('refuses to build a request with no API key', () => {
+    expect(() => buildAnthropicChatRequest({ provider: 'anthropic-api' }, 's', THREAD)).toThrow(
+      /key/i
+    )
+  })
+})
+
+describe('composeChatPrompt', () => {
+  it('flattens the thread into a labelled transcript ending on an Assistant cue', () => {
+    expect(composeChatPrompt('CONTEXT', THREAD)).toBe(
+      'CONTEXT\n\n---\n\n' +
+        'User: What is this about?\n\n' +
+        'Assistant: A deadline.\n\n' +
+        'User: When?\n\n' +
+        'Assistant:'
+    )
   })
 })

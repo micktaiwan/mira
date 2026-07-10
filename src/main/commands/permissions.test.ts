@@ -27,3 +27,30 @@ describe('clear-permissions', () => {
     expect((res as unknown as { grants: PermissionGrant[] }).grants).toEqual([])
   })
 })
+
+describe('open-location-settings', () => {
+  it('opens the OS pane and reports it', () => {
+    const { ctx } = makeContext()
+    expect(registry.execute('open-location-settings', {}, ctx)).toEqual({ ok: true, opened: true })
+  })
+})
+
+describe('location-auth-status', () => {
+  it('returns the macOS location authorization status', () => {
+    const { ctx } = makeContext()
+    expect(registry.execute('location-auth-status', {}, ctx)).toEqual({
+      ok: true,
+      status: 'authorized'
+    })
+  })
+})
+
+describe('request-location-authorization', () => {
+  it('fires the native prompt and returns the resulting status', () => {
+    const { ctx } = makeContext()
+    expect(registry.execute('request-location-authorization', {}, ctx)).toEqual({
+      ok: true,
+      status: 'authorized'
+    })
+  })
+})

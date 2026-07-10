@@ -39,13 +39,20 @@ export interface BookmarksState {
   tree: BookmarkNode[]
 }
 
-/** The right-side skill pane state main pushes (mirrors SkillPaneState in the
- * registry): a skill's AI result — loading, then the summary or an error. */
+/** One turn of the pane conversation (mirrors ChatMessage in the registry). */
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  text: string
+}
+
+/** The right-side AI pane state main pushes (mirrors SkillPaneState in the
+ * registry): a chat thread — `messages` is the conversation, `status` tracks the
+ * in-flight turn (loading, then idle, or error). */
 export interface SkillPaneState {
   open: boolean
   title: string
-  status: 'loading' | 'done' | 'error'
-  text?: string
+  status: 'idle' | 'loading' | 'error'
+  messages: ChatMessage[]
   error?: string
 }
 
@@ -62,6 +69,9 @@ export interface MiraAPI {
   onTabsChanged: (callback: (state: TabsState) => void) => () => void
   /** Subscribe to the "focus the address bar" push (new tab opened). Returns unsubscribe. */
   onFocusAddressBar: (callback: () => void) => () => void
+  /** Subscribe to the hovered-link URL in the active page (empty string on leave).
+   * Returns unsubscribe. */
+  onHoverUrl: (callback: (url: string) => void) => () => void
   /** Subscribe to the (global) favorites list changing. Returns unsubscribe. */
   onBookmarksChanged: (callback: (state: BookmarksState) => void) => () => void
   /** Subscribe to the command palette being toggled (main owns the state). The

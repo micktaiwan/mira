@@ -13,8 +13,9 @@
 import { type CommandMap, fail } from './registry'
 import type { CommandContext } from './context'
 import { resolveSkills, type SkillSource } from '../skills'
+import type { ChatMessage } from '../llm'
 
-/** Skills capability slice: the native edges run-skill needs. */
+/** Skills capability slice: the native edges run-skill / run-prompt need. */
 export interface SkillsContext {
   /** The active tab's url, or null when there is no web page (empty window /
    * Settings tab). Decides which skills apply. */
@@ -22,13 +23,27 @@ export interface SkillsContext {
   /** Pull the text a skill's source describes out of the active page. The DOM
    * edge (executeJavaScript in the WebContentsView). */
   extractText: (source: SkillSource) => Promise<string>
-  /** The AI engine: turn extracted text into a result, given the skill's prompt.
-   * Today a local extractive summary; an LLM swaps in here. */
+  /** The one-shot AI engine (a skill): turn extracted text into a result, given
+   * the skill's prompt. Today a local extractive summary; an LLM swaps in here. */
   summarize: (prompt: string, text: string) => Promise<string>
+  /** The multi-turn AI engine (the pane chat): answer the last turn given the
+   * whole conversation and the current page's text as context. */
+  chat: (messages: ChatMessage[], pageText: string) => Promise<string>
 }
 
 export interface RunSkillParams {
   id: string
+}
+
+export interface RunPromptParams {
+  prompt: string
+}
+
+/** Cap the pane header derived from a free prompt so a long question doesn't
+ * overflow the title row. */
+function promptTitle(prompt: string): string {
+  const t = prompt.trim()
+  return t.length > 60 ? `${t.slice(0, 57)}…` : t
 }
 
 export const skillsCommands: CommandMap<CommandContext> = {
@@ -49,28 +64,88 @@ export const skillsCommands: CommandMap<CommandContext> = {
     const skill = resolveSkills(url ?? '').find((s) => s.id === id)
     if (!skill) return { ok: false, error: `skill not applicable here: ${id}` }
     // The sink decides where the result surfaces AND whether a surface opens at all
-    // (Mickael: "l'ouverture dépend du type de skill"). Today only 'pane': it opens
-    // the right pane, shows an hourglass, then the summary / error. Other sinks
-    // (page write, external) will branch here later without opening the pane.
+    // (Mickael: "l'ouverture dépend du type de skill"). Today only 'pane': it adds
+    // a turn to the pane conversation (the skill name as the question, its summary
+    // as the answer). Other sinks (page write, external) branch here later.
     const usePane = skill.sink.kind === 'pane'
-    if (usePane) ctx.showSkillPane({ open: true, title: skill.name, status: 'loading' })
+    // Thread this run onto the existing conversation (a skill posts a Q/A pair);
+    // the first entry sets the pane title.
+    const pane = usePane ? ctx.getSkillPane() : null
+    const title = pane?.title || skill.name
+    const withUser: ChatMessage[] = pane
+      ? [...pane.messages, { role: 'user', text: skill.name }]
+      : []
+    if (usePane) ctx.showSkillPane({ open: true, title, status: 'loading', messages: withUser })
     try {
       const text = await ctx.extractText(skill.source)
       if (text.trim() === '') {
         const error = 'no page content to summarize'
-        if (usePane) ctx.showSkillPane({ open: true, title: skill.name, status: 'error', error })
+        if (usePane) {
+          ctx.showSkillPane({ open: true, title, status: 'error', messages: withUser, error })
+        }
         return { ok: false, error }
       }
+      // A skill is one-shot: its own prompt + the page text, no chat history.
       const summary = await ctx.summarize(skill.prompt, text)
       if (usePane) {
-        ctx.showSkillPane({ open: true, title: skill.name, status: 'done', text: summary })
+        ctx.showSkillPane({
+          open: true,
+          title,
+          status: 'idle',
+          messages: [...withUser, { role: 'assistant', text: summary }]
+        })
       }
       return { ok: true, skill: skill.id, name: skill.name, sink: skill.sink.kind, summary }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       if (usePane) {
-        ctx.showSkillPane({ open: true, title: skill.name, status: 'error', error: message })
+        ctx.showSkillPane({
+          open: true,
+          title,
+          status: 'error',
+          messages: withUser,
+          error: message
+        })
       }
+      return fail(error)
+    }
+  },
+
+  // Free-form prompt from the pane's input: a chat turn. Append the question to the
+  // conversation, answer it with the current page's text as context (best-effort —
+  // a page that yields no text just becomes a plain question) AND the prior turns,
+  // then append the answer.
+  'run-prompt': async (ctx, params) => {
+    const { prompt } = (params ?? {}) as Partial<RunPromptParams>
+    if (typeof prompt !== 'string' || prompt.trim() === '') {
+      return { ok: false, error: 'missing "prompt"' }
+    }
+    const pane = ctx.getSkillPane()
+    // The first message sets the conversation title; later turns keep it.
+    const title = pane.title || promptTitle(prompt)
+    const withUser: ChatMessage[] = [...pane.messages, { role: 'user', text: prompt.trim() }]
+    ctx.showSkillPane({ open: true, title, status: 'loading', messages: withUser })
+    try {
+      // Best-effort page context: no active web page (Settings / empty) is fine,
+      // the prompt is then answered on its own.
+      let context = ''
+      try {
+        context = await ctx.extractText({ kind: 'readability' })
+      } catch {
+        context = ''
+      }
+      // Send the whole thread (incl. this turn) so the model keeps context.
+      const answer = await ctx.chat(withUser, context)
+      ctx.showSkillPane({
+        open: true,
+        title,
+        status: 'idle',
+        messages: [...withUser, { role: 'assistant', text: answer }]
+      })
+      return { ok: true, text: answer }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      ctx.showSkillPane({ open: true, title, status: 'error', messages: withUser, error: message })
       return fail(error)
     }
   }

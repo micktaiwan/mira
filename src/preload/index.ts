@@ -46,6 +46,14 @@ const mira = {
     ipcRenderer.on('mira:focus-address-bar', listener)
     return () => ipcRenderer.removeListener('mira:focus-address-bar', listener)
   },
+  // Main pushes the URL of the link the cursor is hovering in the active page
+  // (empty string when the cursor leaves the link), so the status bar can show it
+  // browser-style. Returns an unsubscribe function.
+  onHoverUrl: (callback: (url: string) => void): (() => void) => {
+    const listener = (_event: unknown, url: string): void => callback(url)
+    ipcRenderer.on('mira:hover-url', listener)
+    return () => ipcRenderer.removeListener('mira:hover-url', listener)
+  },
   // Main pushes the (global) favorites list on every add / remove — the sidebar
   // and address-bar star render it, holding no bookmark state. Returns unsubscribe.
   onBookmarksChanged: (callback: (state: unknown) => void): (() => void) => {

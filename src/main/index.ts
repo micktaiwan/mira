@@ -313,6 +313,9 @@ app.whenReady().then(() => {
       zoomIn: () => registry.execute('zoom-in', {}, profiles.contextForFocused()),
       zoomOut: () => registry.execute('zoom-out', {}, profiles.contextForFocused()),
       zoomReset: () => registry.execute('zoom-reset', {}, profiles.contextForFocused()),
+      // Toggle the active tab's DevTools through the registry (same bus as the
+      // socket/MCP) — targets the page's webContents, opened detached.
+      toggleDevTools: () => registry.execute('toggle-devtools', {}, profiles.contextForFocused()),
       // The Bookmarks submenu renders the favorites tree; clicking a url opens it.
       listBookmarks: () => profiles.listBookmarksTree(),
       openBookmark: (id) => registry.execute('open-bookmark', { id }, profiles.contextForFocused())

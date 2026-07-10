@@ -9,6 +9,15 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # The native location addon ships as a resource (extraResources), not in the
+  # asar — keep its whole source/build tree out of the app bundle.
+  - '!native'
+# Ship the compiled macOS location addon into Contents/Resources so the main
+# process loads it by absolute path (see src/main/mac-location.ts). It is a signed
+# nested Mach-O; electron-builder re-signs it with the app's certificate.
+extraResources:
+  - from: native/mira-location/build/Release/mira_location.node
+    to: mira_location.node
 asarUnpack:
   - resources/**
 win:
@@ -26,6 +35,12 @@ mac:
   extendInfo:
     NSCameraUsageDescription: Application requests access to the device's camera.
     NSMicrophoneUsageDescription: Application requests access to the device's microphone.
+    # Required for geolocation: Chromium on macOS gets a position from CoreLocation
+    # (the OS location service), and macOS refuses to hand a location to an app that
+    # does not declare this usage string — the symptom is a site reporting "precise
+    # location could not be determined" even after the permission is granted.
+    NSLocationWhenInUseUsageDescription: Mira shares your location with websites that request it, so maps and local results work.
+    NSLocationUsageDescription: Mira shares your location with websites that request it, so maps and local results work.
     NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
     # Declare Mira a web browser: it handles http/https URL schemes, so macOS lists

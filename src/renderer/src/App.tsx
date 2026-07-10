@@ -74,7 +74,8 @@ function App(): React.JSX.Element {
   const [skillPane, setSkillPane] = useState<SkillPaneState>({
     open: false,
     title: '',
-    status: 'done'
+    status: 'idle',
+    messages: []
   })
   // Resizable panel widths (px). Seeded from settings on mount; a drag updates
   // them live (CSS var + a throttled command so main reflows the web view).
@@ -157,6 +158,35 @@ function App(): React.JSX.Element {
   const closeSkillPane = useCallback((): void => {
     setSkillPane((prev) => ({ ...prev, open: false }))
     void window.mira.command('close-skill-pane')
+  }, [])
+
+  // Toggle the pane from the toolbar — always available, even with no result yet
+  // (it then shows just the prompt box). Optimistic, then tell main (it owns the
+  // state + the web-view width).
+  const toggleSkillPane = useCallback((): void => {
+    setSkillPane((prev) => ({ ...prev, open: !prev.open }))
+    void window.mira.command('toggle-skill-pane')
+  }, [])
+
+  // Run a free prompt typed in the pane as the next chat turn. Optimistically
+  // append the user turn and show loading; main pushes the real thread back
+  // (loading with the turn, then the answer, or an error).
+  const runPrompt = useCallback((prompt: string): void => {
+    setSkillPane((prev) => ({
+      ...prev,
+      open: true,
+      status: 'loading',
+      title: prev.title || prompt,
+      messages: [...prev.messages, { role: 'user', text: prompt }]
+    }))
+    void window.mira.command('run-prompt', { prompt })
+  }, [])
+
+  // Clear the conversation (Clear chat button). Optimistically empty it, then tell
+  // main (which owns the retained thread).
+  const clearChat = useCallback((): void => {
+    setSkillPane((prev) => ({ ...prev, status: 'idle', messages: [], error: undefined }))
+    void window.mira.command('clear-chat')
   }, [])
 
   // Load the persisted panel widths once (main is the source of truth).
@@ -322,6 +352,26 @@ function App(): React.JSX.Element {
         >
           {currentBookmark ? '★' : '☆'}
         </button>
+        {/* Always-present toggle for the AI panel: open it anytime to type a prompt
+            or see the last result; click again to close. */}
+        <button
+          type="button"
+          className={`nav-button${skillPane.open ? ' active' : ''}`}
+          title="AI panel"
+          aria-label="Toggle AI panel"
+          aria-pressed={skillPane.open}
+          onClick={toggleSkillPane}
+        >
+          ◪
+        </button>
+        {/* Explicit window-drag zone to the right of the URL bar. The toolbar is
+            already a drag region, but the address field (flex) eats all the free
+            space, leaving nothing to grab — Kova's model, where empty tab-bar space
+            initiates a window drag (window.rs performWindowDragWithEvent). Shows the
+            app name + version; a small fixed handle, not a stretching zone. */}
+        <div className="toolbar-drag" aria-hidden="true">
+          Mira <span className="toolbar-drag-version">{__APP_VERSION__}</span>
+        </div>
       </div>
       <div className="body">
         {!panelCollapsed && (
@@ -355,7 +405,14 @@ function App(): React.JSX.Element {
       )}
       {/* The right-side skill pane. Main shrinks the web view by its width while
           open (profiles.ts layout), so it sits beside the page rather than over it. */}
-      {skillPane.open && <SkillPane state={skillPane} onClose={closeSkillPane} />}
+      {skillPane.open && (
+        <SkillPane
+          state={skillPane}
+          onClose={closeSkillPane}
+          onPrompt={runPrompt}
+          onClear={clearChat}
+        />
+      )}
       {/* Drag handles at each panel's inner edge. Live-resize the CSS var and, per
           frame, tell main to reflow the web view; the final width persists on release. */}
       {!panelCollapsed && (

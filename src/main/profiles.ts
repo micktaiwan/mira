@@ -18,6 +18,7 @@ import {
   WebContentsView,
   screen,
   session,
+  shell,
   type MenuItemConstructorOptions,
   type WebContents
 } from 'electron'
@@ -34,10 +35,14 @@ import { closedSkillPane, formatMemory } from './commands'
 import { homePageUrl, isMiraHomeUrl, type HomeStats } from './home-doc'
 import {
   buildAnthropicRequest,
+  buildAnthropicChatRequest,
   parseAnthropicResponse,
   buildClaudeCliArgs,
   composePrompt,
-  type LlmConfig
+  composeChatPrompt,
+  chatSystemPrompt,
+  type LlmConfig,
+  type ChatMessage
 } from './llm'
 import {
   type BookmarkTree,
@@ -63,6 +68,7 @@ import {
   type TabMeta,
   emptyTabState,
   addTab,
+  addTabAfter,
   selectTab as selectTabPure,
   closeTab as closeTabPure,
   moveTab as moveTabPure,
@@ -94,7 +100,17 @@ import {
 import { shouldGrantPermission } from './permissions'
 import { clientRectToScreen, tooltipBounds, type TooltipRect, type Size } from './tooltip'
 import { buildPageMenu } from './page-menu'
+import { dockRight } from './devtools-layout'
 import { decideWindowOpen } from './window-open'
+import {
+  installHoverReporter,
+  reduceHover,
+  hoverText,
+  EMPTY_HOVER,
+  type HoverEvent
+} from './hover'
+import { decideLocationAction, locationSettingsUrl } from './geolocation'
+import { locationAuthStatus, requestLocationAuthorization } from './mac-location'
 import { extractionScript, extractiveSummary, type SkillSource } from './skills'
 import { TOOLTIP_URL, measureScript } from './tooltip-doc'
 import {
@@ -144,6 +160,13 @@ interface ProfileWindow {
   window: BrowserWindow
   id: string
   views: Map<string, WebContentsView>
+  /** Docked DevTools host view per tab, keyed by tab id — a DevTools inspector is
+   * bound to ONE tab's webContents, so each tab owns its own (Chrome-like: every
+   * tab keeps its inspector independently). Keys are a subset of `views` (only a
+   * materialized tab can have DevTools). layout() splits the active tab's area
+   * between its page and this view; inactive tabs' DevTools are hidden, not torn
+   * down. Populated by toggleActiveDevTools, cleaned up on discard / close. */
+  devtools: Map<string, WebContentsView>
   state: TabState
   panelCollapsed: boolean
   /** Id of this window's internal Settings tab, or null when none is open. The
@@ -288,6 +311,13 @@ export class ProfileManager {
    * set them once per profile session and not on every tab. Keyed by partition
    * (the default session uses '' as its key). */
   private readonly permissionSessions = new Set<string>()
+  /** True once we've auto-opened the OS Location Services pane this run, so the
+   * permission handler firing repeatedly doesn't reopen System Settings. */
+  private locationSettingsOpened = false
+  /** True once we've fired the native location prompt this run, so the permission
+   * handler firing repeatedly doesn't re-invoke it (CoreLocation coalesces, but we
+   * avoid the churn). Resets only on app restart. */
+  private locationPromptRequested = false
   /** Only the currently open profiles, keyed by stable id. */
   private readonly openById = new Map<string, ProfileWindow>()
   /** Pending debounced flush of sessions.json (one timer for the whole app, as
@@ -475,23 +505,11 @@ export class ProfileManager {
         window.maximize()
       }
     }
-    // Diagnostic (external-display restore): logs what we restored vs the current
-    // displays, so a mis-placed window can be traced. Remove once validated.
-    console.log(
-      '[mira] restore',
-      profile.id.slice(0, 8),
-      'saved=',
-      JSON.stringify(savedBounds),
-      'used=',
-      JSON.stringify(bounds),
-      'displays=',
-      JSON.stringify(displays.map((d) => ({ id: d.id, bounds: d.bounds, work: d.workArea })))
-    )
-
     const profileWindow: ProfileWindow = {
       window,
       id: profile.id,
       views: new Map(),
+      devtools: new Map(),
       state: emptyTabState(),
       panelCollapsed: false,
       settingsTabId: null,
@@ -623,7 +641,9 @@ export class ProfileManager {
           }
         }
       }
-      this.newTabIn(pw, decision.url)
+      // Slot the new tab right under the opener (this view's tab) instead of at
+      // the end of the strip — the child sits next to its parent.
+      this.newTabIn(pw, decision.url, false, tab.id)
       return { action: 'deny' }
     })
     // A blank tab (empty stored url) shows Mira's home page — the session summary —
@@ -653,9 +673,12 @@ export class ProfileManager {
   /** Create a new tab in `pw`, load `url`, focus it, re-layout and persist.
    * `focusChrome` (the command path: click / Cmd+T) hands keyboard focus to the
    * address bar instead of the page — see focusAddressBar. */
-  private newTabIn(pw: ProfileWindow, url: string, focusChrome = false): TabMeta {
+  private newTabIn(pw: ProfileWindow, url: string, focusChrome = false, afterId?: string): TabMeta {
     const tab: TabMeta = { id: randomUUID(), title: '', url, favicon: null }
-    pw.state = addTab(pw.state, tab)
+    // A tab opened from a link (afterId set) slots in right under its opener; a
+    // plain new tab (Cmd+T, socket) appends. When the opener is pinned, addTabAfter
+    // lands the child at the head of the regular zone (first in the list).
+    pw.state = afterId ? addTabAfter(pw.state, tab, afterId) : addTab(pw.state, tab)
     // The active tab changed: a pinned tab armed by Cmd+W is disarmed.
     pw.closeArmedId = null
     this.materializeTab(pw, tab)
@@ -809,13 +832,37 @@ export class ProfileManager {
     ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
       const granted = shouldGrantPermission(permission)
       if (granted) this.recordGrant(requestingOrigin, permission)
+      this.maybeHandleLocation(permission)
       return granted
     })
     ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
       const granted = shouldGrantPermission(permission)
       if (granted) this.recordGrant(originOf(details.requestingUrl), permission)
+      this.maybeHandleLocation(permission)
       callback(granted)
     })
+  }
+
+  /** React to a geolocation permission request from the REAL macOS authorization
+   * status (read via the native addon): fire the native prompt when undetermined,
+   * open Settings when genuinely denied, and — crucially — do NOTHING when it's
+   * already authorized. The pure branch logic is decideLocationAction; the flags
+   * keep prompt/Settings to once per run. */
+  private maybeHandleLocation(permission: string): void {
+    const action = decideLocationAction(
+      permission,
+      process.platform,
+      locationAuthStatus(),
+      this.locationSettingsOpened
+    )
+    if (action === 'prompt') {
+      if (this.locationPromptRequested) return
+      this.locationPromptRequested = true
+      requestLocationAuthorization()
+    } else if (action === 'open-settings') {
+      this.locationSettingsOpened = true
+      this.openLocationSettings()
+    }
   }
 
   /** Record a granted permission into the global grant log, keyed by origin +
@@ -845,15 +892,30 @@ export class ProfileManager {
     }
   }
 
+  /** Open the system Location Services pane. Returns whether there was one to open
+   * (only macOS gates a granted geolocation behind an OS tick). Reached both from
+   * maybeNudgeLocation and from the `open-location-settings` command on the bus. */
+  private openLocationSettings(): { opened: boolean } {
+    const url = locationSettingsUrl(process.platform)
+    if (!url) return { opened: false }
+    shell.openExternal(url).catch((error) => console.error('[mira] open location settings', error))
+    return { opened: true }
+  }
+
   /** The window's live geometry, or its last saved geometry once it is destroyed
    * (the 'closed' path can no longer read the native window). Uses getNormalBounds
    * so a maximized/fullscreen window still records the rectangle to restore to. */
   private currentBounds(pw: ProfileWindow): PersistedBounds | undefined {
     if (pw.window.isDestroyed()) return this.sessions[pw.id]?.bounds
+    // x/y/width/height are the NORMAL (un-maximized) rectangle, so restore lands the
+    // window back at its restore size. But the DISPLAY is detected from the CURRENT
+    // visible bounds, not the normal rect: Mira is frameless, so dragging a maximized
+    // window to another monitor need not un-maximize it — getNormalBounds() then stays
+    // a stale rectangle on the OLD display, while getBounds() tracks where the window
+    // actually is. Using the live position for displayId is what makes a maximized
+    // window reopen on the monitor it was moved to (see create()'s maximize path).
     const b = pw.window.getNormalBounds()
-    // Record which display the window is on, so a restore onto an unplugged
-    // external monitor can be detected and declined (see create()).
-    const display = screen.getDisplayMatching(b)
+    const display = screen.getDisplayMatching(pw.window.getBounds())
     return {
       x: b.x,
       y: b.y,
@@ -892,6 +954,18 @@ export class ProfileManager {
       if (isMainFrame) patch({ url: mirrorUrl(navUrl) })
     })
     wc.on('page-favicon-updated', (_e, favicons) => patch({ favicon: favicons?.[0] ?? null }))
+    // Status-bar hover readout, browser-style. Two sources merged by reduceHover:
+    // Chromium's native update-target-url reports the link under the cursor, and
+    // the injected detector (installHoverReporter) reports JS-triggering controls
+    // (buttons, onclick, javascript: anchors) that fire no navigation. Only the
+    // active tab is visible, so hover can only come from it — push directly.
+    let hover = EMPTY_HOVER
+    const pushHover = (ev: HoverEvent): void => {
+      hover = reduceHover(hover, ev)
+      if (!pw.window.isDestroyed()) pw.window.webContents.send('mira:hover-url', hoverText(hover))
+    }
+    wc.on('update-target-url', (_e, url) => pushHover({ type: 'target', url }))
+    installHoverReporter(wc, (active) => pushHover({ type: 'js', active }))
   }
 
   /** Position the active view below the toolbar, offset right by the tab panel
@@ -919,7 +993,19 @@ export class ProfileManager {
       // visible over what would otherwise be the page (see paletteOpen).
       const active = id === pw.state.activeId && !pw.paletteOpen
       view.setVisible(active)
-      if (active) view.setBounds(bounds)
+      // A tab may have a docked DevTools inspector (bound to its own webContents).
+      // Only the active tab shows both; inactive tabs keep theirs but hidden.
+      const devtools = pw.devtools.get(id)
+      if (active && devtools) {
+        // Split the page area: page on the left, inspector docked on the right.
+        const split = dockRight(bounds)
+        view.setBounds(split.page)
+        devtools.setBounds(split.devtools)
+        devtools.setVisible(true)
+      } else {
+        if (active) view.setBounds(bounds)
+        devtools?.setVisible(false)
+      }
     }
   }
 
@@ -986,6 +1072,35 @@ export class ProfileManager {
     }
     // 'claude-cli': feed the composed prompt on stdin, read the answer from stdout.
     return this.runClaudeCli(config, composePrompt(prompt, text))
+  }
+
+  /** The chat engine behind the `chat` context method (run-prompt): answer the
+   * last turn given the whole thread and the page's text as context. Same three
+   * providers as runLlm, but multi-turn. 'extractive' has no real model, so it
+   * falls back to a lead-sentence summary of the page (ignoring the question). */
+  private async runLlmChat(
+    config: LlmConfig,
+    messages: ChatMessage[],
+    pageText: string
+  ): Promise<string> {
+    const system = chatSystemPrompt(pageText)
+    if (config.provider === 'extractive') {
+      // No conversational model offline: summarize the page as a best effort, or
+      // echo the last question when there is no page.
+      const last = messages[messages.length - 1]?.text ?? ''
+      return extractiveSummary(pageText.trim() !== '' ? pageText : last)
+    }
+    if (config.provider === 'anthropic-api') {
+      const req = buildAnthropicChatRequest(config, system, messages)
+      const res = await fetch(req.url, {
+        method: 'POST',
+        headers: req.headers,
+        body: JSON.stringify(req.body)
+      })
+      return parseAnthropicResponse(await res.json())
+    }
+    // 'claude-cli': flatten the thread + context into one stdin prompt.
+    return this.runClaudeCli(config, composeChatPrompt(system, messages))
   }
 
   /** Spawn `claude -p` and resolve its stdout. Uses the logged-in Claude Code
@@ -1175,6 +1290,8 @@ export class ProfileManager {
     // Tear down the view only if this tab was ever materialized.
     const view = pw.views.get(id)
     if (view) {
+      // A page never outlives its docked DevTools: tear the inspector down first.
+      this.destroyDevToolsView(pw, id)
       pw.views.delete(id)
       pw.window.contentView.removeChildView(view)
       view.webContents.close()
@@ -1251,9 +1368,55 @@ export class ProfileManager {
   private discardView(pw: ProfileWindow, id: string): void {
     const view = pw.views.get(id)
     if (!view) return
+    // A page never outlives its docked DevTools: tear the inspector down first.
+    this.destroyDevToolsView(pw, id)
     pw.views.delete(id)
     pw.window.contentView.removeChildView(view)
     view.webContents.close()
+  }
+
+  /** Tear down a tab's docked DevTools host view (if any): remove it from the
+   * window and close its webContents. Safe to call for a tab that has none. The
+   * page's own inspector connection dies with its webContents, so this only frees
+   * the host view. */
+  private destroyDevToolsView(pw: ProfileWindow, id: string): void {
+    const devtools = pw.devtools.get(id)
+    if (!devtools) return
+    pw.devtools.delete(id)
+    pw.window.contentView.removeChildView(devtools)
+    devtools.webContents.close()
+  }
+
+  /** Toggle the docked DevTools inspector for the active tab. Opening creates a
+   * host WebContentsView, points the page's DevTools at it (setDevToolsWebContents
+   * + openDevTools detached-into-our-view), and re-lays-out so it docks on the
+   * right; closing tears the host down. Returns whether DevTools are open after.
+   * Throws when there is no active web page (empty window / Settings tab).
+   *
+   * `mode: 'detach'` here does NOT spawn an OS window — combined with
+   * setDevToolsWebContents it renders the inspector INTO our host view, which
+   * layout() positions by hand. That is the whole point over the native docked
+   * mode, which draws relative to the page bounds and overlapped the toolbar. */
+  private toggleActiveDevTools(pw: ProfileWindow): boolean {
+    const id = pw.state.activeId
+    if (!id || id === pw.settingsTabId) throw new Error('no active web page')
+    const view = pw.views.get(id)
+    if (!view) throw new Error('no active tab')
+    if (pw.devtools.has(id)) {
+      view.webContents.closeDevTools()
+      this.destroyDevToolsView(pw, id)
+      this.layout(pw)
+      return false
+    }
+    // The DevTools frontend is Mira's own chrome (devtools://), not profile
+    // content, so the host view needs no session partition.
+    const host = new WebContentsView()
+    pw.window.contentView.addChildView(host)
+    pw.devtools.set(id, host)
+    view.webContents.setDevToolsWebContents(host.webContents)
+    view.webContents.openDevTools({ mode: 'detach' })
+    this.layout(pw)
+    return true
   }
 
   /** Discard a specific tab's page but keep the tab. If it is the active tab,
@@ -1743,6 +1906,12 @@ export class ProfileManager {
         // userGesture=true so calls gated behind a user activation still run.
         return view.webContents.executeJavaScript(code, true)
       },
+      toggleDevToolsInActiveTab: () => {
+        // The active tab's inspector, docked on the right into a host view we
+        // position ourselves (see toggleActiveDevTools for the why).
+        if (!target || target.window.isDestroyed()) throw new Error('no target window')
+        return this.toggleActiveDevTools(target)
+      },
       activeUrl: () => {
         // The active tab's current url (null for no window / Settings tab), so
         // list-skills / run-skill can decide which skills apply.
@@ -1769,11 +1938,18 @@ export class ProfileManager {
         // Errors propagate to run-skill, which surfaces them in the pane.
         return this.runLlm(this.appSettings.llm, prompt, text)
       },
+      chat: async (messages: ChatMessage[], pageText: string) => {
+        // The multi-turn engine (run-prompt): the same configured provider, given
+        // the whole conversation. Errors propagate to run-prompt for the pane.
+        return this.runLlmChat(this.appSettings.llm, messages, pageText)
+      },
       showSkillPane: (state) => {
         if (target) this.setSkillPaneIn(target, state)
       },
       closeSkillPane: () => {
-        if (target) this.setSkillPaneIn(target, closedSkillPane())
+        // Only HIDE the pane — keep its content so the toolbar toggle can bring the
+        // last result back (see toggle-skill-pane).
+        if (target) this.setSkillPaneIn(target, { ...target.skillPane, open: false })
       },
       getSkillPane: () => (target ? target.skillPane : closedSkillPane()),
       newTab: (url) => {
@@ -1873,6 +2049,9 @@ export class ProfileManager {
         this.broadcastPermissionsChanged()
         return { cleared }
       },
+      openLocationSettings: () => this.openLocationSettings(),
+      locationAuthStatus: () => locationAuthStatus(),
+      requestLocationAuthorization: () => requestLocationAuthorization(),
       addBookmark: (url, title, parentId) => this.addBookmarkIn(target, url, title, parentId),
       addFolder: (title, parentId) => this.addFolderIn(title, parentId),
       removeBookmark: (id) => this.removeBookmarkGlobal(id),

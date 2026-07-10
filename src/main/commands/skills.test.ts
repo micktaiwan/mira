@@ -61,14 +61,23 @@ describe('run-skill', () => {
     expect(summarizeCalls[0].text).toBe('extracted:readability')
     expect(summarizeCalls[0].prompt).toContain('Summarize')
     expect(res.summary).toBe('summary(extracted:readability)')
-    // Pane sink: it opened the pane in loading, then filled it with the summary.
+    // Pane sink: it opened the pane in loading with the question turn, then added
+    // the summary as the assistant turn (a chat Q/A pair).
     expect(skillPaneStates).toEqual([
-      { open: true, title: 'Summarize this page', status: 'loading' },
       {
         open: true,
         title: 'Summarize this page',
-        status: 'done',
-        text: 'summary(extracted:readability)'
+        status: 'loading',
+        messages: [{ role: 'user', text: 'Summarize this page' }]
+      },
+      {
+        open: true,
+        title: 'Summarize this page',
+        status: 'idle',
+        messages: [
+          { role: 'user', text: 'Summarize this page' },
+          { role: 'assistant', text: 'summary(extracted:readability)' }
+        ]
       }
     ])
   })
@@ -81,5 +90,64 @@ describe('run-skill', () => {
     // The pane went loading → error, never showing a bogus summary.
     expect(skillPaneStates.map((s) => s.status)).toEqual(['loading', 'error'])
     expect(skillPaneStates[1].error).toBe('no page content to summarize')
+  })
+})
+
+describe('run-prompt', () => {
+  it('rejects an empty prompt', async () => {
+    const { ctx } = makeContext()
+    expect(await registry.execute('run-prompt', { prompt: '  ' }, ctx)).toEqual({
+      ok: false,
+      error: 'missing "prompt"'
+    })
+  })
+
+  it('appends the question, answers with the page text, and shows the thread', async () => {
+    const { ctx, chatCalls, skillPaneStates } = makeContext()
+    registry.execute('new-tab', { url: 'https://example.com/article' }, ctx)
+    const res = (await registry.execute(
+      'run-prompt',
+      { prompt: 'What is the deadline?' },
+      ctx
+    )) as { ok: true; text: string }
+    expect(res.ok).toBe(true)
+    // The engine got the thread (this one turn) and the page text as context.
+    expect(chatCalls[0]).toEqual({
+      messages: [{ role: 'user', text: 'What is the deadline?' }],
+      pageText: 'extracted:readability'
+    })
+    expect(res.text).toBe('answer(What is the deadline?|extracted:readability)')
+    // Pane opened loading (question only) then idle (question + answer).
+    expect(skillPaneStates.map((s) => s.status)).toEqual(['loading', 'idle'])
+    expect(skillPaneStates[0].title).toBe('What is the deadline?')
+    expect(skillPaneStates[1].messages).toEqual([
+      { role: 'user', text: 'What is the deadline?' },
+      { role: 'assistant', text: 'answer(What is the deadline?|extracted:readability)' }
+    ])
+  })
+
+  it('carries prior turns as history across a second prompt', async () => {
+    const { ctx, chatCalls } = makeContext()
+    registry.execute('new-tab', { url: 'https://example.com/article' }, ctx)
+    await registry.execute('run-prompt', { prompt: 'First?' }, ctx)
+    await registry.execute('run-prompt', { prompt: 'And then?' }, ctx)
+    // The second turn's thread includes the first Q/A plus the new question, so
+    // the model keeps context — this is the "vrai chat avec historique".
+    expect(chatCalls[1].messages).toEqual([
+      { role: 'user', text: 'First?' },
+      { role: 'assistant', text: 'answer(First?|extracted:readability)' },
+      { role: 'user', text: 'And then?' }
+    ])
+  })
+
+  it('still answers when the page yields no text (plain question)', async () => {
+    const { ctx, chatCalls } = makeContext('default', { emptyExtract: true })
+    registry.execute('new-tab', { url: 'https://example.com/blank' }, ctx)
+    const res = (await registry.execute('run-prompt', { prompt: 'Hi' }, ctx)) as {
+      ok: true
+      text: string
+    }
+    expect(res.ok).toBe(true)
+    expect(chatCalls[0]).toEqual({ messages: [{ role: 'user', text: 'Hi' }], pageText: '' })
   })
 })

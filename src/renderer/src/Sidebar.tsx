@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { useState, type DragEvent } from 'react'
 
 // One tab as the chrome renders it. Structurally identical to the registry's
 // TabInfo and the pushed TabsState; kept local to the renderer (like App's and
@@ -71,55 +71,6 @@ function Favicon({ tab }: { tab: TabInfo }): React.JSX.Element {
   )
 }
 
-/** Tooltip text for a tab: its title, then its url on a second line (the
- * overlay bubble renders \n — white-space: pre-line in tooltip-doc.ts). */
-function tooltipFor(tab: TabInfo): string {
-  if (tab.kind === 'settings') return 'Settings'
-  const title = tab.title.trim()
-  if (title && tab.url) return `${title}\n${tab.url}`
-  return tab.url || title || 'New tab'
-}
-
-/** How long the cursor must rest on a tab before its tooltip shows (same feel
- * as the status bar's items). */
-const TOOLTIP_DELAY_MS = 150
-
-/** Hover wiring for the tab tooltips. They cannot be DOM bubbles: a bubble
- * would overflow the panel into the region the active tab's WebContentsView
- * covers, and that native layer paints above the chrome's DOM (CLAUDE.md, "les
- * deux pièges") — the native title="" attribute is broken on this Electron
- * besides. So, like the status bar, hovering asks main (via the registry) to
- * show the floating overlay window. One instance owned by the Sidebar. */
-function useTabTooltip(): { enter: (el: HTMLElement, text: string) => void; leave: () => void } {
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Never leave a bubble up if the panel unmounts mid-hover (panel collapsed).
-  useEffect(() => {
-    return () => {
-      if (timer.current) clearTimeout(timer.current)
-      void window.mira.command('hide-tooltip')
-    }
-  }, [])
-  const enter = (el: HTMLElement, text: string): void => {
-    if (timer.current) clearTimeout(timer.current)
-    // Capture the element now — the timer fires after React recycled the event.
-    timer.current = setTimeout(() => {
-      const r = el.getBoundingClientRect()
-      void window.mira.command('show-tooltip', {
-        text,
-        anchor: { x: r.left, y: r.top, width: r.width, height: r.height }
-      })
-    }, TOOLTIP_DELAY_MS)
-  }
-  const leave = (): void => {
-    if (timer.current) {
-      clearTimeout(timer.current)
-      timer.current = null
-    }
-    void window.mira.command('hide-tooltip')
-  }
-  return { enter, leave }
-}
-
 type DropPos = 'before' | 'after'
 
 // One pinned tab: a compact square (favicon only) in the wrapping grid at the
@@ -134,8 +85,6 @@ function PinnedSquare({
   dropPos,
   onSelect,
   onUnpin,
-  onHover,
-  onLeave,
   onDragStart,
   onDragOver,
   onDrop,
@@ -147,8 +96,6 @@ function PinnedSquare({
   dropPos: DropPos | null
   onSelect: () => void
   onUnpin: () => void
-  onHover: (el: HTMLElement) => void
-  onLeave: () => void
   onDragStart: () => void
   onDragOver: (pos: DropPos) => void
   onDrop: () => void
@@ -174,14 +121,10 @@ function PinnedSquare({
         e.preventDefault()
         onUnpin()
       }}
-      onMouseEnter={(e) => onHover(e.currentTarget)}
-      onMouseLeave={onLeave}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = 'move'
         e.dataTransfer.setData('text/plain', tab.id)
-        // No tooltip bubble riding along under the drag ghost.
-        onLeave()
         onDragStart()
       }}
       onDragOver={(e: DragEvent<HTMLLIElement>) => {
@@ -209,8 +152,6 @@ function TabRow({
   onSelect,
   onClose,
   onPin,
-  onHover,
-  onLeave,
   onDragStart,
   onDragOver,
   onDrop,
@@ -223,8 +164,6 @@ function TabRow({
   onSelect: () => void
   onClose: () => void
   onPin: () => void
-  onHover: (el: HTMLElement) => void
-  onLeave: () => void
   onDragStart: () => void
   onDragOver: (pos: DropPos) => void
   onDrop: () => void
@@ -248,14 +187,10 @@ function TabRow({
     <li
       className={className}
       onClick={onSelect}
-      onMouseEnter={(e) => onHover(e.currentTarget)}
-      onMouseLeave={onLeave}
       draggable
       onDragStart={(e) => {
         e.dataTransfer.effectAllowed = 'move'
         e.dataTransfer.setData('text/plain', tab.id)
-        // No bubble riding along under the drag ghost.
-        onLeave()
         onDragStart()
       }}
       onDragOver={(e: DragEvent<HTMLLIElement>) => {
@@ -323,7 +258,6 @@ function Sidebar({
 }): React.JSX.Element {
   const [draggingId, setDraggingId] = useState<string | null>(null)
   const [dropTarget, setDropTarget] = useState<{ id: string; pos: DropPos } | null>(null)
-  const tooltip = useTabTooltip()
 
   // Pinned tabs form a contiguous block at the head of the strip (a tab-store
   // invariant); the grid and the row list are just the two halves of `tabs`.
@@ -366,8 +300,6 @@ function Sidebar({
               dropPos={dropTarget?.id === t.id && t.id !== draggingId ? dropTarget.pos : null}
               onSelect={() => onSelect(t.id)}
               onUnpin={() => onUnpin(t.id)}
-              onHover={(el) => tooltip.enter(el, tooltipFor(t))}
-              onLeave={tooltip.leave}
               onDragStart={() => setDraggingId(t.id)}
               onDragOver={(pos) => setDropTarget({ id: t.id, pos })}
               onDrop={commitDrop}
@@ -387,8 +319,6 @@ function Sidebar({
             onSelect={() => onSelect(t.id)}
             onClose={() => onClose(t.id)}
             onPin={() => onPin(t.id)}
-            onHover={(el) => tooltip.enter(el, tooltipFor(t))}
-            onLeave={tooltip.leave}
             onDragStart={() => setDraggingId(t.id)}
             onDragOver={(pos) => setDropTarget({ id: t.id, pos })}
             onDrop={commitDrop}

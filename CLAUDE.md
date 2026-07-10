@@ -110,7 +110,10 @@ npm run dev        # dev + HMR (process long-running — ne pas lancer sans acco
 npm run build      # typecheck + build
 npm run typecheck  # tsc, sans build
 npm run lint / format
+./bin/build.sh     # build packagé + réinstalle l'app (quit Mira → build:mac → open)
 ```
+
+**Quand Mickael demande « un build » / « rebuild » / « installe l'app », lancer `./bin/build.sh`.** Ce script quitte Mira, fait `npm run build:mac`, et rouvre l'app. `/Applications/Mira.app` est un **symlink** vers `dist/mac-arm64/Mira.app`, donc `build:mac` rafraîchit l'app installée en place — aucune copie. (Setup one-time du symlink documenté en tête de `bin/build.sh`.)
 
 ## Notes
 

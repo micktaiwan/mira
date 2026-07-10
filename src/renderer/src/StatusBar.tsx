@@ -67,7 +67,12 @@ const TOOLTIP_DELAY_MS = 150
 export default function StatusBar(): React.JSX.Element {
   const [now, setNow] = useState(() => new Date())
   const [status, setStatus] = useState<Status>(EMPTY)
+  const [hoverUrl, setHoverUrl] = useState('')
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Main pushes the link the cursor rests on in the active page (empty on leave),
+  // browser-style. Rendered on the left of the bar.
+  useEffect(() => window.mira.onHoverUrl((url) => setHoverUrl(url)), [])
 
   useEffect(() => {
     // The clock shows HH:MM, so tick once a minute (not once a second — that was
@@ -172,6 +177,9 @@ export default function StatusBar(): React.JSX.Element {
 
   return (
     <div className="status-bar">
+      {hoverUrl && (
+        <span className="status-item status-hover-url">{hoverUrl}</span>
+      )}
       <div className="status-right">
         {cookies != null && (
           <span

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   emptyTabState,
   addTab,
+  addTabAfter,
   selectTab,
   updateTab,
   closeTab,
@@ -23,6 +24,34 @@ describe('addTab', () => {
     s = addTab(s, tab('b'))
     expect(s.tabs.map((t) => t.id)).toEqual(['a', 'b'])
     expect(s.activeId).toBe('b')
+  })
+})
+
+describe('addTabAfter', () => {
+  const pinned = (id: string): TabMeta => ({ ...tab(id), pinned: true })
+
+  it('inserts right after the opener and focuses it', () => {
+    let s = addTab(addTab(addTab(emptyTabState(), tab('a')), tab('b')), tab('c'))
+    s = addTabAfter(s, tab('x'), 'a')
+    expect(s.tabs.map((t) => t.id)).toEqual(['a', 'x', 'b', 'c'])
+    expect(s.activeId).toBe('x')
+  })
+
+  it('places the child first in the regular zone when the opener is pinned', () => {
+    let s = emptyTabState()
+    s = addTab(s, pinned('p1'))
+    s = addTab(s, pinned('p2'))
+    s = addTab(s, tab('a'))
+    s = addTabAfter(s, tab('x'), 'p1') // opener is the first pinned tab
+    expect(s.tabs.map((t) => t.id)).toEqual(['p1', 'p2', 'x', 'a'])
+    expect(s.activeId).toBe('x')
+  })
+
+  it('appends when the opener id is unknown', () => {
+    let s = addTab(addTab(emptyTabState(), tab('a')), tab('b'))
+    s = addTabAfter(s, tab('x'), 'nope')
+    expect(s.tabs.map((t) => t.id)).toEqual(['a', 'b', 'x'])
+    expect(s.activeId).toBe('x')
   })
 })
 

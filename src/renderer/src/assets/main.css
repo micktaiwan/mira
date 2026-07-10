@@ -113,6 +113,7 @@ body {
   background: var(--color-background-mute);
   color: var(--color-text);
   font-size: 13px;
+  text-align: center;
   outline: none;
 }
 
@@ -141,6 +142,44 @@ body {
   background: transparent;
 }
 
+/* Grabbable window-drag handle at the toolbar's trailing end, showing the app
+   name + version. The toolbar is a drag region, so this inherits it. A small
+   fixed handle (shrinks to its label), not a stretching zone. The faint diagonal
+   hatch behind the text marks it as a handle (Kova's drag area is invisible; this
+   is a Mira addition). */
+.toolbar-drag {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text);
+  white-space: nowrap;
+  -webkit-app-region: drag;
+  background-image: repeating-linear-gradient(
+    -45deg,
+    var(--ev-c-gray-2) 0,
+    var(--ev-c-gray-2) 2px,
+    transparent 2px,
+    transparent 9px
+  );
+  opacity: 0.85;
+  transition: opacity 0.12s ease;
+}
+
+.toolbar-drag:hover {
+  opacity: 1;
+}
+
+.toolbar-drag-version {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
 /* ---- Status bar (bottom strip: clock + memory, Kova style) -------------- */
 
 .status-bar {
@@ -157,6 +196,21 @@ body {
      macOS swallows mouse hover, so hover events wouldn't reach the items to
      drive the floating tooltip — keep the bar interactive instead. */
   -webkit-app-region: no-drag;
+}
+
+/* Left side: the URL of the link the cursor rests on in the page (browser-style).
+   Truncates with an ellipsis so a long link never pushes the right cluster off. */
+.status-hover-url {
+  /* Override .status-item's inline-flex so text-overflow ellipsis applies to the
+     text, and allow the flex item to shrink below its content width. */
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ev-c-text-2);
+  margin-right: 12px;
 }
 
 /* Right-aligned cluster: tabs, memory, then clock. */
@@ -668,4 +722,58 @@ body {
 .btn-danger {
   background: #d9534f;
   border-color: #d9534f;
+}
+
+/* Fallback drawn by ErrorBoundary when an uncaught render error would otherwise
+   blank the whole chrome (see ErrorBoundary.tsx). Fills the window so it can't be
+   mistaken for an empty page. */
+.error-boundary {
+  position: fixed;
+  inset: 0;
+  overflow: auto;
+  padding: 24px;
+  background: #1e1e1e;
+  color: #eee;
+  font: 13px/1.5 -apple-system, system-ui, sans-serif;
+}
+
+.error-boundary h1 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.error-boundary p {
+  margin: 0 0 16px;
+  color: #aaa;
+}
+
+.error-boundary pre {
+  margin: 0 0 12px;
+  padding: 12px;
+  border-radius: 6px;
+  background: #2a2a2a;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.error-boundary-message {
+  color: #ff8a80;
+}
+
+.error-boundary-stack {
+  color: #888;
+  font-size: 12px;
+}
+
+.error-boundary button {
+  padding: 6px 14px;
+  border: 1px solid #555;
+  border-radius: 6px;
+  background: #333;
+  color: #eee;
+  cursor: pointer;
+}
+
+.error-boundary button:hover {
+  background: #444;
 }

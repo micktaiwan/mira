@@ -47,6 +47,12 @@ export interface AppMenuHandlers {
   zoomIn: () => void
   zoomOut: () => void
   zoomReset: () => void
+  /** Toggle the DevTools inspector on the focused window's active tab (⌥⌘I).
+   * Wired to the toggle-devtools command, which targets the tab's own webContents
+   * and opens detached — NOT the default role:'toggleDevTools', which hits the
+   * focused webContents (Mira's chrome when the address bar has focus) and gets
+   * stuck open once focus leaves the page. */
+  toggleDevTools: () => void
   /** The favorites tree, rendered as the Bookmarks submenu: folders become nested
    * submenus, urls become clickable items. */
   listBookmarks: () => BookmarkTree
@@ -220,7 +226,11 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
       // active TAB via the registry). Keep the rest of the standard View items.
       label: 'View',
       submenu: [
-        { role: 'toggleDevTools' },
+        {
+          label: 'Toggle Developer Tools',
+          accelerator: isMac ? 'Alt+Cmd+I' : 'Ctrl+Shift+I',
+          click: () => handlers.toggleDevTools()
+        },
         { type: 'separator' },
         // Zoom the active TAB's page via the registry (like Reload above), NOT
         // the default zoom roles which target the focused webContents — Mira's

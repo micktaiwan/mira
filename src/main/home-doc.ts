@@ -149,8 +149,20 @@ export function buildHomePage(stats: HomeStats): string {
   .card .sub { font-size: 12px; color: var(--t2); margin-top: 4px; }
   .foot { margin-top: 30px; color: var(--t3); font-size: 12px; letter-spacing: 0.02em; }
   @media (max-width: 520px) { .cards { grid-template-columns: 1fr; } }
+  /* Animated starfield behind the chrome: a slow parallax drift of twinkling
+   * points, drawn on a full-window canvas. Purely ambient; sits under .wrap. */
+  #stars {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 0;
+    pointer-events: none;
+  }
+  .wrap { position: relative; z-index: 1; }
 </style></head>
 <body>
+  <canvas id="stars" aria-hidden="true"></canvas>
   <div class="wrap">
     <div class="brand">
       <svg class="star" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -192,6 +204,63 @@ export function buildHomePage(stats: HomeStats): string {
       }
       tick();
       setInterval(tick, 15000);
+    })();
+  </script>
+  <script>
+    (function () {
+      var canvas = document.getElementById('stars');
+      if (!canvas || !canvas.getContext) return;
+      var ctx = canvas.getContext('2d');
+      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      var stars = [];
+      var W = 0, H = 0;
+
+      function seed() {
+        // Density scales with area so big and small windows feel alike.
+        var count = Math.round((W * H) / 9000);
+        stars = [];
+        for (var i = 0; i < count; i++) {
+          stars.push({
+            x: Math.random() * W,
+            y: Math.random() * H,
+            r: Math.random() * 1.3 + 0.3,       // radius
+            drift: Math.random() * 0.08 + 0.02,  // upward px/frame (parallax by size)
+            phase: Math.random() * Math.PI * 2,  // twinkle offset
+            speed: Math.random() * 0.02 + 0.008  // twinkle rate
+          });
+        }
+      }
+
+      function resize() {
+        W = window.innerWidth;
+        H = window.innerHeight;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        seed();
+      }
+
+      var t = 0;
+      function frame() {
+        t += 1;
+        ctx.clearRect(0, 0, W, H);
+        for (var i = 0; i < stars.length; i++) {
+          var s = stars[i];
+          // Drift upward, wrapping back to the bottom — a slow parallax rise.
+          s.y -= s.drift;
+          if (s.y < -2) { s.y = H + 2; s.x = Math.random() * W; }
+          var a = 0.35 + 0.45 * (0.5 + 0.5 * Math.sin(s.phase + t * s.speed));
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(180, 195, 255, ' + a.toFixed(3) + ')';
+          ctx.fill();
+        }
+        requestAnimationFrame(frame);
+      }
+
+      window.addEventListener('resize', resize);
+      resize();
+      requestAnimationFrame(frame);
     })();
   </script>
 </body>

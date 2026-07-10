@@ -7,7 +7,7 @@ import type { CommandContext, ProfileInfo, SkillPaneState } from '.'
 import type { CookieSetDetails } from '../chrome-import'
 import type { TooltipRect } from '../tooltip'
 import type { SkillSource } from '../skills'
-import type { LlmConfig } from '../llm'
+import type { LlmConfig, ChatMessage } from '../llm'
 import {
   emptyTabState,
   addTab,
@@ -74,10 +74,14 @@ export interface FakeContext {
   extractCalls: SkillSource[]
   /** Prompt+text pairs passed to summarize (run-skill engine spy). */
   summarizeCalls: Array<{ prompt: string; text: string }>
-  /** Every skill-pane state pushed via showSkillPane / close (run-skill sink spy). */
+  /** Message-thread + page-text pairs passed to chat (run-prompt engine spy). */
+  chatCalls: Array<{ messages: ChatMessage[]; pageText: string }>
+  /** Every skill-pane state pushed via showSkillPane / close (pane sink spy). */
   skillPaneStates: SkillPaneState[]
   /** Live view of the fake app's LLM config (set-llm-config spy). */
   llm: () => LlmConfig
+  /** Live view of the active tab's DevTools open flag (toggle-devtools spy). */
+  devToolsOpen: () => boolean
 }
 
 /** Options to shape the fake's native edges for a specific test. */
@@ -100,6 +104,7 @@ export function makeContext(
   const execJs: string[] = []
   const extractCalls: SkillSource[] = []
   const summarizeCalls: Array<{ prompt: string; text: string }> = []
+  const chatCalls: Array<{ messages: ChatMessage[]; pageText: string }> = []
   const skillPaneStates: SkillPaneState[] = []
   const state = {
     profiles: [{ id: 'default', label: 'Default', open: true }] as Array<
@@ -113,6 +118,8 @@ export function makeContext(
     // Active tab's zoom level (Chrome's log scale: 0 = 100%), driven by the
     // zoom-in / zoom-out / zoom-reset commands.
     zoomLevel: 0,
+    // Active tab's DevTools open flag, flipped by the toggle-devtools command.
+    devToolsOpen: false,
     paletteOpen: false,
     tabSeq: 1,
     // Bookmarks are a global (app-wide) tree, independent of tab/profile state.
@@ -123,7 +130,7 @@ export function makeContext(
     llm: { provider: 'claude-cli' } as LlmConfig,
     sidebarWidth: 240,
     skillPaneWidth: 360,
-    skillPane: { open: false, title: '', status: 'done' } as SkillPaneState,
+    skillPane: { open: false, title: '', status: 'idle', messages: [] } as SkillPaneState,
     settingsTabId: null as string | null,
     // Tab armed by a first Cmd+W on a pinned tab (see closeActiveDecision);
     // reset whenever the active tab changes, mirroring the manager.
@@ -275,7 +282,8 @@ export function makeContext(
       skillPaneStates.push(paneState)
     },
     closeSkillPane: () => {
-      state.skillPane = { open: false, title: '', status: 'done' }
+      // Keep the content, only hide (mirrors the manager, so reopen can restore it).
+      state.skillPane = { ...state.skillPane, open: false }
       skillPaneStates.push(state.skillPane)
     },
     getSkillPane: () => state.skillPane,
@@ -343,6 +351,14 @@ export function makeContext(
       execJs.push(code)
       return Promise.resolve(`ran:${code}`)
     },
+    toggleDevToolsInActiveTab: () => {
+      // Mirror the manager: refuse when there's no active web page, otherwise flip
+      // the flag so the toggle-devtools command's plumbing is testable.
+      const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
+      if (!active || active.id === state.settingsTabId) throw new Error('no active web page')
+      state.devToolsOpen = !state.devToolsOpen
+      return state.devToolsOpen
+    },
     activeUrl: () => {
       // Mirror the manager: the active tab's url, or null for the Settings tab.
       const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
@@ -358,6 +374,13 @@ export function makeContext(
     summarize: (prompt: string, text: string) => {
       summarizeCalls.push({ prompt, text })
       return Promise.resolve(`summary(${text})`)
+    },
+    chat: (messages: ChatMessage[], pageText: string) => {
+      // Record the thread + page context and echo a deterministic marker built
+      // from the last turn, so run-prompt's plumbing is testable without an LLM.
+      chatCalls.push({ messages, pageText })
+      const last = messages[messages.length - 1]?.text ?? ''
+      return Promise.resolve(`answer(${last}|${pageText})`)
     },
     newTab: (url?: string) => {
       const id = `tab-${++state.tabSeq}`
@@ -497,6 +520,12 @@ export function makeContext(
       state.permissions = []
       return { cleared }
     },
+    // Fake: report as if the pane opened (the real one shells out to macOS).
+    openLocationSettings: () => ({ opened: true }),
+    // Fake macOS location auth: 'authorized' so tests exercise the working path
+    // (the real ones delegate to the native addon); the prompt echoes it back.
+    locationAuthStatus: () => 'authorized' as const,
+    requestLocationAuthorization: () => 'authorized' as const,
     addBookmark: (url?: string, title?: string, parentId?: string) => {
       // With no url, bookmark the active tab (mirrors the ProfileManager).
       let finalUrl = url
@@ -572,7 +601,9 @@ export function makeContext(
     execJs,
     extractCalls,
     summarizeCalls,
+    chatCalls,
     skillPaneStates,
-    llm: () => state.llm
+    llm: () => state.llm,
+    devToolsOpen: () => state.devToolsOpen
   }
 }

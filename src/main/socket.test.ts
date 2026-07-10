@@ -120,14 +120,16 @@ function setup(): {
     showTooltip: () => ({ shown: true }),
     hideTooltip: () => ({ hidden: true }),
     execJsInActiveTab: (code: string) => Promise.resolve(`ran:${code}`),
+    toggleDevToolsInActiveTab: () => true,
     // Skills slice: minimal stubs, not exercised by these socket-dispatch tests.
     activeUrl: () => null,
     extractText: () => Promise.resolve(''),
     summarize: (_prompt: string, text: string) => Promise.resolve(text),
+    chat: () => Promise.resolve(''),
     // Skill pane slice: minimal stubs.
     showSkillPane: () => {},
     closeSkillPane: () => {},
-    getSkillPane: () => ({ open: false, title: '', status: 'done' as const })
+    getSkillPane: () => ({ open: false, title: '', status: 'idle' as const, messages: [] })
   }
   return { registry: createCommandRegistry(), ctx, loaded }
 }

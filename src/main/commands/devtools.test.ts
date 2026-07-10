@@ -24,3 +24,31 @@ describe('exec-js', () => {
     })
   })
 })
+
+describe('toggle-devtools', () => {
+  it('opens then closes the active tab devtools, reporting the new state', async () => {
+    const { ctx, devToolsOpen } = makeContext()
+    expect(devToolsOpen()).toBe(false)
+
+    expect(await registry.execute('toggle-devtools', {}, ctx)).toEqual({
+      ok: true,
+      result: { open: true }
+    })
+    expect(devToolsOpen()).toBe(true)
+
+    expect(await registry.execute('toggle-devtools', {}, ctx)).toEqual({
+      ok: true,
+      result: { open: false }
+    })
+    expect(devToolsOpen()).toBe(false)
+  })
+
+  it('fails when the active tab is the Settings tab (no web page)', async () => {
+    const { ctx } = makeContext()
+    await registry.execute('open-settings', {}, ctx)
+    expect(await registry.execute('toggle-devtools', {}, ctx)).toEqual({
+      ok: false,
+      error: 'no active web page'
+    })
+  })
+})

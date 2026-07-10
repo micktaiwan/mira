@@ -38,6 +38,23 @@ export function addTab(state: TabState, tab: TabMeta): TabState {
   return { tabs: [...state.tabs, tab], activeId: tab.id }
 }
 
+/** Insert a tab directly after the tab `afterId` and focus it — the behavior for
+ * a link that opens a new tab (window.open / Cmd+click), so the child sits right
+ * under its opener instead of at the end of the strip. `tab` is always a regular
+ * (unpinned) tab, so it can never land inside the pinned block: when the opener is
+ * pinned, the insertion point is clamped to the head of the regular zone (right
+ * under the pinned block), which is exactly "first in the list". Falls back to a
+ * plain append when `afterId` is unknown. */
+export function addTabAfter(state: TabState, tab: TabMeta, afterId: string): TabState {
+  const from = state.tabs.findIndex((t) => t.id === afterId)
+  if (from === -1) return addTab(state, tab)
+  const boundary = state.tabs.filter((t) => t.pinned === true).length
+  const insertAt = Math.max(from + 1, boundary)
+  const tabs = [...state.tabs]
+  tabs.splice(insertAt, 0, tab)
+  return { tabs, activeId: tab.id }
+}
+
 /** Focus an existing tab. No-op if the id is unknown. */
 export function selectTab(state: TabState, id: string): TabState {
   if (!state.tabs.some((t) => t.id === id)) return state

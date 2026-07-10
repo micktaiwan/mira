@@ -14,12 +14,95 @@
 // page script runs). Electron preloads run in an ISOLATED world and can't patch the page's
 // own `navigator`/`window`; `executeJavaScript` runs too late. The one reliable primitive
 // is CDP's `Page.addScriptToEvaluateOnNewDocument`, reached via `webContents.debugger`.
-// (No code in Mira opens DevTools, so attaching the debugger conflicts with nothing.)
+// Mira DOES open DevTools (the `toggle-devtools` command), but on Electron 41.7.0 the
+// `webContents.debugger` CDP session and the DevTools frontend coexist on the same target:
+// verified that openDevTools() does not throw while the debugger is attached, both report
+// attached simultaneously, and CDP sendCommand keeps working with DevTools open. So there
+// is no conflict to guard against and no detach/re-attach dance here.
 //
 // The shim SOURCE is a pure string constant (unit-tested by evaluating it against a fake
 // window). The Electron glue below is thin.
 
 import { app, type WebContents } from 'electron'
+
+// ── Service-worker health instrumentation ──────────────────────────────────
+// WhatsApp Web (and other SW-dependent PWAs) hang on their splash forever when the
+// page's service-worker provider is null: navigator.serviceWorker.getRegistrations()
+// and .register() then throw `InvalidStateError: The document is in an invalid state`.
+// This has been observed intermittently in Mira but is NOT yet reproducible on demand
+// (a clean Electron 41.7.0 with this exact stealth code never fails; a plain reload
+// recovers the live app). Rather than guess at a fix, we probe every navigation and
+// log the failure so the next occurrence is captured with its URL. The pure parts
+// (interpretSwProbe / swProbeLogLine) are unit-tested; the page probe below is a thin
+// read-only executeJavaScript.
+
+/** Script run in the page's own world after a navigation. Returns a JSON string
+ * describing the service-worker provider's health. Never throws: getRegistrations()
+ * rejects (not throws) when the provider is null, and we serialize that rejection. */
+export const SW_HEALTH_PROBE_SOURCE = String.raw`
+(function () {
+  try {
+    if (!('serviceWorker' in navigator)) return JSON.stringify({ sw: 'no-api' })
+    return navigator.serviceWorker.getRegistrations().then(
+      function (regs) { return JSON.stringify({ sw: 'ok', count: regs.length }) },
+      function (err) {
+        return JSON.stringify({
+          sw: 'error',
+          name: (err && err.name) || '',
+          message: String((err && err.message) || err)
+        })
+      }
+    )
+  } catch (e) {
+    return JSON.stringify({ sw: 'throw', message: String((e && e.message) || e) })
+  }
+})();
+`
+
+export type SwProbeVerdict =
+  | { kind: 'ok'; count: number }
+  | { kind: 'no-api' }
+  /** The provider-null failure that hangs WhatsApp Web. */
+  | { kind: 'invalid-state'; detail: string }
+  | { kind: 'other-error'; detail: string }
+  | { kind: 'unparseable'; detail: string }
+
+/** Parse the JSON string produced by SW_HEALTH_PROBE_SOURCE into a verdict. Pure. */
+export function interpretSwProbe(raw: unknown): SwProbeVerdict {
+  if (typeof raw !== 'string') return { kind: 'unparseable', detail: 'non-string probe result' }
+  let obj: { sw?: string; count?: unknown; name?: unknown; message?: unknown }
+  try {
+    obj = JSON.parse(raw)
+  } catch {
+    return { kind: 'unparseable', detail: raw.slice(0, 200) }
+  }
+  const sw = obj?.sw
+  if (sw === 'ok') return { kind: 'ok', count: Number(obj.count) || 0 }
+  if (sw === 'no-api') return { kind: 'no-api' }
+  if (sw === 'error' || sw === 'throw') {
+    const name = String(obj.name ?? '')
+    const message = String(obj.message ?? '')
+    const detail = [name, message].filter(Boolean).join(': ') || 'unknown error'
+    const invalidState = name === 'InvalidStateError' || /invalid state/i.test(message)
+    return invalidState ? { kind: 'invalid-state', detail } : { kind: 'other-error', detail }
+  }
+  return { kind: 'unparseable', detail: raw.slice(0, 200) }
+}
+
+/** The console line to emit for a verdict, or null when the page is healthy (ok /
+ * no-api) and nothing is worth logging. Pure, so the message wording is tested. */
+export function swProbeLogLine(url: string, verdict: SwProbeVerdict): string | null {
+  switch (verdict.kind) {
+    case 'invalid-state':
+      return `[mira] stealth: service worker provider UNAVAILABLE on ${url} — ${verdict.detail}. SW-dependent apps (e.g. WhatsApp Web) will hang on their splash; a reload usually recovers it.`
+    case 'other-error':
+      return `[mira] stealth: service worker check failed on ${url} — ${verdict.detail}`
+    case 'unparseable':
+      return `[mira] stealth: service worker probe unreadable on ${url} — ${verdict.detail}`
+    default:
+      return null // ok / no-api → healthy, stay quiet
+  }
+}
 
 /** Script injected into every page's main world at document-start. Populates an empty
  * `window.chrome` to mirror a real Chrome build. Guarded and wrapped so it can never
@@ -123,6 +206,21 @@ export function installStealthShim(wc: WebContents): void {
   }
   wc.on('did-navigate', reassert)
   wc.on('dom-ready', reassert)
+
+  // Diagnostic probe (see SW_HEALTH_PROBE_SOURCE above): after each real navigation,
+  // check the page's service-worker provider and log when it is unavailable — the
+  // failure that hangs WhatsApp Web. Read-only and best-effort; only http(s) pages
+  // have a meaningful provider, so skip Mira's home data: URL and the like.
+  wc.on('did-navigate', () => {
+    const url = wc.getURL()
+    if (!/^https?:/i.test(url)) return
+    wc.executeJavaScript(SW_HEALTH_PROBE_SOURCE, true)
+      .then((raw) => {
+        const line = swProbeLogLine(url, interpretSwProbe(raw))
+        if (line) console.warn(line)
+      })
+      .catch(() => {})
+  })
 }
 
 /** Register the shim on every webContents as it is created (`web-contents-created` fires
