@@ -20,6 +20,14 @@ describe('new-tab', () => {
       error: '"url" must be a string'
     })
   })
+
+  it('opens a blank tab (no url) when the home page is cleared', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('set-home-url', { url: '' }, ctx)
+    const result = registry.execute('new-tab', {}, ctx)
+    expect(result).toMatchObject({ ok: true, url: '' })
+  })
 })
 
 describe('select-tab', () => {
@@ -364,6 +372,55 @@ describe('toggle-tabs-panel', () => {
     expect(registry.execute('toggle-tabs-panel', { collapsed: 'yes' }, ctx)).toEqual({
       ok: false,
       error: '"collapsed" must be a boolean'
+    })
+  })
+})
+
+describe('reopen-closed-tab', () => {
+  it('brings back the last closed tab at its former position', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    // Open two more tabs (home = tab-1, then tab-2, tab-3).
+    registry.execute('new-tab', { url: 'https://a.test' }, ctx)
+    registry.execute('new-tab', { url: 'https://b.test' }, ctx)
+    // Close the middle one (index 1).
+    registry.execute('close-tab', { id: 'tab-2' }, ctx)
+    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-1', 'tab-3'])
+
+    const res = registry.execute('reopen-closed-tab', {}, ctx)
+    expect(res).toMatchObject({ ok: true, reopened: true, url: 'https://a.test' })
+    // Restored at its old index (1), between tab-1 and tab-3.
+    expect(tabState().tabs.map((t) => t.url)).toEqual(['home', 'https://a.test', 'https://b.test'])
+    // The reopened tab is active and is the most-recently-created id.
+    expect(tabState().activeId).toBe((res as unknown as { id: string }).id)
+  })
+
+  it('pops the stack newest-first (LIFO)', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', { url: 'https://first.test' }, ctx)
+    registry.execute('new-tab', { url: 'https://second.test' }, ctx)
+    registry.execute('close-tab', { id: 'tab-2' }, ctx) // first.test
+    registry.execute('close-tab', { id: 'tab-3' }, ctx) // second.test
+
+    // Most recently closed comes back first.
+    expect(registry.execute('reopen-closed-tab', {}, ctx)).toMatchObject({
+      reopened: true,
+      url: 'https://second.test'
+    })
+    expect(registry.execute('reopen-closed-tab', {}, ctx)).toMatchObject({
+      reopened: true,
+      url: 'https://first.test'
+    })
+  })
+
+  it('is a no-op when nothing was closed', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('reopen-closed-tab', {}, ctx)).toEqual({
+      ok: true,
+      reopened: false,
+      id: null
     })
   })
 })

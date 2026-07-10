@@ -39,6 +39,16 @@ export interface BookmarksState {
   tree: BookmarkNode[]
 }
 
+/** The right-side skill pane state main pushes (mirrors SkillPaneState in the
+ * registry): a skill's AI result — loading, then the summary or an error. */
+export interface SkillPaneState {
+  open: boolean
+  title: string
+  status: 'loading' | 'done' | 'error'
+  text?: string
+  error?: string
+}
+
 export interface MiraAPI {
   /** Run a command from the main-process registry (navigate, etc.). */
   command: (name: string, params?: unknown) => Promise<unknown>
@@ -46,12 +56,23 @@ export interface MiraAPI {
   onProfileRenamed: (callback: (label: string) => void) => () => void
   /** Subscribe to the profile set changing (Settings window). Returns unsubscribe. */
   onProfilesChanged: (callback: () => void) => () => void
+  /** Subscribe to the web-permission grant log changing (Settings). Returns unsubscribe. */
+  onPermissionsChanged: (callback: () => void) => () => void
   /** Subscribe to this window's tab strip changing. Returns unsubscribe. */
   onTabsChanged: (callback: (state: TabsState) => void) => () => void
   /** Subscribe to the "focus the address bar" push (new tab opened). Returns unsubscribe. */
   onFocusAddressBar: (callback: () => void) => () => void
   /** Subscribe to the (global) favorites list changing. Returns unsubscribe. */
   onBookmarksChanged: (callback: (state: BookmarksState) => void) => () => void
+  /** Subscribe to the command palette being toggled (main owns the state). The
+   * payload's `mode` is 'launcher' (Cmd+K) or 'address' (typed in the URL bar),
+   * and `query` seeds the input. Returns unsubscribe. */
+  onTogglePalette: (
+    callback: (state: { open: boolean; mode: 'launcher' | 'address'; query: string }) => void
+  ) => () => void
+  /** Subscribe to the right-side skill pane's state (a skill's AI result). Returns
+   * unsubscribe. */
+  onSkillPane: (callback: (state: SkillPaneState) => void) => () => void
 }
 
 declare global {

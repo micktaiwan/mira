@@ -23,6 +23,14 @@ const mira = {
     ipcRenderer.on('mira:profiles-changed', listener)
     return () => ipcRenderer.removeListener('mira:profiles-changed', listener)
   },
+  // Main pings open windows whenever a web permission is granted (natively, when a
+  // page requests one), so an open Settings tab refetches the grant list. Returns
+  // an unsubscribe function.
+  onPermissionsChanged: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('mira:permissions-changed', listener)
+    return () => ipcRenderer.removeListener('mira:permissions-changed', listener)
+  },
   // Main pushes this window's tab strip (tabs, active id, panel state) on every
   // change — the chrome holds no tab state, it just renders what main sends.
   // Returns an unsubscribe function.
@@ -44,6 +52,29 @@ const mira = {
     const listener = (_event: unknown, state: unknown): void => callback(state)
     ipcRenderer.on('mira:bookmarks-changed', listener)
     return () => ipcRenderer.removeListener('mira:bookmarks-changed', listener)
+  },
+  // Main drives the command palette's visibility (it owns the state so the
+  // hidden/shown web view stays in sync). The payload carries the mode
+  // ('launcher' for Cmd+K, 'address' for the URL bar) and the seeded query, so
+  // the chrome renders the right variant. Returns an unsubscribe function.
+  onTogglePalette: (
+    callback: (state: { open: boolean; mode: 'launcher' | 'address'; query: string }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: unknown,
+      state: { open: boolean; mode: 'launcher' | 'address'; query: string }
+    ): void => callback(state)
+    ipcRenderer.on('mira:toggle-palette', listener)
+    return () => ipcRenderer.removeListener('mira:toggle-palette', listener)
+  },
+  // Main pushes the right-side skill pane's state (a skill's AI result): loading
+  // while the engine works, then the summary or an error. Main owns it (it shrinks
+  // the web view to make room), the chrome renders SkillPane to match. Returns
+  // an unsubscribe function.
+  onSkillPane: (callback: (state: unknown) => void): (() => void) => {
+    const listener = (_event: unknown, state: unknown): void => callback(state)
+    ipcRenderer.on('mira:skill-pane', listener)
+    return () => ipcRenderer.removeListener('mira:skill-pane', listener)
   }
 }
 

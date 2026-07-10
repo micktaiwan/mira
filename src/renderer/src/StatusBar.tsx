@@ -23,9 +23,31 @@ interface Status {
   processes: number | null
   tabsText: string
   tabs: { total: number; loaded: number; asleep: number } | null
+  /** Cookies the active tab's site holds in its session, or null when no web
+   * page is active (empty window / Settings tab). */
+  cookies: number | null
+  /** URL those cookies belong to, for the tooltip. */
+  cookieUrl: string | null
 }
 
-const EMPTY: Status = { memoryText: '', processes: null, tabsText: '', tabs: null }
+const EMPTY: Status = {
+  memoryText: '',
+  processes: null,
+  tabsText: '',
+  tabs: null,
+  cookies: null,
+  cookieUrl: null
+}
+
+/** Host of a URL for the cookie tooltip, e.g. "github.com"; falls back to the
+ * raw string if it does not parse. */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host
+  } catch {
+    return url
+  }
+}
 
 /** How long the cursor must rest on an item before its tooltip shows. Long
  * enough not to flash while sweeping across items toward the clock. */
@@ -64,19 +86,27 @@ export default function StatusBar(): React.JSX.Element {
     let alive = true
     let debounce: ReturnType<typeof setTimeout> | null = null
     const poll = async (): Promise<void> => {
-      const res = (await window.mira.command('get-status')) as {
-        ok: boolean
-        memoryText?: string
-        memory?: { processes: number }
-        tabsText?: string
-        tabs?: { total: number; loaded: number; asleep: number }
-      }
+      const [res, cookieRes] = (await Promise.all([
+        window.mira.command('get-status'),
+        window.mira.command('count-active-cookies')
+      ])) as [
+        {
+          ok: boolean
+          memoryText?: string
+          memory?: { processes: number }
+          tabsText?: string
+          tabs?: { total: number; loaded: number; asleep: number }
+        },
+        { ok: boolean; url?: string | null; count?: number }
+      ]
       if (!alive || !res.ok) return
       setStatus({
         memoryText: res.memoryText ?? '',
         processes: res.memory?.processes ?? null,
         tabsText: res.tabsText ?? '',
-        tabs: res.tabs ?? null
+        tabs: res.tabs ?? null,
+        cookies: cookieRes.ok ? (cookieRes.count ?? null) : null,
+        cookieUrl: cookieRes.ok ? (cookieRes.url ?? null) : null
       })
     }
     // get-status walks every process (getAppMetrics), so coalesce bursts of tab
@@ -130,8 +160,12 @@ export default function StatusBar(): React.JSX.Element {
     void window.mira.command('hide-tooltip')
   }
 
-  const { tabs, processes } = status
+  const { tabs, processes, cookies, cookieUrl } = status
   const tabsDetail = tabs ? `${tabs.loaded} loaded, ${tabs.asleep} asleep` : ''
+  const cookieDetail =
+    cookies != null && cookieUrl
+      ? `${cookies} cookie${cookies === 1 ? '' : 's'} for ${hostOf(cookieUrl)}`
+      : `${cookies ?? 0} cookies`
   const memoryDetail =
     processes != null ? `RSS across ${processes} processes` : 'Memory usage (RSS)'
   const timeDetail = dateText(now)
@@ -139,6 +173,15 @@ export default function StatusBar(): React.JSX.Element {
   return (
     <div className="status-bar">
       <div className="status-right">
+        {cookies != null && (
+          <span
+            className="status-item status-cookies"
+            onMouseEnter={(e) => show(e.currentTarget, cookieDetail)}
+            onMouseLeave={hide}
+          >
+            {`🍪 ${cookies}`}
+          </span>
+        )}
         {status.tabsText && (
           <span
             className="status-item status-tabs"

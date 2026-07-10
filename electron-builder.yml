@@ -20,11 +20,23 @@ nsis:
   createDesktopShortcut: always
 mac:
   entitlementsInherit: build/entitlements.mac.plist
+  # extendInfo must be a MAP, not a list: electron-builder's list form mangles a
+  # nested value (CFBundleURLTypes landed under a bogus numeric key). Map form
+  # merges each key into Info.plist at the top level as intended.
   extendInfo:
-    - NSCameraUsageDescription: Application requests access to the device's camera.
-    - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+    NSCameraUsageDescription: Application requests access to the device's camera.
+    NSMicrophoneUsageDescription: Application requests access to the device's microphone.
+    NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
+    NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+    # Declare Mira a web browser: it handles http/https URL schemes, so macOS lists
+    # it in the default-browser picker and routes clicked links to the 'open-url'
+    # event (see src/main/index.ts). Without this, Mira can't be set as default.
+    CFBundleURLTypes:
+      - CFBundleURLName: com.mira.app.web
+        CFBundleTypeRole: Viewer
+        CFBundleURLSchemes:
+          - http
+          - https
   notarize: false
 dmg:
   artifactName: ${name}-${version}.${ext}

@@ -15,7 +15,10 @@ function setup(): {
         loaded.push(url)
       },
       goBack: () => {},
-      goForward: () => {}
+      goForward: () => {},
+      reload: () => {},
+      getZoomLevel: () => 0,
+      setZoomLevel: () => {}
     }),
     getTargetProfile: () => ({ id: focused, label: focused }),
     openProfile: (id: string) => {
@@ -26,8 +29,35 @@ function setup(): {
     renameProfile: (id: string, label: string) => ({ id, label }),
     listProfiles: () => ({ profiles: [{ id: focused, label: focused, open: true }], focused }),
     openSettings: () => {},
-    getSettings: () => ({ homeUrl: 'home' }),
-    setHomeUrl: (url: string) => ({ homeUrl: url }),
+    getSettings: () => ({
+      homeUrl: 'home',
+      llm: { provider: 'claude-cli' },
+      sidebarWidth: 240,
+      skillPaneWidth: 360
+    }),
+    setLlmConfig: (llm) => ({ homeUrl: 'home', llm, sidebarWidth: 240, skillPaneWidth: 360 }),
+    setSidebarWidth: (width) => ({
+      homeUrl: 'home',
+      llm: { provider: 'claude-cli' },
+      sidebarWidth: width,
+      skillPaneWidth: 360
+    }),
+    setSkillPaneWidth: (width) => ({
+      homeUrl: 'home',
+      llm: { provider: 'claude-cli' },
+      sidebarWidth: 240,
+      skillPaneWidth: width
+    }),
+    setHomeUrl: (url: string) => ({
+      homeUrl: url,
+      llm: { provider: 'claude-cli' },
+      sidebarWidth: 240,
+      skillPaneWidth: 360
+    }),
+    cookieJarForProfile: () => ({ set: () => Promise.resolve() }),
+    countActiveSiteCookies: () => Promise.resolve({ url: null, count: 0 }),
+    clearProfileData: (profileId?: string) => Promise.resolve({ id: profileId ?? focused }),
+    clearSiteData: () => Promise.resolve(null),
     getMemoryUsage: () => ({ rss: 0, processes: 1 }),
     getTabCounts: () => ({ total: 0, loaded: 0, asleep: 0 }),
     // Tab slice: minimal stubs, not exercised by these socket-dispatch tests.
@@ -47,6 +77,7 @@ function setup(): {
     selectTab: (id: string) => ({ id }),
     selectPrevTab: () => ({ id: null }),
     selectNextTab: () => ({ id: null }),
+    reopenClosedTab: () => ({ reopened: false, id: null }),
     moveTab: (id: string) => ({ id }),
     pinTab: (id: string) => ({ id, pinned: true }),
     unpinTab: (id: string) => ({ id, pinned: false }),
@@ -66,6 +97,7 @@ function setup(): {
       panelCollapsed: false
     }),
     toggleTabsPanel: (collapsed?: boolean) => ({ collapsed: collapsed ?? true }),
+    setPaletteOpen: (open?: boolean) => ({ open: open ?? true }),
     // Bookmark slice: minimal stubs, not exercised by these socket-dispatch tests.
     addBookmark: (url?: string, title?: string) => ({
       node: { id: 'bm', kind: 'url' as const, url: url ?? 'home', title: title ?? '' },
@@ -81,8 +113,21 @@ function setup(): {
     moveBookmark: () => ({ moved: true }),
     listBookmarks: () => ({ tree: [] }),
     openBookmark: (id: string) => ({ tabId: 'tab', url: id }),
+    // History slice: minimal stubs, not exercised by these socket-dispatch tests.
+    listHistory: () => [],
+    searchHistory: () => [],
+    clearHistory: () => ({ cleared: 0 }),
     showTooltip: () => ({ shown: true }),
-    hideTooltip: () => ({ hidden: true })
+    hideTooltip: () => ({ hidden: true }),
+    execJsInActiveTab: (code: string) => Promise.resolve(`ran:${code}`),
+    // Skills slice: minimal stubs, not exercised by these socket-dispatch tests.
+    activeUrl: () => null,
+    extractText: () => Promise.resolve(''),
+    summarize: (_prompt: string, text: string) => Promise.resolve(text),
+    // Skill pane slice: minimal stubs.
+    showSkillPane: () => {},
+    closeSkillPane: () => {},
+    getSkillPane: () => ({ open: false, title: '', status: 'done' as const })
   }
   return { registry: createCommandRegistry(), ctx, loaded }
 }

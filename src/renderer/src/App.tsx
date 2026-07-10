@@ -1,7 +1,18 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
 import Sidebar, { type TabInfo } from './Sidebar'
 import StatusBar from './StatusBar'
 import Settings from './Settings'
+import CommandPalette from './CommandPalette'
+import SkillPane from './SkillPane'
+import ResizeHandle from './ResizeHandle'
+import type { SkillPaneState } from '../../preload/index.d'
+
+// Panel width bounds — must match SIDEBAR_WIDTH / SKILL_PANE_WIDTH in
+// src/main/settings-store.ts (main clamps to the same range authoritatively).
+const SIDEBAR_MIN = 160
+const SIDEBAR_MAX = 480
+const PANE_MIN = 260
+const PANE_MAX = 720
 
 /** Thin wrapper around the command bus; every command returns { ok, ... }. */
 async function run(name: string, params?: unknown): Promise<Record<string, unknown>> {
@@ -51,6 +62,24 @@ function App(): React.JSX.Element {
   // Favorites are global (app-wide) and rendered in the native Bookmarks menu.
   // The chrome keeps the tree only to drive the address-bar star; main pushes it.
   const [bookmarks, setBookmarks] = useState<BookmarkNode[]>([])
+  // The command palette. Main owns the state (it hides the web view so the overlay
+  // is visible over what would otherwise be the page) and pushes changes; the
+  // chrome renders the overlay to match. `mode` is 'launcher' (Cmd+K) or 'address'
+  // (opened by typing in the URL bar), and `query` seeds its input.
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [paletteMode, setPaletteMode] = useState<'launcher' | 'address'>('launcher')
+  const [paletteQuery, setPaletteQuery] = useState('')
+  // The right-side skill pane (a skill's AI result). Main owns it (it shrinks the
+  // web view to make room) and pushes state; the chrome renders SkillPane to match.
+  const [skillPane, setSkillPane] = useState<SkillPaneState>({
+    open: false,
+    title: '',
+    status: 'done'
+  })
+  // Resizable panel widths (px). Seeded from settings on mount; a drag updates
+  // them live (CSS var + a throttled command so main reflows the web view).
+  const [sidebarWidth, setSidebarWidth] = useState(240)
+  const [skillPaneWidth, setSkillPaneWidth] = useState(360)
 
   // Mirror the active tab's URL into the bar, unless the user is editing it.
   const syncAddressBar = (nextTabs: TabInfo[], nextActiveId: string | null): void => {
@@ -91,6 +120,76 @@ function App(): React.JSX.Element {
     // or another window — favorites are global), so the star stays live.
     return window.mira.onBookmarksChanged((state) => setBookmarks(state.tree))
   }, [])
+
+  useEffect(() => {
+    // Main toggles the palette (Cmd+K flips it, a pick/Esc closes it) and pushes
+    // the new visibility here, plus the mode + seeded query when opening.
+    return window.mira.onTogglePalette((state) => {
+      setPaletteOpen(state.open)
+      if (state.open) {
+        setPaletteMode(state.mode)
+        setPaletteQuery(state.query)
+      }
+    })
+  }, [])
+
+  // Dismiss the palette: optimistically hide it, then tell main to close so it
+  // re-shows the web view (main owns the state, keeping the view in sync).
+  const closePalette = useCallback((): void => {
+    setPaletteOpen(false)
+    void window.mira.command('toggle-palette', { open: false })
+  }, [])
+
+  useEffect(() => {
+    // Load any pane already open (survives a chrome reload) and then track pushes.
+    const load = async (): Promise<void> => {
+      const res = await run('get-skill-pane')
+      if (res.ok && res.pane) setSkillPane(res.pane as SkillPaneState)
+    }
+    void load()
+    // Main pushes the pane state as a skill runs (loading → done/error) and when
+    // it closes; main also shrinks the web view to match, so we just render it.
+    return window.mira.onSkillPane((state) => setSkillPane(state as SkillPaneState))
+  }, [])
+
+  // Close the pane: optimistically hide it, then tell main (which restores the web
+  // view to full width). Main owns the state, keeping the view in sync.
+  const closeSkillPane = useCallback((): void => {
+    setSkillPane((prev) => ({ ...prev, open: false }))
+    void window.mira.command('close-skill-pane')
+  }, [])
+
+  // Load the persisted panel widths once (main is the source of truth).
+  useEffect(() => {
+    void (async () => {
+      const res = await run('get-settings')
+      if (!res.ok) return
+      if (typeof res.sidebarWidth === 'number') setSidebarWidth(res.sidebarWidth)
+      if (typeof res.skillPaneWidth === 'number') setSkillPaneWidth(res.skillPaneWidth)
+    })()
+  }, [])
+
+  // Reflect the widths into the CSS vars that size the chrome panels (main sizes
+  // the native web view separately, from the same numbers).
+  useEffect(() => {
+    document.documentElement.style.setProperty('--sidebar-width', `${sidebarWidth}px`)
+  }, [sidebarWidth])
+  useEffect(() => {
+    document.documentElement.style.setProperty('--skill-pane-width', `${skillPaneWidth}px`)
+  }, [skillPaneWidth])
+
+  // During a drag, coalesce the width commands to one per animation frame so main
+  // reflows the web view smoothly without a flood of IPC (it persists debounced).
+  const sidebarRaf = useRef<{ w: number; id: number | null }>({ w: 0, id: null })
+  const paneRaf = useRef<{ w: number; id: number | null }>({ w: 0, id: null })
+  const sendWidth = (ref: typeof sidebarRaf, command: string, width: number): void => {
+    ref.current.w = width
+    if (ref.current.id !== null) return
+    ref.current.id = requestAnimationFrame(() => {
+      ref.current.id = null
+      void window.mira.command(command, { width: ref.current.w })
+    })
+  }
 
   useEffect(() => {
     // Main pushes this when a new tab opens (click or Cmd+T): show the new tab's
@@ -164,6 +263,15 @@ function App(): React.JSX.Element {
         >
           ›
         </button>
+        <button
+          type="button"
+          className="nav-button"
+          title="Reload (⌘R)"
+          aria-label="Reload"
+          onClick={() => window.mira.command('reload')}
+        >
+          ⟳
+        </button>
         <form className="address-form" onSubmit={onSubmitUrl}>
           <input
             ref={addressInputRef}
@@ -171,7 +279,31 @@ function App(): React.JSX.Element {
             type="text"
             placeholder="Search or enter address"
             value={url}
-            onChange={(e) => setUrl(e.target.value)}
+            onChange={(e) => {
+              // The URL bar is a launcher: the first keystroke opens the unified
+              // palette in "address" mode, seeded with what was typed, and the
+              // palette input takes over. Focus alone doesn't open it (a new tab
+              // focuses the bar, and we don't want that to pop the palette).
+              if (paletteOpen) return
+              const v = e.target.value
+              if (v === '') {
+                setUrl('')
+                return
+              }
+              // Open OPTIMISTICALLY in the renderer so the palette mounts this
+              // render and its input grabs focus at once — waiting for main's
+              // round-trip here would drop the keystrokes typed in between (the
+              // classic "first char opens the overlay, the rest are lost" bug).
+              setPaletteMode('address')
+              setPaletteQuery(v)
+              setPaletteOpen(true)
+              // Still tell main so it hides the active web view under the overlay.
+              void window.mira.command('toggle-palette', {
+                open: true,
+                mode: 'address',
+                query: v
+              })
+            }}
             onBlur={() => setUrl(activeUrlRef.current)}
             spellCheck={false}
             autoComplete="off"
@@ -214,6 +346,52 @@ function App(): React.JSX.Element {
         )}
       </div>
       <StatusBar />
+      {/* Mounted only while open, so its search/selection state starts fresh each
+          time. Main has hidden the web view, so this overlay is visible. `mode`
+          decides the default target of a page pick (current tab in address mode,
+          new tab in launcher mode); `initialQuery` seeds the input. */}
+      {paletteOpen && (
+        <CommandPalette onClose={closePalette} mode={paletteMode} initialQuery={paletteQuery} />
+      )}
+      {/* The right-side skill pane. Main shrinks the web view by its width while
+          open (profiles.ts layout), so it sits beside the page rather than over it. */}
+      {skillPane.open && <SkillPane state={skillPane} onClose={closeSkillPane} />}
+      {/* Drag handles at each panel's inner edge. Live-resize the CSS var and, per
+          frame, tell main to reflow the web view; the final width persists on release. */}
+      {!panelCollapsed && (
+        <ResizeHandle
+          className="resize-handle-sidebar"
+          width={sidebarWidth}
+          min={SIDEBAR_MIN}
+          max={SIDEBAR_MAX}
+          invert={false}
+          onResize={(w) => {
+            setSidebarWidth(w)
+            sendWidth(sidebarRaf, 'set-sidebar-width', w)
+          }}
+          onCommit={(w) => {
+            setSidebarWidth(w)
+            void window.mira.command('set-sidebar-width', { width: w })
+          }}
+        />
+      )}
+      {skillPane.open && (
+        <ResizeHandle
+          className="resize-handle-pane"
+          width={skillPaneWidth}
+          min={PANE_MIN}
+          max={PANE_MAX}
+          invert={true}
+          onResize={(w) => {
+            setSkillPaneWidth(w)
+            sendWidth(paneRaf, 'set-skill-pane-width', w)
+          }}
+          onCommit={(w) => {
+            setSkillPaneWidth(w)
+            void window.mira.command('set-skill-pane-width', { width: w })
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -124,28 +124,44 @@ type DropPos = 'before' | 'after'
 
 // One pinned tab: a compact square (favicon only) in the wrapping grid at the
 // head of the strip. Click selects it. Deliberately no close button — Cmd+W
-// pressed twice in a row closes a pinned tab — and no drag either (pin order =
-// pin order). Right-click unpins (the tab drops back to the head of the list).
+// pressed twice in a row closes a pinned tab. Drag reorders within the pinned
+// block (the grid flows horizontally, so the drop line is left/right, not
+// top/bottom). Right-click unpins (the tab drops back to the head of the list).
 function PinnedSquare({
   tab,
   active,
+  dragging,
+  dropPos,
   onSelect,
   onUnpin,
   onHover,
-  onLeave
+  onLeave,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd
 }: {
   tab: TabInfo
   active: boolean
+  dragging: boolean
+  dropPos: DropPos | null
   onSelect: () => void
   onUnpin: () => void
   onHover: (el: HTMLElement) => void
   onLeave: () => void
+  onDragStart: () => void
+  onDragOver: (pos: DropPos) => void
+  onDrop: () => void
+  onDragEnd: () => void
 }): React.JSX.Element {
   const isSettings = tab.kind === 'settings'
   const className = [
     'pinned-tab',
     active && 'active',
-    !isSettings && !tab.loaded && 'asleep'
+    !isSettings && !tab.loaded && 'asleep',
+    dragging && 'dragging',
+    dropPos === 'before' && 'drop-before',
+    dropPos === 'after' && 'drop-after'
   ]
     .filter(Boolean)
     .join(' ')
@@ -160,6 +176,25 @@ function PinnedSquare({
       }}
       onMouseEnter={(e) => onHover(e.currentTarget)}
       onMouseLeave={onLeave}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.effectAllowed = 'move'
+        e.dataTransfer.setData('text/plain', tab.id)
+        // No tooltip bubble riding along under the drag ghost.
+        onLeave()
+        onDragStart()
+      }}
+      onDragOver={(e: DragEvent<HTMLLIElement>) => {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'move'
+        const rect = e.currentTarget.getBoundingClientRect()
+        onDragOver(e.clientX < rect.left + rect.width / 2 ? 'before' : 'after')
+      }}
+      onDrop={(e) => {
+        e.preventDefault()
+        onDrop()
+      }}
+      onDragEnd={onDragEnd}
     >
       <Favicon tab={tab} />
     </li>
@@ -327,10 +362,16 @@ function Sidebar({
               key={t.id}
               tab={t}
               active={t.id === activeId}
+              dragging={t.id === draggingId}
+              dropPos={dropTarget?.id === t.id && t.id !== draggingId ? dropTarget.pos : null}
               onSelect={() => onSelect(t.id)}
               onUnpin={() => onUnpin(t.id)}
               onHover={(el) => tooltip.enter(el, tooltipFor(t))}
               onLeave={tooltip.leave}
+              onDragStart={() => setDraggingId(t.id)}
+              onDragOver={(pos) => setDropTarget({ id: t.id, pos })}
+              onDrop={commitDrop}
+              onDragEnd={reset}
             />
           ))}
         </ul>

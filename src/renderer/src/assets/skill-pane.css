@@ -1,0 +1,151 @@
+/* The right-side skill pane (an AI summary). It sits in the gap main reserves by
+   shrinking the active WebContentsView (profiles.ts layout), so — unlike the
+   palette — it does NOT hide the page. Fixed to that exact gap: below the
+   toolbar, above the status bar, flush right, --skill-pane-width wide. The width
+   MUST match SKILL_PANE_WIDTH in the main process (src/main/index.ts). */
+.skill-pane {
+  position: fixed;
+  top: var(--toolbar-height);
+  bottom: var(--statusbar-height);
+  right: 0;
+  width: var(--skill-pane-width);
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-background-soft);
+  border-left: 1px solid var(--ev-c-gray-2);
+  -webkit-app-region: no-drag;
+}
+
+.skill-pane-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--ev-c-gray-3);
+}
+
+.skill-pane-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-pane-close {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--ev-c-text-3);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.skill-pane-close:hover {
+  background: var(--ev-c-gray-2);
+  color: var(--color-text);
+}
+
+.skill-pane-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.skill-pane-status {
+  font-size: 14px;
+  color: var(--ev-c-text-3);
+}
+
+.skill-pane-error {
+  font-size: 13px;
+  color: #e06c75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.skill-pane-text {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--color-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+/* Markdown rendered inside the skill pane (see Markdown.tsx). Compact, tuned for
+   a narrow column of AI-summary prose. */
+.markdown > :first-child {
+  margin-top: 0;
+}
+
+.markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown p {
+  margin: 0 0 10px;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 14px 0 8px;
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.markdown h1 {
+  font-size: 17px;
+}
+
+.markdown h2 {
+  font-size: 15px;
+}
+
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: 13px;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0 0 10px;
+  padding-left: 20px;
+}
+
+.markdown li {
+  margin: 3px 0;
+}
+
+.markdown code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--ev-c-gray-2);
+}
+
+.markdown a {
+  color: #6988e6;
+  text-decoration: none;
+}
+
+.markdown a:hover {
+  text-decoration: underline;
+}
+
+.markdown strong {
+  font-weight: 600;
+}

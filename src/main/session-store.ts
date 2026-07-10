@@ -30,6 +30,13 @@ export interface PersistedBounds {
   height: number
   maximized: boolean
   fullScreen: boolean
+  /** Id of the display the window was on (Electron's Display.id). The x/y already
+   * encode the position in the global desktop space, but the arrangement of an
+   * external monitor can change between sessions; on restore we require this
+   * display to still exist before honoring the saved rectangle, so a window from
+   * an unplugged screen falls back to the default instead of landing off-screen.
+   * Optional: a pre-displayId file simply skips that check. */
+  displayId?: number
 }
 
 /** One profile window's saved tab strip and geometry. `bounds` is optional: a
@@ -40,6 +47,12 @@ export interface PersistedWindow {
   activeIndex: number
   panelCollapsed: boolean
   bounds?: PersistedBounds
+  /** Whether this profile's window was open when Mira last quit, so startup can
+   * reopen exactly the set of windows that were showing (one per open profile).
+   * A closed profile keeps its saved tabs but is not reopened. Optional: a
+   * pre-`open` file has no flag, so a first launch after this feature reopens
+   * nothing extra (only the default), then records openness going forward. */
+  open?: boolean
 }
 
 /** Every profile's last window state, keyed by profile id. */
@@ -51,7 +64,8 @@ export type PersistedSessions = Record<string, PersistedWindow>
 export function toPersisted(
   state: TabState,
   panelCollapsed: boolean,
-  bounds?: PersistedBounds
+  bounds?: PersistedBounds,
+  open?: boolean
 ): PersistedWindow {
   const found = state.tabs.findIndex((t) => t.id === state.activeId)
   return {
@@ -63,7 +77,10 @@ export function toPersisted(
     })),
     activeIndex: found === -1 ? 0 : found,
     panelCollapsed,
-    ...(bounds ? { bounds } : {})
+    ...(bounds ? { bounds } : {}),
+    // Only written when specified, so a geometry-only snapshot stays byte-identical
+    // to the old shape (mirrors bounds / pinned).
+    ...(open !== undefined ? { open } : {})
   }
 }
 
@@ -103,7 +120,8 @@ function normalizeWindow(value: unknown): PersistedWindow | null {
     tabs,
     activeIndex: Math.min(Math.max(rawIndex, 0), tabs.length - 1),
     panelCollapsed: v.panelCollapsed === true,
-    ...(bounds ? { bounds } : {})
+    ...(bounds ? { bounds } : {}),
+    ...(typeof v.open === 'boolean' ? { open: v.open } : {})
   }
 }
 
@@ -119,13 +137,18 @@ export function normalizeBounds(raw: unknown): PersistedBounds | undefined {
   const width = Math.floor(v.width as number)
   const height = Math.floor(v.height as number)
   if (width < 1 || height < 1) return undefined
+  const displayId =
+    typeof v.displayId === 'number' && Number.isFinite(v.displayId)
+      ? Math.floor(v.displayId)
+      : undefined
   return {
     x: Math.floor(v.x as number),
     y: Math.floor(v.y as number),
     width,
     height,
     maximized: v.maximized === true,
-    fullScreen: v.fullScreen === true
+    fullScreen: v.fullScreen === true,
+    ...(displayId !== undefined ? { displayId } : {})
   }
 }
 

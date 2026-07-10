@@ -71,6 +71,12 @@ export interface TabsContext {
   /** Unpin a tab: it returns to the head of the regular tabs, right under the
    * pinned block. Throws on an unknown id. */
   unpinTab: (id: string) => { id: string; pinned: boolean }
+  /** Reopen the most recently closed tab of this window (Cmd+Shift+T). Pops the
+   * per-window closed-tab stack, restoring the tab at its former position (and
+   * pinned state) and focusing it. Returns the new tab id + url, or reopened:false
+   * with a null id when the stack is empty. The Settings tab is never recorded, so
+   * it never comes back this way. */
+  reopenClosedTab: () => { reopened: boolean; id: string | null; url?: string }
   /** The window's tabs, its active tab, and whether the panel is collapsed. */
   listTabs: () => { tabs: TabInfo[]; activeId: string | null; panelCollapsed: boolean }
   /** Collapse or show the tab panel. With no argument, toggles. Returns the new
@@ -233,6 +239,17 @@ export const tabsCommands: CommandMap<CommandContext> = {
     try {
       const { id: moved } = ctx.moveTab(id.trim(), toIndex)
       return { ok: true, id: moved, toIndex }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // The Cmd+Shift+T target: bring back the last tab closed in this window. A no-op
+  // (reopened:false) when nothing was closed since the window opened.
+  'reopen-closed-tab': (ctx) => {
+    try {
+      const result = ctx.reopenClosedTab()
+      return { ok: true, ...result }
     } catch (error) {
       return fail(error)
     }

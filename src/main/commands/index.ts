@@ -15,9 +15,16 @@
 import { buildRegistry, type CommandMap, type CommandRegistryOf } from './registry'
 import type { CommandContext } from './context'
 import { bookmarksCommands } from './bookmarks'
+import { cookieCommands } from './cookies'
+import { devtoolsCommands } from './devtools'
+import { historyCommands } from './history'
 import { navigationCommands } from './navigation'
+import { paletteCommands } from './palette'
+import { paneCommands } from './pane'
+import { permissionCommands } from './permissions'
 import { profileCommands } from './profiles'
 import { settingsCommands } from './settings'
+import { skillsCommands } from './skills'
 import { statusCommands } from './status'
 import { tabsCommands } from './tabs'
 import { tooltipCommands } from './tooltip'
@@ -27,9 +34,22 @@ export type { CommandContext } from './context'
 export type { NavigableContents, ProfileInfo, CommandResult, CommandHandler } from './registry'
 export type { BookmarkContext } from './bookmarks'
 export type { BookmarkNode, BookmarkUrl, BookmarkFolder, BookmarkTree } from '../bookmark-store'
+export type { CookieContext, CookieSink, ImportCookiesParams } from './cookies'
+export type { DevtoolsContext } from './devtools'
+export type { HistoryContext } from './history'
+export type { HistoryEntry } from '../history-store'
 export type { NavContext } from './navigation'
+export type { PaletteContext, PaletteMode } from './palette'
+export type { PaletteEntry, PaletteGroup, PaletteState } from '../palette'
+export type { PaneContext, SkillPaneState } from './pane'
+export { closedSkillPane } from './pane'
+export { formatMemory, formatTabs } from './status'
+export type { PermissionContext } from './permissions'
+export type { PermissionGrant } from '../permission-store'
 export type { ProfileContext } from './profiles'
 export type { SettingsContext } from './settings'
+export type { SkillsContext } from './skills'
+export type { Skill, SkillSource, SkillSink, SkillMatch } from '../skills'
 export type { StatusContext, MemoryUsage, TabCounts } from './status'
 export type { TabsContext, TabInfo, TabKind } from './tabs'
 export type { TooltipContext } from './tooltip'
@@ -39,9 +59,16 @@ export type CommandRegistry = CommandRegistryOf<CommandContext>
 export function createCommandRegistry(): CommandRegistry {
   const commands: CommandMap<CommandContext> = {
     ...bookmarksCommands,
+    ...cookieCommands,
+    ...devtoolsCommands,
+    ...historyCommands,
     ...navigationCommands,
+    ...paletteCommands,
+    ...paneCommands,
+    ...permissionCommands,
     ...profileCommands,
     ...settingsCommands,
+    ...skillsCommands,
     ...statusCommands,
     ...tabsCommands,
     ...tooltipCommands

@@ -11,8 +11,34 @@
 // CommandContext built by contextForChrome / contextForFocused.
 
 import { randomUUID } from 'crypto'
-import { BrowserWindow, WebContentsView, screen, type WebContents } from 'electron'
-import type { BookmarkNode, CommandContext, MemoryUsage, ProfileInfo, TabInfo } from './commands'
+import { spawn } from 'child_process'
+import {
+  BrowserWindow,
+  Menu,
+  WebContentsView,
+  screen,
+  session,
+  type MenuItemConstructorOptions,
+  type WebContents
+} from 'electron'
+import type {
+  BookmarkNode,
+  CommandContext,
+  MemoryUsage,
+  PaletteMode,
+  ProfileInfo,
+  SkillPaneState,
+  TabInfo
+} from './commands'
+import { closedSkillPane, formatMemory } from './commands'
+import { homePageUrl, isMiraHomeUrl, type HomeStats } from './home-doc'
+import {
+  buildAnthropicRequest,
+  parseAnthropicResponse,
+  buildClaudeCliArgs,
+  composePrompt,
+  type LlmConfig
+} from './llm'
 import {
   type BookmarkTree,
   type BookmarkUrl,
@@ -54,14 +80,61 @@ import {
   toPersisted,
   boundsOnScreen
 } from './session-store'
+import {
+  type HistoryEntry,
+  recordVisit as recordVisitPure,
+  recentHistory,
+  searchHistory as searchHistoryPure
+} from './history-store'
+import {
+  type PermissionGrant,
+  recordGrant as recordGrantPure,
+  listGrants
+} from './permission-store'
+import { shouldGrantPermission } from './permissions'
 import { clientRectToScreen, tooltipBounds, type TooltipRect, type Size } from './tooltip'
+import { buildPageMenu } from './page-menu'
+import { decideWindowOpen } from './window-open'
+import { extractionScript, extractiveSummary, type SkillSource } from './skills'
 import { TOOLTIP_URL, measureScript } from './tooltip-doc'
-import { type AppSettings, withHomeUrl } from './settings-store'
+import {
+  type AppSettings,
+  withHomeUrl,
+  withLlm,
+  withSidebarWidth,
+  withSkillPaneWidth
+} from './settings-store'
 
 /** Sentinel URL of the internal Settings tab (like chrome://settings). It never
  * loads in a WebContentsView — the chrome renders the Settings panel — but the
  * value shows in the address bar and travels to socket/MCP consumers. */
 const SETTINGS_URL = 'mira://settings'
+
+/** The scheme+host of a URL (e.g. "https://www.google.com") for the permission
+ * grant log, or the raw string if it can't be parsed. Keeps one row per site
+ * instead of one per full path. */
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return url
+  }
+}
+
+/** A tab that was closed, kept so Cmd+Shift+T can bring it back where it was.
+ * Captured at close time (the live view is already gone by then). */
+interface ClosedTab {
+  url: string
+  title: string
+  favicon: string | null
+  pinned: boolean
+  /** The tab's index in the strip when it was closed, to restore its position. */
+  index: number
+}
+
+/** How many closed tabs a window remembers for reopen (Cmd+Shift+T). A small,
+ * per-window stack — most-recently-closed reopens first, like every browser. */
+const CLOSED_TAB_STACK_LIMIT = 25
 
 /** A live window for one profile. It holds its own tab strip: the metadata list
  * (`state`, from tab-store) plus the native WebContentsView per tab (`views`,
@@ -82,6 +155,18 @@ interface ProfileWindow {
    * a second consecutive Cmd+W on the same tab closes it. Reset whenever the
    * active tab changes, so only truly back-to-back presses close. */
   closeArmedId: string | null
+  /** Most-recently-closed tabs of THIS window, newest last (a stack). Cmd+Shift+T
+   * (reopen-closed-tab) pops the top. In-memory only — cleared when the window
+   * closes, like a browser session's reopen history. */
+  closedTabs: ClosedTab[]
+  /** True while the Cmd+K command palette overlay is open. The active web view is
+   * hidden meanwhile so the chrome overlay is visible (a WebContentsView composites
+   * ABOVE the chrome DOM — CLAUDE.md "les deux pièges"). layout() reads this. */
+  paletteOpen: boolean
+  /** The right-side skill pane (an AI summary). Unlike the palette it does not hide
+   * the web view — layout() shrinks the view's WIDTH by skillPaneWidth while it is
+   * open, so the pane sits beside the page (no piège #3). Closed by default. */
+  skillPane: SkillPaneState
   /** Pending debounced strip push (see schedulePush): page events (title /
    * favicon) fire in bursts, so we coalesce them into one IPC push instead of
    * re-serializing + re-rendering the sidebar on every one. null when idle. */
@@ -113,7 +198,13 @@ export interface ProfileManagerDeps {
   /** Width of the left tab panel when shown; the active view sits to its right.
    * Must match --sidebar-width in the renderer CSS. */
   sidebarWidth: number
+  /** Width of the right skill pane when open; the active view is shrunk by it so
+   * the pane sits beside the page. Must match --skill-pane-width in the CSS. */
+  skillPaneWidth: number
   homeUrl: string
+  /** The persisted LLM engine config at startup (provider + optional key/model),
+   * so skills use the chosen engine from the first run. */
+  initialLlm: LlmConfig
   preloadPath: string
   icon?: string
   /** The persisted profile list at startup (default profile guaranteed first). */
@@ -132,6 +223,14 @@ export interface ProfileManagerDeps {
   /** Called when the favorites tree changes, so the native Bookmarks menu (which
    * renders the tree) can be rebuilt. Separate from onChange (profiles). */
   onBookmarksChange?: () => void
+  /** The persisted browsing history at startup (global, one list for the app). */
+  initialHistory: HistoryEntry[]
+  /** Persist the full history list whenever it changes (debounced by the manager). */
+  persistHistory: (history: HistoryEntry[]) => void
+  /** The persisted web-permission grant log at startup (global, one list). */
+  initialPermissions: PermissionGrant[]
+  /** Persist the full grant log whenever it changes (debounced by the manager). */
+  persistPermissions: (permissions: PermissionGrant[]) => void
   /** Persist the app settings whenever they change (e.g. the home URL). The live
    * copy is held in the manager and seeded from `homeUrl` above. */
   persistSettings: (settings: AppSettings) => void
@@ -144,6 +243,11 @@ export interface ProfileManagerDeps {
   /** Called when the set of profiles, their labels, or the focused one changes,
    * so the app menu can be rebuilt. */
   onChange?: () => void
+  /** Run a registry command targeting the window that owns `wc`. Used by the
+   * page right-click menu so its Mira actions (back / forward / reload / open in
+   * new tab) route through the same registry bus as every other surface. Owned by
+   * index.ts, which holds the registry. */
+  runCommand?: (wc: WebContents, name: string, params?: unknown) => void
 }
 
 export class ProfileManager {
@@ -165,6 +269,25 @@ export class ProfileManager {
   /** Live app settings (home URL, …). Mirrors settings.json; seeded from
    * deps.homeUrl and updated in place by set-home-url. */
   private appSettings: AppSettings
+  /** Debounce for persisting settings during a panel resize drag: many width
+   * updates per second update the layout live, but only settle to disk once idle. */
+  private settingsSaveTimer: ReturnType<typeof setTimeout> | null = null
+  /** The global browsing history. Mirrors history.json; app-wide (like bookmarks),
+   * grown by recordVisit on every page navigation. */
+  private history: HistoryEntry[]
+  /** Pending debounced flush of history.json (one timer for the whole app).
+   * null when no write is pending. */
+  private historyTimer: ReturnType<typeof setTimeout> | null = null
+  /** The global web-permission grant log. Mirrors permissions.json; app-wide,
+   * grown natively when a page requests a permission (Mira grants all — see
+   * ensurePermissionHandlers). */
+  private permissions: PermissionGrant[]
+  /** Pending debounced flush of permissions.json. null when none pending. */
+  private permissionsTimer: ReturnType<typeof setTimeout> | null = null
+  /** Session partitions whose permission handlers are already installed, so we
+   * set them once per profile session and not on every tab. Keyed by partition
+   * (the default session uses '' as its key). */
+  private readonly permissionSessions = new Set<string>()
   /** Only the currently open profiles, keyed by stable id. */
   private readonly openById = new Map<string, ProfileWindow>()
   /** Pending debounced flush of sessions.json (one timer for the whole app, as
@@ -173,12 +296,44 @@ export class ProfileManager {
   /** Profile id currently checked in the app menu's Profiles submenu. Used to
    * skip a full menu rebuild when a window is merely re-focused (same profile). */
   private menuFocusId: string | null = null
+  /** True once the app has begun quitting (app 'before-quit'). At quit every open
+   * window closes and fires 'closed' just like a user close would — this flag lets
+   * the close path tell the two apart: a user close marks the profile not-open
+   * (so it won't reopen), a quit leaves the open flag alone (so it will). */
+  private quitting = false
 
   constructor(private readonly deps: ProfileManagerDeps) {
     this.profiles = deps.initialProfiles
     this.sessions = deps.initialSessions
     this.bookmarks = deps.initialBookmarks
-    this.appSettings = { homeUrl: deps.homeUrl }
+    this.appSettings = {
+      homeUrl: deps.homeUrl,
+      llm: deps.initialLlm,
+      sidebarWidth: deps.sidebarWidth,
+      skillPaneWidth: deps.skillPaneWidth
+    }
+    this.history = deps.initialHistory
+    this.permissions = deps.initialPermissions
+  }
+
+  /** Reopen, at startup, exactly the set of profile windows that were open when
+   * Mira last quit (one window per open profile, see PersistedWindow.open). Skips
+   * unknown ids (a session for a profile since deleted). Falls back to the default
+   * profile when none is marked open — e.g. a first launch, or a fresh install. */
+  openSavedProfiles(): void {
+    const toOpen = this.profiles.filter((p) => this.sessions[p.id]?.open === true)
+    if (toOpen.length === 0) {
+      this.openProfile(DEFAULT_PROFILE_ID)
+      return
+    }
+    for (const p of toOpen) this.openProfile(p.id)
+  }
+
+  /** Mark that the app is quitting, so windows closing during shutdown keep their
+   * "was open" flag (they should reopen next launch) instead of being recorded as
+   * user-closed. Called from index.ts on the app 'before-quit' event. */
+  beginQuit(): void {
+    this.quitting = true
   }
 
   /** Open the window for an existing profile id, or focus it if already open. */
@@ -195,6 +350,29 @@ export class ProfileManager {
     this.create(profile)
     this.deps.onChange?.()
     return { id, created: true }
+  }
+
+  /** Open an external URL (a link handed to Mira as the system default browser) in
+   * a new tab. Targets the focused window, else any open one; if Mira was launched
+   * by the click and has no window yet, opens the default profile first. The tab
+   * takes page focus (not the address bar) — the user asked for this page, not to
+   * type one. */
+  openUrl(url: string): void {
+    const trimmed = url.trim()
+    if (!trimmed) return
+    let target: ProfileWindow | null =
+      this.findByWindow(BrowserWindow.getFocusedWindow()) ??
+      this.openById.values().next().value ??
+      null
+    if (!target || target.window.isDestroyed()) {
+      this.openProfile(DEFAULT_PROFILE_ID)
+      target = this.openById.get(DEFAULT_PROFILE_ID) ?? this.openById.values().next().value ?? null
+    }
+    if (!target || target.window.isDestroyed()) return
+    this.newTabIn(target, trimmed, false)
+    if (target.window.isMinimized()) target.window.restore()
+    target.window.show()
+    target.window.focus()
   }
 
   /** Create a new profile (fresh id + label), persist it, and open its window. */
@@ -237,15 +415,25 @@ export class ProfileManager {
   private create(profile: Profile): ProfileWindow {
     // Restore the window's last geometry, unless it would land off every current
     // display (monitor unplugged / resolution changed) — then fall back to the
-    // default size. maximized / fullscreen are re-applied after show below.
+    // default size. maximized / fullscreen and the position are applied after
+    // creation (below).
+    const displays = screen.getAllDisplays()
+    const savedBounds = this.sessions[profile.id]?.bounds
+    // Keep the geometry only when a large-enough corner still overlaps some display
+    // (monitor unplugged / resolution changed → fall back to the default size). We
+    // do NOT hard-reject on a missing displayId: macOS can reassign a monitor's id
+    // across restarts, so id is used only to pick the maximize target (below), never
+    // to discard otherwise-valid bounds.
     const bounds = boundsOnScreen(
-      this.sessions[profile.id]?.bounds,
-      screen.getAllDisplays().map((d) => d.workArea)
+      savedBounds,
+      displays.map((d) => d.workArea)
     )
     const window = new BrowserWindow({
-      ...(bounds
-        ? { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }
-        : { width: 1000, height: 720 }),
+      // Size is safe to pass to the constructor; POSITION is applied via setBounds
+      // after creation (below): on macOS, constructor x/y is unreliable for placing
+      // a window onto a secondary / external display, whereas setBounds honors the
+      // global desktop coordinate space across displays.
+      ...(bounds ? { width: bounds.width, height: bounds.height } : { width: 1000, height: 720 }),
       show: false,
       autoHideMenuBar: true,
       // Frameless: no native title bar and no window buttons. The toolbar fills
@@ -260,10 +448,45 @@ export class ProfileManager {
         sandbox: false
       }
     })
-    // Maximized / fullscreen can't be passed as constructor bounds — apply the
+    // Position via setBounds AFTER creation (show:false means it lands before the
+    // window is ever revealed) so an external-display placement is honored on
+    // macOS. Maximized / fullscreen can't be constructor bounds either — apply the
     // saved flags on the freshly created window.
-    if (bounds?.fullScreen) window.setFullScreen(true)
-    else if (bounds?.maximized) window.maximize()
+    if (bounds) {
+      window.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height })
+      if (bounds.fullScreen) {
+        window.setFullScreen(true)
+      } else if (bounds.maximized) {
+        // macOS maximize() targets whichever display the window currently overlaps.
+        // After restoring the (un-maximized) rectangle, that can be the WRONG monitor
+        // — the saved normal rect may sit mostly on the primary even though the window
+        // was maximized on an external display. So snap the window onto the saved
+        // display's work area first (found by displayId, else by geometry), then
+        // maximize there.
+        const target =
+          displays.find((d) => d.id === bounds.displayId) ??
+          screen.getDisplayMatching({
+            x: bounds.x,
+            y: bounds.y,
+            width: bounds.width,
+            height: bounds.height
+          })
+        window.setBounds(target.workArea)
+        window.maximize()
+      }
+    }
+    // Diagnostic (external-display restore): logs what we restored vs the current
+    // displays, so a mis-placed window can be traced. Remove once validated.
+    console.log(
+      '[mira] restore',
+      profile.id.slice(0, 8),
+      'saved=',
+      JSON.stringify(savedBounds),
+      'used=',
+      JSON.stringify(bounds),
+      'displays=',
+      JSON.stringify(displays.map((d) => ({ id: d.id, bounds: d.bounds, work: d.workArea })))
+    )
 
     const profileWindow: ProfileWindow = {
       window,
@@ -273,6 +496,9 @@ export class ProfileManager {
       panelCollapsed: false,
       settingsTabId: null,
       closeArmedId: null,
+      closedTabs: [],
+      paletteOpen: false,
+      skillPane: closedSkillPane(),
       pushTimer: null,
       layoutThrottled: false,
       layoutPending: false,
@@ -293,7 +519,15 @@ export class ProfileManager {
       // screen spot; drop it and let the next hover reposition.
       this.hideTooltipIn(profileWindow)
       this.scheduleLayout(profileWindow)
+      // Persist the new size (debounced) so it survives even a hard exit — not
+      // just the close-time snapshot.
+      this.saveSession(profileWindow)
     })
+    // Persist the new position whenever the window is moved (e.g. dragged onto
+    // another monitor). Without this, geometry was only captured at close, so a
+    // move — especially of a maximized window, whose close-time getNormalBounds
+    // is a stale rectangle on the OLD display — was lost across sessions.
+    window.on('moved', () => this.saveSession(profileWindow))
     window.on('ready-to-show', () => window.show())
     // Track focus so the menu's active-profile checkmark stays in sync — but only
     // rebuild when focus moves to a DIFFERENT profile (skip plain re-focus).
@@ -307,7 +541,10 @@ export class ProfileManager {
     // destroyed. 'closed' then persists tabs and drops it from the open map.
     window.on('close', () => this.saveSession(profileWindow))
     window.on('closed', () => {
-      this.saveSession(profileWindow)
+      // A user closing this window records it not-open (won't reopen next launch);
+      // the same event during app quit leaves the open flag untouched (default),
+      // so a window open at quit reopens. See the `quitting` flag.
+      this.saveSession(profileWindow, this.quitting ? undefined : { open: false })
       // Electron auto-destroys child windows with the parent, but drop our ref so
       // nothing tries to drive a dead tooltip window.
       if (profileWindow.tooltip && !profileWindow.tooltip.isDestroyed()) {
@@ -348,6 +585,10 @@ export class ProfileManager {
     // panel (rendered in the body) shows through.
     if (tab.id === pw.settingsTabId) return
     const partition = partitionForId(pw.id)
+    // Install this session's permission handlers (grant-all + log) before the page
+    // loads, so a first geolocation request is answered rather than denied by the
+    // default check. Once per partition (guarded inside).
+    this.ensurePermissionHandlers(partition)
     const view = new WebContentsView({
       webPreferences: partition ? { partition } : {}
     })
@@ -357,14 +598,56 @@ export class ProfileManager {
     this.wireView(pw, tab.id, view.webContents)
     // See create(): Cmd+Up/Down must fire even when this page holds focus.
     this.wireTabShortcuts(pw, view.webContents)
-    // A page that asks for a new window (window.open, target=_blank, an OAuth
-    // popup like Google's "sign in") opens as a new Mira tab, not in the OS
-    // default browser. We handle it ourselves and deny Electron's native window.
+    // Right-click on the page → a NATIVE menu (a CSS popover would sit behind the
+    // WebContentsView, CLAUDE.md "les deux pièges" #3). Its item set is decided by
+    // the pure buildPageMenu; the popup below is the thin native part.
+    this.wireContextMenu(pw, view.webContents)
+    // A page asking for a new window is either a POPUP (OAuth / SSO sign-in: it
+    // must stay a real child window so window.opener survives and the provider can
+    // post the auth result back — decideWindowOpen) or a plain new page (target=
+    // _blank, Cmd+click), which we open as a Mira tab instead of an OS window.
+    // Reuses `partition` (the profile's session) computed above.
     view.webContents.setWindowOpenHandler((details) => {
-      this.newTabIn(pw, details.url)
+      const decision = decideWindowOpen(details)
+      if (decision.kind === 'popup') {
+        // Let Electron create the native popup, on the SAME session as this profile
+        // so the provider sees the same login state (the account chooser showed the
+        // right accounts because google's cookies live in this partition).
+        return {
+          action: 'allow',
+          overrideBrowserWindowOptions: {
+            parent: pw.window,
+            width: 520,
+            height: 640,
+            webPreferences: partition ? { partition } : {}
+          }
+        }
+      }
+      this.newTabIn(pw, decision.url)
       return { action: 'deny' }
     })
-    view.webContents.loadURL(tab.url)
+    // A blank tab (empty stored url) shows Mira's home page — the session summary —
+    // instead of about:blank's black void. Its address bar stays empty: did-navigate
+    // (wireView) recognizes the home data URL via isMiraHomeUrl and mirrors '' back.
+    // The "look like real Chrome" window.chrome shim is wired globally on webContents
+    // creation and re-asserted on every navigation (see stealth.ts) — no coupling here.
+    view.webContents.loadURL(tab.url || this.blankPageUrl(pw))
+  }
+
+  /** The URL a blank tab loads: Mira's home page as a fresh data: URL, baked with
+   * this window's live session snapshot (profile, tab count, memory). Rebuilt on
+   * demand so re-selecting a blank tab shows current numbers (see selectTabIn). */
+  private blankPageUrl(pw: ProfileWindow): string {
+    const total = pw.state.tabs.length
+    const mem = this.deps.getMemoryUsage()
+    const stats: HomeStats = {
+      profileLabel: findById(this.profiles, pw.id)?.label ?? 'Mira',
+      tabCount: total,
+      loadedCount: pw.views.size,
+      memoryText: formatMemory(mem),
+      processCount: mem.processes
+    }
+    return homePageUrl(stats)
   }
 
   /** Create a new tab in `pw`, load `url`, focus it, re-layout and persist.
@@ -442,7 +725,7 @@ export class ProfileManager {
    * always current; the write is what we coalesce, so a burst of page events is
    * one write, not one per event (persistSessions was a synchronous writeFile on
    * the main thread — see index.ts). */
-  private saveSession(pw: ProfileWindow): void {
+  private saveSession(pw: ProfileWindow, opts?: { open?: boolean }): void {
     // The Settings tab is transient chrome (like chrome://settings), not restored
     // on relaunch — drop it from the snapshot. toPersisted recomputes activeIndex
     // on the filtered list (falls back to 0 when settings was the active tab).
@@ -452,7 +735,12 @@ export class ProfileManager {
           activeId: pw.state.activeId
         }
       : pw.state
-    this.sessions[pw.id] = toPersisted(persistable, pw.panelCollapsed, this.currentBounds(pw))
+    // A live window saving its state is, by definition, open — so record open:true
+    // unless the caller says otherwise (the user-close path passes open:false so
+    // that window won't reopen next launch). Startup reads this to reopen exactly
+    // the windows that were showing at quit.
+    const open = opts?.open ?? true
+    this.sessions[pw.id] = toPersisted(persistable, pw.panelCollapsed, this.currentBounds(pw), open)
     this.scheduleFlush()
   }
 
@@ -475,6 +763,86 @@ export class ProfileManager {
       this.saveTimer = null
     }
     this.deps.persistSessions(this.sessions)
+    if (this.historyTimer) {
+      clearTimeout(this.historyTimer)
+      this.historyTimer = null
+    }
+    this.deps.persistHistory(this.history)
+    if (this.permissionsTimer) {
+      clearTimeout(this.permissionsTimer)
+      this.permissionsTimer = null
+    }
+    this.deps.persistPermissions(this.permissions)
+  }
+
+  /** Record a page visit into the global history. Skips non-web urls (about:blank,
+   * mira://settings, file://…) so only real browsing lands. recordVisit dedups by
+   * url (a re-visit bumps the existing entry), then the write is debounced. */
+  private recordVisit(url: string, title: string): void {
+    if (!/^https?:\/\//i.test(url)) return
+    this.history = recordVisitPure(this.history, { url, title, at: Date.now() })
+    this.scheduleHistoryFlush()
+  }
+
+  /** Arm the debounced flush of history.json. Like scheduleFlush, a pending timer
+   * already covers the latest in-memory list, so we don't reset it. */
+  private scheduleHistoryFlush(): void {
+    if (this.historyTimer) return
+    this.historyTimer = setTimeout(() => {
+      this.historyTimer = null
+      this.deps.persistHistory(this.history)
+    }, ProfileManager.SAVE_DEBOUNCE_MS)
+  }
+
+  /** Install the web-permission handlers on a profile's session, once per
+   * partition. Electron does NOT show Chromium's native "Allow?" bubble: a page's
+   * request is routed here instead, and if unhandled the CHECK denies by default —
+   * which is why geolocation (Google Maps) silently failed. Policy: grant all (see
+   * permissions.ts), and record every grant per origin so Settings can list it.
+   * Both handlers exist because most web APIs consult the synchronous CHECK first
+   * and only raise a REQUEST if it denies (electron.d.ts). */
+  private ensurePermissionHandlers(partition: string | undefined): void {
+    const key = partition ?? ''
+    if (this.permissionSessions.has(key)) return
+    this.permissionSessions.add(key)
+    const ses = partition ? session.fromPartition(partition) : session.defaultSession
+    ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
+      const granted = shouldGrantPermission(permission)
+      if (granted) this.recordGrant(requestingOrigin, permission)
+      return granted
+    })
+    ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
+      const granted = shouldGrantPermission(permission)
+      if (granted) this.recordGrant(originOf(details.requestingUrl), permission)
+      callback(granted)
+    })
+  }
+
+  /** Record a granted permission into the global grant log, keyed by origin +
+   * permission (a re-grant bumps the existing entry). Skips empty origins (an
+   * internal / opaque requester). The write is debounced, then the Settings surface
+   * is nudged to refetch. */
+  private recordGrant(origin: string, permission: string): void {
+    if (!origin || origin === 'null') return
+    this.permissions = recordGrantPure(this.permissions, { origin, permission, at: Date.now() })
+    this.schedulePermissionsFlush()
+    this.broadcastPermissionsChanged()
+  }
+
+  /** Arm the debounced flush of permissions.json (one timer for the app). */
+  private schedulePermissionsFlush(): void {
+    if (this.permissionsTimer) return
+    this.permissionsTimer = setTimeout(() => {
+      this.permissionsTimer = null
+      this.deps.persistPermissions(this.permissions)
+    }, ProfileManager.SAVE_DEBOUNCE_MS)
+  }
+
+  /** Ping every open window so an open Settings tab refetches the grant list. */
+  private broadcastPermissionsChanged(): void {
+    for (const pw of this.openById.values()) {
+      if (!pw.window.isDestroyed()) pw.window.webContents.send('mira:permissions-changed')
+    }
   }
 
   /** The window's live geometry, or its last saved geometry once it is destroyed
@@ -483,13 +851,17 @@ export class ProfileManager {
   private currentBounds(pw: ProfileWindow): PersistedBounds | undefined {
     if (pw.window.isDestroyed()) return this.sessions[pw.id]?.bounds
     const b = pw.window.getNormalBounds()
+    // Record which display the window is on, so a restore onto an unplugged
+    // external monitor can be detected and declined (see create()).
+    const display = screen.getDisplayMatching(b)
     return {
       x: b.x,
       y: b.y,
       width: b.width,
       height: b.height,
       maximized: pw.window.isMaximized(),
-      fullScreen: pw.window.isFullScreen()
+      fullScreen: pw.window.isFullScreen(),
+      displayId: display.id
     }
   }
 
@@ -504,11 +876,20 @@ export class ProfileManager {
       this.schedulePush(pw)
       // Persist url/title/favicon changes so a restart restores the live pages.
       this.saveSession(pw)
+      // A navigation (new url) or a title arriving for the current page feeds the
+      // global browsing history. recordVisit dedups by url and skips non-web urls.
+      if ('url' in p || 'title' in p) {
+        const t = pw.state.tabs.find((x) => x.id === tabId)
+        if (t) this.recordVisit(t.url, t.title)
+      }
     }
+    // The home page is a blank tab: keep its stored url (and the address bar) empty
+    // rather than mirroring the long data: URL Chromium actually loaded.
+    const mirrorUrl = (navUrl: string): string => (isMiraHomeUrl(navUrl) ? '' : navUrl)
     wc.on('page-title-updated', (_e, title) => patch({ title }))
-    wc.on('did-navigate', (_e, navUrl) => patch({ url: navUrl }))
+    wc.on('did-navigate', (_e, navUrl) => patch({ url: mirrorUrl(navUrl) }))
     wc.on('did-navigate-in-page', (_e, navUrl, isMainFrame) => {
-      if (isMainFrame) patch({ url: navUrl })
+      if (isMainFrame) patch({ url: mirrorUrl(navUrl) })
     })
     wc.on('page-favicon-updated', (_e, favicons) => patch({ favicon: favicons?.[0] ?? null }))
   }
@@ -518,21 +899,122 @@ export class ProfileManager {
   private layout(pw: ProfileWindow): void {
     if (pw.window.isDestroyed()) return
     const { width, height } = pw.window.getContentBounds()
-    const x = pw.panelCollapsed ? 0 : this.deps.sidebarWidth
+    // Panel widths are live (resizable): read the current settings, not the
+    // startup deps, so a drag repositions the web view immediately.
+    const x = pw.panelCollapsed ? 0 : this.appSettings.sidebarWidth
     // The status bar sits at the very bottom of the chrome; leave room for it so
     // the native view doesn't cover it (see CLAUDE.md, "les deux pièges").
     const verticalChrome = this.deps.toolbarHeight + this.deps.statusBarHeight
+    // The skill pane, when open, sits on the RIGHT: shrink the view's width by it
+    // so the pane is beside the page, not hidden behind the native layer.
+    const paneRight = pw.skillPane.open ? this.appSettings.skillPaneWidth : 0
     const bounds = {
       x,
       y: this.deps.toolbarHeight,
-      width: Math.max(0, width - x),
+      width: Math.max(0, width - x - paneRight),
       height: Math.max(0, height - verticalChrome)
     }
     for (const [id, view] of pw.views) {
-      const active = id === pw.state.activeId
+      // While the palette is open, every view is hidden so the chrome overlay is
+      // visible over what would otherwise be the page (see paletteOpen).
+      const active = id === pw.state.activeId && !pw.paletteOpen
       view.setVisible(active)
       if (active) view.setBounds(bounds)
     }
+  }
+
+  /** Open / close / toggle the command palette overlay in `pw`. Hides the active
+   * view (via layout) so the chrome overlay is visible, focuses the chrome so it
+   * receives keystrokes (the page held focus), and tells the chrome to render or
+   * dismiss the overlay. Idempotent — re-asserting the same state is a no-op push. */
+  private setPaletteOpenIn(
+    pw: ProfileWindow,
+    open?: boolean,
+    mode: PaletteMode = 'launcher',
+    query = ''
+  ): { open: boolean } {
+    const next = open ?? !pw.paletteOpen
+    pw.paletteOpen = next
+    this.layout(pw)
+    if (!pw.window.isDestroyed()) {
+      if (next) pw.window.webContents.focus()
+      // The chrome needs the mode (launcher vs address) and the seeded query to
+      // render the right palette; they only matter when opening.
+      pw.window.webContents.send('mira:toggle-palette', { open: next, mode, query })
+    }
+    return { open: next }
+  }
+
+  /** Set the skill pane state in `pw`: store it, re-layout (shrinks the web view's
+   * width when open, restores it when closed), and push the state to the chrome so
+   * it renders / hides the pane. The single path for both showSkillPane and close. */
+  private setSkillPaneIn(pw: ProfileWindow, state: SkillPaneState): void {
+    pw.skillPane = state
+    this.layout(pw)
+    if (!pw.window.isDestroyed()) {
+      pw.window.webContents.send('mira:skill-pane', state)
+    }
+  }
+
+  /** Apply a panel-width change: relayout every open window (widths are app-wide)
+   * so the web views follow the drag at once, and persist the settings debounced
+   * so a drag doesn't hammer the disk. */
+  private applyPanelWidths(): void {
+    for (const pw of this.openById.values()) this.layout(pw)
+    if (this.settingsSaveTimer) clearTimeout(this.settingsSaveTimer)
+    this.settingsSaveTimer = setTimeout(() => {
+      this.settingsSaveTimer = null
+      this.deps.persistSettings(this.appSettings)
+    }, 300)
+  }
+
+  /** The skills AI engine: summarize `text` with `prompt` using the configured
+   * provider. The native edge behind the `summarize` context method — 'extractive'
+   * is pure/local; 'anthropic-api' hits the API; 'claude-cli' shells out to
+   * `claude -p` (Mickael's subscription). Errors propagate so run-skill can show
+   * them in the pane. */
+  private async runLlm(config: LlmConfig, prompt: string, text: string): Promise<string> {
+    if (config.provider === 'extractive') return extractiveSummary(text)
+    if (config.provider === 'anthropic-api') {
+      const req = buildAnthropicRequest(config, prompt, text)
+      const res = await fetch(req.url, {
+        method: 'POST',
+        headers: req.headers,
+        body: JSON.stringify(req.body)
+      })
+      return parseAnthropicResponse(await res.json())
+    }
+    // 'claude-cli': feed the composed prompt on stdin, read the answer from stdout.
+    return this.runClaudeCli(config, composePrompt(prompt, text))
+  }
+
+  /** Spawn `claude -p` and resolve its stdout. Uses the logged-in Claude Code
+   * subscription (no API key). PATH must contain the `claude` binary (true under
+   * `npm run dev`; a packaged build may need a resolved path — noted in track.md). */
+  private runClaudeCli(config: LlmConfig, fullPrompt: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = spawn('claude', buildClaudeCliArgs(config), {
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+      let out = ''
+      let err = ''
+      child.stdout.on('data', (d) => (out += String(d)))
+      child.stderr.on('data', (d) => (err += String(d)))
+      child.on('error', (e) =>
+        reject(new Error(`claude CLI not runnable: ${e.message} (is it installed / on PATH?)`))
+      )
+      child.on('close', (code) => {
+        if (code === 0) {
+          const text = out.trim()
+          if (text === '') reject(new Error('claude CLI returned no output'))
+          else resolve(text)
+        } else {
+          reject(new Error(err.trim() || `claude CLI exited with code ${code}`))
+        }
+      })
+      child.stdin.write(fullPrompt)
+      child.stdin.end()
+    })
   }
 
   /** Create the profile's tooltip overlay: a transparent, non-focusable child
@@ -571,7 +1053,11 @@ export class ProfileManager {
    * converts the anchor to screen space, and places it above/below within the
    * display's work area. The tooltipSeq guard drops a stale async measure whose
    * hover has already ended. */
-  private async showTooltipIn(pw: ProfileWindow, text: string, clientRect: TooltipRect): Promise<void> {
+  private async showTooltipIn(
+    pw: ProfileWindow,
+    text: string,
+    clientRect: TooltipRect
+  ): Promise<void> {
     const tip = pw.tooltip
     if (!tip || tip.isDestroyed()) return
     const seq = ++pw.tooltipSeq
@@ -666,7 +1152,21 @@ export class ProfileManager {
   }
 
   private closeTabIn(pw: ProfileWindow, id: string): { closed: boolean } {
-    if (!pw.state.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
+    const index = pw.state.tabs.findIndex((t) => t.id === id)
+    if (index === -1) throw new Error(`unknown tab: ${id}`)
+    // Remember the tab so Cmd+Shift+T can reopen it, unless it is the transient
+    // Settings tab (chrome, not a page — never worth restoring this way).
+    if (id !== pw.settingsTabId) {
+      const closing = pw.state.tabs[index]
+      pw.closedTabs.push({
+        url: closing.url,
+        title: closing.title,
+        favicon: closing.favicon,
+        pinned: closing.pinned === true,
+        index
+      })
+      if (pw.closedTabs.length > CLOSED_TAB_STACK_LIMIT) pw.closedTabs.shift()
+    }
     const wasActive = pw.state.activeId === id
     pw.state = closeTabPure(pw.state, id)
     if (pw.closeArmedId === id) pw.closeArmedId = null
@@ -693,6 +1193,35 @@ export class ProfileManager {
     this.pushTabs(pw)
     this.saveSession(pw)
     return { closed: true }
+  }
+
+  /** Reopen the most recently closed tab (Cmd+Shift+T): pop the window's closed
+   * stack, recreate the tab at its former position and pinned state, load its url
+   * and focus it. A no-op (reopened:false) when nothing was closed. */
+  private reopenClosedTabIn(pw: ProfileWindow): {
+    reopened: boolean
+    id: string | null
+    url?: string
+  } {
+    const closed = pw.closedTabs.pop()
+    if (!closed) return { reopened: false, id: null }
+    const tab: TabMeta = {
+      id: randomUUID(),
+      title: closed.title,
+      url: closed.url,
+      favicon: closed.favicon
+    }
+    // addTab appends + activates; then restore pinned state and slot the tab back
+    // where it was (moveTab clamps into range and the pinned/regular zone).
+    pw.state = addTab(pw.state, tab)
+    if (closed.pinned) pw.state = pinTabPure(pw.state, tab.id)
+    pw.state = moveTabPure(pw.state, tab.id, closed.index)
+    pw.closeArmedId = null
+    this.materializeTab(pw, tab)
+    this.layout(pw)
+    this.pushTabs(pw)
+    this.saveSession(pw)
+    return { reopened: true, id: tab.id, url: tab.url }
   }
 
   /** Close the active tab (Cmd+W). A pinned tab must be pressed twice in a
@@ -783,7 +1312,14 @@ export class ProfileManager {
     // A tab switch breaks the Cmd+W double-press chain on a pinned tab.
     pw.closeArmedId = null
     // Lazy load: first selection is when a restored tab actually fetches its page.
+    const wasLoaded = pw.views.has(id)
     this.materializeTab(pw, tab)
+    // Re-selecting an already-loaded blank tab refreshes its home page so the
+    // session snapshot (tab count, memory) is current. A first-time materialize
+    // (wasLoaded false) already loaded a fresh home, so skip the reload then.
+    if (wasLoaded && tab.url === '' && id !== pw.settingsTabId) {
+      pw.views.get(id)?.webContents.loadURL(this.blankPageUrl(pw))
+    }
     this.layout(pw)
     this.pushTabs(pw)
     this.saveSession(pw)
@@ -807,6 +1343,34 @@ export class ProfileManager {
         this.selectAdjacentTabIn(pw, 1)
         event.preventDefault()
       }
+    })
+  }
+
+  /** Pop up the native page right-click menu for `wc`. The item set is decided by
+   * the pure, tested buildPageMenu (from the click target + this view's history);
+   * here we only translate it to Electron menu items and popup. Mira actions
+   * (`command` items) route through deps.runCommand so they hit the same registry
+   * bus as the toolbar / socket; clipboard items are native roles on the view. */
+  private wireContextMenu(pw: ProfileWindow, wc: WebContents): void {
+    wc.on('context-menu', (_event, params) => {
+      if (pw.window.isDestroyed()) return
+      const items = buildPageMenu({
+        linkURL: params.linkURL,
+        selectionText: params.selectionText,
+        isEditable: params.isEditable,
+        canGoBack: wc.navigationHistory.canGoBack(),
+        canGoForward: wc.navigationHistory.canGoForward()
+      })
+      const template: MenuItemConstructorOptions[] = items.map((item) => {
+        if (item.type === 'separator') return { type: 'separator' }
+        if (item.type === 'role') return { role: item.role, label: item.label }
+        return {
+          label: item.label,
+          enabled: item.enabled,
+          click: () => this.deps.runCommand?.(wc, item.command, item.params)
+        }
+      })
+      Menu.buildFromTemplate(template).popup({ window: pw.window })
     })
   }
 
@@ -1005,7 +1569,14 @@ export class ProfileManager {
         // `navigate` already branches to a new tab before reaching here (see
         // navigation.ts). Return an inert target so nothing throws.
         if (activeId && activeId === target.settingsTabId) {
-          return { loadURL: () => {}, goBack: () => {}, goForward: () => {} }
+          return {
+            loadURL: () => {},
+            goBack: () => {},
+            goForward: () => {},
+            reload: () => {},
+            getZoomLevel: () => 0,
+            setZoomLevel: () => {}
+          }
         }
         const view = activeId ? target.views.get(activeId) : undefined
         if (!view) throw new Error('no active tab')
@@ -1020,7 +1591,10 @@ export class ProfileManager {
           },
           goForward: () => {
             if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward()
-          }
+          },
+          reload: () => wc.reload(),
+          getZoomLevel: () => wc.getZoomLevel(),
+          setZoomLevel: (level) => wc.setZoomLevel(level)
         }
       },
       getTargetProfile: () => {
@@ -1042,6 +1616,100 @@ export class ProfileManager {
         this.deps.persistSettings(this.appSettings)
         return { ...this.appSettings }
       },
+      setLlmConfig: (llm) => {
+        // Applied live (this.appSettings is what runLlm reads) and persisted.
+        this.appSettings = withLlm(this.appSettings, llm)
+        this.deps.persistSettings(this.appSettings)
+        return { ...this.appSettings }
+      },
+      setSidebarWidth: (width) => {
+        this.appSettings = withSidebarWidth(this.appSettings, width)
+        this.applyPanelWidths()
+        return { ...this.appSettings }
+      },
+      setSkillPaneWidth: (width) => {
+        this.appSettings = withSkillPaneWidth(this.appSettings, width)
+        this.applyPanelWidths()
+        return { ...this.appSettings }
+      },
+      cookieJarForProfile: (id) => {
+        // The cookie jar is the profile's session partition (its own cookie jar,
+        // see profile-store.ts). It exists whether or not the window is open, so
+        // an import can target a profile that isn't currently showing.
+        if (!findById(this.profiles, id)) throw new Error(`unknown profile: ${id}`)
+        const partition = partitionForId(id)
+        const sess = partition ? session.fromPartition(partition) : session.defaultSession
+        return sess.cookies
+      },
+      countActiveSiteCookies: async () => {
+        // Read the count straight off the tab's OWN session, so it reflects
+        // exactly what the loaded page sees (not a re-derived session).
+        if (!target || target.window.isDestroyed()) return { url: null, count: 0 }
+        const activeId = target.state.activeId
+        if (!activeId || activeId === target.settingsTabId) return { url: null, count: 0 }
+        const view = target.views.get(activeId)
+        if (!view) return { url: null, count: 0 }
+        const wc = view.webContents
+        const url = wc.getURL()
+        if (!/^https?:/.test(url)) return { url: url || null, count: 0 }
+        const cookies = await wc.session.cookies.get({ url })
+        return { url, count: cookies.length }
+      },
+      clearProfileData: async (profileId) => {
+        // Default to the target window's profile (Settings / palette clear "this
+        // profile"). Clears the HTTP cache and every storage type (cookies,
+        // localStorage, IndexedDB, service workers, …) — a full sign-out.
+        const id = profileId ?? target?.id
+        if (!id) throw new Error('no target profile')
+        if (!findById(this.profiles, id)) throw new Error(`unknown profile: ${id}`)
+        const partition = partitionForId(id)
+        const sess = partition ? session.fromPartition(partition) : session.defaultSession
+        await sess.clearCache()
+        await sess.clearStorageData()
+        return { id }
+      },
+      clearSiteData: async (targetUrl) => {
+        // Resolve the site + session. An explicit url uses the target window's
+        // own session; otherwise read the active tab's url and its session.
+        let url = targetUrl
+        let sess
+        if (url) {
+          const partition = partitionForId(target?.id ?? DEFAULT_PROFILE_ID)
+          sess = partition ? session.fromPartition(partition) : session.defaultSession
+        } else {
+          if (!target || target.window.isDestroyed()) return null
+          const activeId = target.state.activeId
+          if (!activeId || activeId === target.settingsTabId) return null
+          const view = target.views.get(activeId)
+          if (!view) return null
+          url = view.webContents.getURL()
+          sess = view.webContents.session
+        }
+        if (!/^https?:/.test(url)) return null
+        const parsed = new URL(url)
+        // Remove exactly the cookies this site would send (matches the status-bar
+        // count) — by host, so we never touch the whole cookie store.
+        const cookies = await sess.cookies.get({ url })
+        for (const c of cookies) {
+          const host = c.domain.replace(/^\./, '')
+          await sess.cookies.remove(`${c.secure ? 'https' : 'http'}://${host}${c.path}`, c.name)
+        }
+        // Clear this origin's storage (localStorage, IndexedDB, service workers,
+        // …); cookies are handled above, so 'cookies' is deliberately excluded.
+        await sess.clearStorageData({
+          origin: parsed.origin,
+          storages: [
+            'filesystem',
+            'indexdb',
+            'localstorage',
+            'shadercache',
+            'websql',
+            'serviceworkers',
+            'cachestorage'
+          ]
+        })
+        return { host: parsed.host, cookiesRemoved: cookies.length }
+      },
       getMemoryUsage: () => this.deps.getMemoryUsage(),
       getTabCounts: () => {
         if (!target) return { total: 0, loaded: 0, asleep: 0 }
@@ -1062,6 +1730,52 @@ export class ProfileManager {
         if (target) this.hideTooltipIn(target)
         return { hidden: true }
       },
+      execJsInActiveTab: async (code) => {
+        // Reach the active tab's OWN webContents and run in the page's world, so it
+        // sees the site exactly as the site does (same session, same DOM).
+        if (!target || target.window.isDestroyed()) throw new Error('no target window')
+        const activeId = target.state.activeId
+        if (!activeId || activeId === target.settingsTabId) {
+          throw new Error('no active web page')
+        }
+        const view = target.views.get(activeId)
+        if (!view) throw new Error('no active tab')
+        // userGesture=true so calls gated behind a user activation still run.
+        return view.webContents.executeJavaScript(code, true)
+      },
+      activeUrl: () => {
+        // The active tab's current url (null for no window / Settings tab), so
+        // list-skills / run-skill can decide which skills apply.
+        if (!target || target.window.isDestroyed()) return null
+        const activeId = target.state.activeId
+        if (!activeId || activeId === target.settingsTabId) return null
+        const view = target.views.get(activeId)
+        if (!view) return null
+        return view.webContents.getURL() || null
+      },
+      extractText: async (source: SkillSource) => {
+        // Run the skill's extraction script in the active page's world and return
+        // its (string) text — the DOM edge behind run-skill.
+        if (!target || target.window.isDestroyed()) throw new Error('no target window')
+        const activeId = target.state.activeId
+        if (!activeId || activeId === target.settingsTabId) throw new Error('no active web page')
+        const view = target.views.get(activeId)
+        if (!view) throw new Error('no active tab')
+        const text = await view.webContents.executeJavaScript(extractionScript(source), true)
+        return typeof text === 'string' ? text : String(text ?? '')
+      },
+      summarize: async (prompt: string, text: string) => {
+        // Run the configured AI engine (subscription CLI / API / local extractive).
+        // Errors propagate to run-skill, which surfaces them in the pane.
+        return this.runLlm(this.appSettings.llm, prompt, text)
+      },
+      showSkillPane: (state) => {
+        if (target) this.setSkillPaneIn(target, state)
+      },
+      closeSkillPane: () => {
+        if (target) this.setSkillPaneIn(target, closedSkillPane())
+      },
+      getSkillPane: () => (target ? target.skillPane : closedSkillPane()),
       newTab: (url) => {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
         // focusChrome: opening a tab (click or Cmd+T) focuses the address bar so a
@@ -1122,6 +1836,42 @@ export class ProfileManager {
       toggleTabsPanel: (collapsed) => {
         if (!target) throw new Error('no target window')
         return this.toggleTabsPanelIn(target, collapsed)
+      },
+      setPaletteOpen: (open, mode, query) => {
+        if (!target) throw new Error('no target window')
+        return this.setPaletteOpenIn(target, open, mode, query)
+      },
+      reopenClosedTab: () => {
+        if (!target) throw new Error('no target window')
+        return this.reopenClosedTabIn(target)
+      },
+      listHistory: (limit) => recentHistory(this.history, limit),
+      searchHistory: (query, limit) => searchHistoryPure(this.history, query, limit),
+      clearHistory: () => {
+        const cleared = this.history.length
+        this.history = []
+        // Write the empty list now (and cancel any pending debounced flush) so a
+        // clear is durable even if the app is quit immediately after.
+        if (this.historyTimer) {
+          clearTimeout(this.historyTimer)
+          this.historyTimer = null
+        }
+        this.deps.persistHistory(this.history)
+        return { cleared }
+      },
+      listPermissions: () => listGrants(this.permissions),
+      clearPermissions: () => {
+        const cleared = this.permissions.length
+        this.permissions = []
+        // Write the empty log now (and cancel any pending debounced flush) so a
+        // clear is durable even if the app is quit immediately after.
+        if (this.permissionsTimer) {
+          clearTimeout(this.permissionsTimer)
+          this.permissionsTimer = null
+        }
+        this.deps.persistPermissions(this.permissions)
+        this.broadcastPermissionsChanged()
+        return { cleared }
       },
       addBookmark: (url, title, parentId) => this.addBookmarkIn(target, url, title, parentId),
       addFolder: (title, parentId) => this.addFolderIn(title, parentId),

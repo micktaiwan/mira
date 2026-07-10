@@ -17,6 +17,12 @@ export interface NavigableContents {
   goBack: () => unknown
   /** Step forward in this view's session history (no-op if already newest). */
   goForward: () => unknown
+  /** Reload the current page (re-fetch and re-render). */
+  reload: () => unknown
+  /** Current zoom level (Chrome's log scale: 0 = 100%, factor = 1.2^level). */
+  getZoomLevel: () => number
+  /** Set the zoom level (same log scale as getZoomLevel). */
+  setZoomLevel: (level: number) => unknown
 }
 
 /** A profile as seen by a command: a stable id and its display label. */
@@ -29,8 +35,12 @@ export type CommandResult = { ok: true; [key: string]: unknown } | { ok: false; 
 
 /** A handler over some context slice `C`. Each domain module types its handlers
  * against the composed context (which satisfies every slice), so the maps merge
- * cleanly into one registry. */
-export type CommandHandler<C> = (ctx: C, params: unknown) => CommandResult
+ * cleanly into one registry. A handler may be async (e.g. import-cookies, which
+ * awaits Electron's cookies.set per cookie); most stay synchronous. */
+export type CommandHandler<C> = (
+  ctx: C,
+  params: unknown
+) => CommandResult | Promise<CommandResult>
 
 /** A named set of commands sharing a context type. One per domain file. */
 export type CommandMap<C> = Record<string, CommandHandler<C>>
@@ -50,10 +60,15 @@ export interface CommandRegistryOf<C> {
 /** Build a registry from one merged command map. */
 export function buildRegistry<C>(commands: CommandMap<C>): CommandRegistryOf<C> {
   return {
+    // `execute` is typed as returning a synchronous CommandResult so the many
+    // sync callers/tests stay ergonomic. A handful of handlers are async
+    // (import-cookies), so the runtime value may actually be a Promise — the
+    // transports that can hit those (socket, IPC) await the result, which is a
+    // no-op on a plain object. The cast localizes that imprecision here.
     execute(name, params, ctx) {
       const handler = commands[name]
       if (!handler) throw new Error(`Unknown command: ${name}`)
-      return handler(ctx, params)
+      return handler(ctx, params) as CommandResult
     },
     has(name) {
       return name in commands

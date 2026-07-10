@@ -13,15 +13,24 @@ export interface AppMenuHandlers {
   openProfile: (id: string) => void
   newProfile: () => void
   openSettings: () => void
+  /** Toggle the Cmd+K command palette in the focused window. A menu accelerator
+   * (not a renderer keydown) so it fires whatever holds focus — chrome or page. */
+  togglePalette: () => void
   /** Navigate the focused window back / forward in its history. Wired to the
    * back / forward commands so the Cmd+Arrow accelerators stay pilotable. */
   goBack: () => void
   goForward: () => void
+  /** Reload the focused window's active tab (Cmd+R). Wired to the reload command,
+   * so the accelerator hits the same bus as the toolbar button and the socket. */
+  reload: () => void
   /** Open a new tab (Cmd+T) / close the active tab (Cmd+W) in the focused window.
    * Wired to the new-tab / close-active-tab commands. Cmd+W closes a tab, never
    * the window — window closing moves to Cmd+Shift+W (see the File menu). */
   newTab: () => void
   closeTab: () => void
+  /** Reopen the most recently closed tab (Cmd+Shift+T) in the focused window.
+   * Wired to the reopen-closed-tab command; a no-op when nothing was closed. */
+  reopenTab: () => void
   /** Discard the active tab's page (Cmd+S): free its RAM, keep the tab, and move
    * to the next tab. Wired to the discard-active-tab command. */
   discardTab: () => void
@@ -32,6 +41,12 @@ export interface AppMenuHandlers {
   /** Bookmark the focused window's active tab (Cmd+D). Wired to the add-bookmark
    * command with no url, which defaults to the active tab. */
   addBookmark: () => void
+  /** Zoom the focused window's active tab in / out / back to 100% (Cmd+ / Cmd- /
+   * Cmd0). Wired to the zoom-in / zoom-out / zoom-reset commands so the page
+   * zooms — not Mira's own chrome, which the default zoom roles would hit. */
+  zoomIn: () => void
+  zoomOut: () => void
+  zoomReset: () => void
   /** The favorites tree, rendered as the Bookmarks submenu: folders become nested
    * submenus, urls become clickable items. */
   listBookmarks: () => BookmarkTree
@@ -111,8 +126,19 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
   const fileMenu: MenuItemConstructorOptions = {
     label: 'File',
     submenu: [
+      {
+        label: 'Command Palette…',
+        accelerator: 'CmdOrCtrl+K',
+        click: () => handlers.togglePalette()
+      },
+      { type: 'separator' },
       { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => handlers.newTab() },
       { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => handlers.closeTab() },
+      {
+        label: 'Reopen Closed Tab',
+        accelerator: 'CmdOrCtrl+Shift+T',
+        click: () => handlers.reopenTab()
+      },
       // Cmd+S discards the active tab's page to reclaim RAM but keeps the tab
       // (asleep) and moves to the nearest already-loaded tab (never waking a
       // sleeping one) — not the browser's "Save Page As".
@@ -151,7 +177,9 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
       label: 'History',
       submenu: [
         { label: 'Back', accelerator: 'CmdOrCtrl+Left', click: () => handlers.goBack() },
-        { label: 'Forward', accelerator: 'CmdOrCtrl+Right', click: () => handlers.goForward() }
+        { label: 'Forward', accelerator: 'CmdOrCtrl+Right', click: () => handlers.goForward() },
+        { type: 'separator' },
+        { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => handlers.reload() }
       ]
     },
     {
@@ -184,7 +212,28 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
         })()
       ]
     },
-    { role: 'viewMenu' },
+    {
+      // A hand-built View menu, deliberately WITHOUT the default role:'reload' /
+      // role:'forceReload'. Those reload the *focused* webContents — which is
+      // Mira's own chrome when the address bar / sidebar has focus — and their
+      // Cmd+R accelerator would shadow our History → Reload (which reloads the
+      // active TAB via the registry). Keep the rest of the standard View items.
+      label: 'View',
+      submenu: [
+        { role: 'toggleDevTools' },
+        { type: 'separator' },
+        // Zoom the active TAB's page via the registry (like Reload above), NOT
+        // the default zoom roles which target the focused webContents — Mira's
+        // chrome when the address bar has focus. Cmd+= is the physical key for
+        // "zoom in" (no Shift); a hidden twin binds Cmd+Plus so both fire it.
+        { label: 'Actual Size', accelerator: 'CmdOrCtrl+0', click: () => handlers.zoomReset() },
+        { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => handlers.zoomIn() },
+        { label: 'Zoom In', accelerator: 'CmdOrCtrl+Plus', visible: false, click: () => handlers.zoomIn() },
+        { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => handlers.zoomOut() },
+        { type: 'separator' },
+        { role: 'togglefullscreen' }
+      ]
+    },
     { role: 'windowMenu' }
   ]
 

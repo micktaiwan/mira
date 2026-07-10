@@ -48,6 +48,12 @@ describe('toPersisted', () => {
     expect(toPersisted(twoTabs(), false, bounds).bounds).toEqual(bounds)
   })
 
+  it('omits the open flag unless given, and carries it when given', () => {
+    expect('open' in toPersisted(twoTabs(), false)).toBe(false)
+    expect(toPersisted(twoTabs(), false, undefined, true).open).toBe(true)
+    expect(toPersisted(twoTabs(), false, undefined, false).open).toBe(false)
+  })
+
   it('defaults the active index to 0 when the active tab is gone', () => {
     const s: TabState = { tabs: twoTabs().tabs, activeId: 'ghost' }
     expect(toPersisted(s, false).activeIndex).toBe(0)
@@ -139,6 +145,34 @@ describe('normalizeSessions', () => {
     const out = normalizeSessions(raw)
     expect(out.p.tabs).toHaveLength(1)
     expect(out.p.bounds).toBeUndefined()
+  })
+
+  it('keeps a boolean open flag and drops anything else', () => {
+    const raw = {
+      p1: { tabs: [{ url: 'https://a.test' }], open: true },
+      p2: { tabs: [{ url: 'https://b.test' }], open: 'yes' },
+      p3: { tabs: [{ url: 'https://c.test' }] }
+    }
+    const out = normalizeSessions(raw)
+    expect(out.p1.open).toBe(true)
+    expect('open' in out.p2).toBe(false)
+    expect('open' in out.p3).toBe(false)
+  })
+
+  it('carries a finite displayId on the geometry and drops a bad one', () => {
+    const raw = {
+      p1: {
+        tabs: [{ url: 'https://a.test' }],
+        bounds: { x: 0, y: 0, width: 900, height: 700, displayId: 12.9 }
+      },
+      p2: {
+        tabs: [{ url: 'https://b.test' }],
+        bounds: { x: 0, y: 0, width: 900, height: 700, displayId: 'nope' }
+      }
+    }
+    const out = normalizeSessions(raw)
+    expect(out.p1.bounds!.displayId).toBe(12)
+    expect('displayId' in out.p2.bounds!).toBe(false)
   })
 })
 

@@ -1,4 +1,6 @@
 @import './base.css';
+@import './palette.css';
+@import './skill-pane.css';
 
 :root {
   /* Must match TOOLBAR_HEIGHT in src/main/index.ts. */
@@ -7,6 +9,8 @@
   --statusbar-height: 24px;
   /* Must match SIDEBAR_WIDTH in src/main/index.ts. */
   --sidebar-width: 240px;
+  /* Must match SKILL_PANE_WIDTH in src/main/index.ts. */
+  --skill-pane-width: 360px;
 }
 
 /* The whole chrome: toolbar on top, the body (tab panel + web view area) below. */
@@ -22,6 +26,32 @@
   flex: 1;
   display: flex;
   min-height: 0;
+}
+
+/* Panel resize handles: a thin col-resize strip pinned to each panel's INNER
+   edge (so it overlaps the panel's own chrome, never the native web view, which
+   would eat the drag — CLAUDE.md piège #3). Positioned from the width vars so
+   they track the panel as it resizes. */
+.resize-handle {
+  position: fixed;
+  top: var(--toolbar-height);
+  bottom: var(--statusbar-height);
+  width: 6px;
+  z-index: 60;
+  cursor: col-resize;
+  -webkit-app-region: no-drag;
+}
+
+.resize-handle:hover {
+  background: rgba(105, 136, 230, 0.4);
+}
+
+.resize-handle-sidebar {
+  left: calc(var(--sidebar-width) - 6px);
+}
+
+.resize-handle-pane {
+  right: calc(var(--skill-pane-width) - 6px);
 }
 
 body {
@@ -147,11 +177,11 @@ body {
 }
 
 .status-tabs {
-  color: var(--ev-c-gray-1);
+  color: rgba(235, 235, 245, 0.75);
 }
 
 .status-memory {
-  color: var(--ev-c-gray-1);
+  color: rgba(235, 235, 245, 0.75);
 }
 
 .status-time {
@@ -380,6 +410,21 @@ body {
   opacity: 0.45;
 }
 
+/* Drag-and-drop reorder within the pinned block: the grid flows horizontally,
+   so the drop line sits on the left or right edge of the square under the
+   cursor (the vertical counterpart of .tab-row.drop-before/after). */
+.pinned-tab.dragging {
+  opacity: 0.4;
+}
+
+.pinned-tab.drop-before {
+  box-shadow: inset 2px 0 0 0 #6988e6;
+}
+
+.pinned-tab.drop-after {
+  box-shadow: inset -2px 0 0 0 #6988e6;
+}
+
 /* The badge reads better a notch larger inside a 40px square. */
 .pinned-tab .tab-favicon {
   width: 24px;
@@ -553,6 +598,49 @@ body {
   color: var(--ev-c-gray-1);
 }
 
+.permission-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.permission-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--ev-c-gray-3);
+  border-radius: 8px;
+  background: var(--color-background-soft);
+  font-size: 12px;
+}
+
+/* The permission name (geolocation, notifications, …): a small fixed-width chip. */
+.permission-kind {
+  flex-shrink: 0;
+  min-width: 96px;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+/* The requesting site's origin: takes the remaining width, truncates if long. */
+.permission-origin {
+  flex: 1;
+  color: var(--ev-c-gray-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.permission-when {
+  flex-shrink: 0;
+  color: var(--ev-c-gray-1);
+  font-size: 11px;
+}
+
 .btn {
   -webkit-app-region: no-drag;
   flex-shrink: 0;
@@ -575,4 +663,9 @@ body {
   background: transparent;
   color: var(--color-text);
   border-color: var(--ev-c-gray-2);
+}
+
+.btn-danger {
+  background: #d9534f;
+  border-color: #d9534f;
 }

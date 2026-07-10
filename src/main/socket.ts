@@ -17,7 +17,8 @@ export type SocketResponse = CommandResult | { ok: false; error: string }
 /**
  * Parse one request line and dispatch it to the registry with the given context
  * (the target window). Pure (no socket I/O), so it is unit-testable. Returns the
- * response object to send back.
+ * response object to send back. For an async command (import-cookies) the value
+ * is really a Promise at runtime; the socket loop awaits it (see consume).
  */
 export function handleRequestLine(
   line: string,
@@ -60,12 +61,22 @@ export function startCommandSocket(
 
   const server = createServer((conn) => {
     let buffer = ''
+    // Serialize responses through one chain so async commands (import-cookies)
+    // still reply in request order.
+    let chain: Promise<unknown> = Promise.resolve()
 
     const consume = (line: string): void => {
       const trimmed = line.trim()
       if (trimmed === '') return
-      const response = handleRequestLine(trimmed, registry, makeContext())
-      conn.write(JSON.stringify(response) + '\n')
+      chain = chain.then(async () => {
+        let response: SocketResponse
+        try {
+          response = await handleRequestLine(trimmed, registry, makeContext())
+        } catch (error) {
+          response = { ok: false, error: error instanceof Error ? error.message : String(error) }
+        }
+        conn.write(JSON.stringify(response) + '\n')
+      })
     }
 
     conn.on('data', (chunk) => {
