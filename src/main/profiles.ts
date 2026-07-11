@@ -11,7 +11,6 @@
 // CommandContext built by contextForChrome / contextForFocused.
 
 import { randomUUID } from 'crypto'
-import { spawn } from 'child_process'
 import {
   app,
   BrowserWindow,
@@ -41,31 +40,10 @@ import type {
 import { closedSkillPane, formatMemory } from './commands'
 import { homePageUrl, isMiraHomeUrl, type HomeStats } from './home-doc'
 import { errorPageUrl, isMiraErrorUrl } from './error-doc'
-import {
-  buildAnthropicRequest,
-  buildAnthropicChatRequest,
-  parseAnthropicResponse,
-  buildClaudeCliArgs,
-  buildClaudeStreamArgs,
-  buildClaudeStreamInput,
-  parseClaudeStreamResult,
-  composePrompt,
-  composeChatPrompt,
-  chatSystemPrompt,
-  type LlmConfig,
-  type ChatMessage,
-  type PageContext
-} from './llm'
-import {
-  type BookmarkTree,
-  type BookmarkUrl,
-  insertNode,
-  removeNode,
-  renameNode,
-  moveNode,
-  findNode,
-  findUrl as findBookmarkUrl
-} from './bookmark-store'
+import { type LlmConfig, type ChatMessage, type PageContext } from './llm'
+import { LlmRunner } from './llm-runner'
+import { type BookmarkTree } from './bookmark-store'
+import { BookmarksController } from './bookmarks-controller'
 import {
   type Profile,
   DEFAULT_PROFILE_ID,
@@ -100,19 +78,11 @@ import {
   toPersisted,
   boundsOnScreen
 } from './session-store'
-import {
-  type HistoryEntry,
-  recordVisit as recordVisitPure,
-  recentHistory,
-  searchHistory as searchHistoryPure
-} from './history-store'
-import {
-  type PermissionGrant,
-  recordGrant as recordGrantPure,
-  listGrants
-} from './permission-store'
+import { type HistoryEntry } from './history-store'
+import { type PermissionGrant } from './permission-store'
+import { ProfileData } from './profile-data'
 import { shouldGrantPermission } from './permissions'
-import { clientRectToScreen, tooltipBounds, type TooltipRect, type Size } from './tooltip'
+import { ensureTooltip, showTooltip, hideTooltip, destroyTooltip } from './tooltip-controller'
 import { buildPageMenu } from './page-menu'
 import { dockRight } from './devtools-layout'
 import { decideWindowOpen } from './window-open'
@@ -134,8 +104,7 @@ import {
 } from './spaces'
 import { spacesLayout, windowSpaces, moveWindowToSpace } from './mac-spaces'
 import { locationAuthStatus, requestLocationAuthorization } from './mac-location'
-import { extractionScript, extractiveSummary, type SkillSource } from './skills'
-import { TOOLTIP_URL, measureScript } from './tooltip-doc'
+import { extractionScript, type SkillSource } from './skills'
 import {
   type AppSettings,
   withHomeUrl,
@@ -148,6 +117,33 @@ import {
  * loads in a WebContentsView — the chrome renders the Settings panel — but the
  * value shows in the address bar and travels to socket/MCP consumers. */
 const SETTINGS_URL = 'mira://settings'
+
+/** JS driven inside the DevTools frontend (a devtools:// page) to jump straight
+ * to the Cookies view of the Application panel. It runs in the frontend's own
+ * world, so it imports the bundled DevTools modules and pokes their singletons —
+ * internals that Chromium reshuffles between versions. Hence it is defensive:
+ * it retries while the modules finish loading, and every failure is swallowed so
+ * a version bump degrades to "DevTools open on the default panel", never a throw.
+ * Selects the first site's cookies node when there is one, else the Cookies root. */
+const REVEAL_COOKIES_SCRIPT = `(async () => {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms))
+  for (let i = 0; i < 50; i++) {
+    try {
+      const UI = await import('./ui/legacy/legacy.js')
+      const app = await import('./panels/application/application.js')
+      await UI.ViewManager.ViewManager.instance().showView('resources')
+      const panel = app.ResourcesPanel.ResourcesPanel.instance()
+      const cookies = panel.sidebar.cookieListTreeElement
+      cookies.expand()
+      const first = cookies.firstChild()
+      ;(first || cookies).revealAndSelect()
+      return true
+    } catch (e) {
+      await wait(100)
+    }
+  }
+  return false
+})()`
 
 /** The scheme+host of a URL (e.g. "https://www.google.com") for the permission
  * grant log, or the raw string if it can't be parsed. Keeps one row per site
@@ -329,27 +325,22 @@ export class ProfileManager {
   /** Every profile's last window state (open or not). Mirrors sessions.json;
    * a closed profile keeps its saved tabs until it is reopened. */
   private sessions: PersistedSessions
-  /** The global favorites tree. Mirrors bookmarks.json; app-wide, not per
-   * profile (the minimalist choice for now — see track.md). */
-  private bookmarks: BookmarkTree
+  /** The global favorites tree + its mutations, extracted into its own controller
+   * (bookmarks-controller.ts). App-wide, one list for all profiles. Constructed in
+   * the constructor so its onChange can broadcast to the windows + native menu. */
+  private readonly bookmarks: BookmarksController
   /** Live app settings (home URL, …). Mirrors settings.json; seeded from
    * deps.homeUrl and updated in place by set-home-url. */
   private appSettings: AppSettings
   /** Debounce for persisting settings during a panel resize drag: many width
    * updates per second update the layout live, but only settle to disk once idle. */
   private settingsSaveTimer: ReturnType<typeof setTimeout> | null = null
-  /** The global browsing history. Mirrors history.json; app-wide (like bookmarks),
-   * grown by recordVisit on every page navigation. */
-  private history: HistoryEntry[]
-  /** Pending debounced flush of history.json (one timer for the whole app).
-   * null when no write is pending. */
-  private historyTimer: ReturnType<typeof setTimeout> | null = null
-  /** The global web-permission grant log. Mirrors permissions.json; app-wide,
-   * grown natively when a page requests a permission (Mira grants all — see
-   * ensurePermissionHandlers). */
-  private permissions: PermissionGrant[]
-  /** Pending debounced flush of permissions.json. null when none pending. */
-  private permissionsTimer: ReturnType<typeof setTimeout> | null = null
+  /** This profile's browsing trails — history + web-permission grants — with their
+   * debounced writes, extracted into profile-data.ts. ONE instance today (shared by
+   * all profiles, identical to the old global behavior); the shape is ready to go
+   * one-per-profile next (see track.md). Built in the constructor so its
+   * permissions-changed broadcast can reach the windows. */
+  private readonly data: ProfileData
   /** Session partitions whose permission handlers are already installed, so we
    * set them once per profile session and not on every tab. Keyed by partition
    * (the default session uses '' as its key). */
@@ -361,6 +352,10 @@ export class ProfileManager {
    * handler firing repeatedly doesn't re-invoke it (CoreLocation coalesces, but we
    * avoid the churn). Resets only on app restart. */
   private locationPromptRequested = false
+  /** The AI engine behind the skill summary and page chat (run-skill / run-prompt).
+   * Stateless dispatcher over the configured provider — extracted from this class
+   * (see llm-runner.ts); reads the live provider from this.appSettings.llm. */
+  private readonly llm = new LlmRunner()
   /** Only the currently open profiles, keyed by stable id. */
   private readonly openById = new Map<string, ProfileWindow>()
   /** Pending debounced flush of sessions.json (one timer for the whole app, as
@@ -384,15 +379,40 @@ export class ProfileManager {
   constructor(private readonly deps: ProfileManagerDeps) {
     this.profiles = deps.initialProfiles
     this.sessions = deps.initialSessions
-    this.bookmarks = deps.initialBookmarks
+    this.bookmarks = new BookmarksController({
+      initial: deps.initialBookmarks,
+      persist: deps.persistBookmarks,
+      // Bookmarks are global: one change refreshes every window's address-bar star
+      // and rebuilds the native Bookmarks menu (both need the window set / app,
+      // which the controller doesn't own — hence this callback).
+      onChange: (tree) => {
+        for (const pw of this.openById.values()) {
+          if (!pw.window.isDestroyed()) {
+            pw.window.webContents.send('mira:bookmarks-changed', { tree })
+          }
+        }
+        this.deps.onBookmarksChange?.()
+      }
+    })
     this.appSettings = {
       homeUrl: deps.homeUrl,
       llm: deps.initialLlm,
       sidebarWidth: deps.sidebarWidth,
       skillPaneWidth: deps.skillPaneWidth
     }
-    this.history = deps.initialHistory
-    this.permissions = deps.initialPermissions
+    this.data = new ProfileData({
+      initialHistory: deps.initialHistory,
+      persistHistory: deps.persistHistory,
+      initialPermissions: deps.initialPermissions,
+      persistPermissions: deps.persistPermissions,
+      // Ping every window so an open Settings tab refetches the grant list.
+      onPermissionsChanged: () => {
+        for (const pw of this.openById.values()) {
+          if (!pw.window.isDestroyed()) pw.window.webContents.send('mira:permissions-changed')
+        }
+      },
+      debounceMs: ProfileManager.SAVE_DEBOUNCE_MS
+    })
   }
 
   /** Reopen, at startup, exactly the set of profile windows that were open when
@@ -402,9 +422,19 @@ export class ProfileManager {
    * Only THIS path restores each window's virtual desktop: it recreates a world
    * the user left, whereas a later explicit open must land on the desktop the
    * user is looking at (see restoringStartup / create()). */
-  openSavedProfiles(): void {
+  openSavedProfiles(explicitProfileId?: string | null): void {
     this.restoringStartup = true
     try {
+      // A forced profile (--profile / MIRA_PROFILE, parsed in index.ts) opens THAT
+      // one alone — the "boot straight into my test profile" path. An unknown id is
+      // not fatal: warn and fall through to the normal last-open restore.
+      if (explicitProfileId) {
+        if (findById(this.profiles, explicitProfileId)) {
+          this.openProfile(explicitProfileId)
+          return
+        }
+        console.warn(`[profiles] --profile: unknown id ${explicitProfileId}, ignoring`)
+      }
       const toOpen = this.profiles.filter((p) => this.sessions[p.id]?.open === true)
       if (toOpen.length === 0) {
         this.openProfile(DEFAULT_PROFILE_ID)
@@ -633,7 +663,7 @@ export class ProfileManager {
     }
     this.openById.set(profile.id, profileWindow)
     // Pre-warm the transparent tooltip overlay so the first hover has no latency.
-    this.ensureTooltip(profileWindow)
+    ensureTooltip(profileWindow)
 
     // Reposition the active view by hand on every resize — a WebContentsView is
     // a native layer, not a DOM element (see CLAUDE.md, "les deux pièges").
@@ -642,7 +672,7 @@ export class ProfileManager {
     window.on('resize', () => {
       // A moving/resizing window would leave the tooltip stranded at its old
       // screen spot; drop it and let the next hover reposition.
-      this.hideTooltipIn(profileWindow)
+      hideTooltip(profileWindow)
       this.scheduleLayout(profileWindow)
       // Persist the new size (debounced) so it survives even a hard exit — not
       // just the close-time snapshot.
@@ -677,10 +707,7 @@ export class ProfileManager {
       this.saveSession(profileWindow, this.quitting ? undefined : { open: false })
       // Electron auto-destroys child windows with the parent, but drop our ref so
       // nothing tries to drive a dead tooltip window.
-      if (profileWindow.tooltip && !profileWindow.tooltip.isDestroyed()) {
-        profileWindow.tooltip.destroy()
-      }
-      profileWindow.tooltip = null
+      destroyTooltip(profileWindow)
       this.openById.delete(profile.id)
       this.deps.onChange?.()
     })
@@ -884,6 +911,7 @@ export class ProfileManager {
     afterId?: string,
     background = false
   ): TabMeta {
+    const prevActiveId = pw.state.activeId
     const tab: TabMeta = { id: randomUUID(), title: '', url, favicon: null }
     // A tab opened from a link (afterId set) slots in right under its opener; a
     // plain new tab (Cmd+T, socket) appends. When the opener is pinned, addTabAfter
@@ -898,9 +926,18 @@ export class ProfileManager {
     // The active tab may have changed: a pinned tab armed by Cmd+W is disarmed.
     pw.closeArmedId = null
     this.materializeTab(pw, tab)
-    // Only the foreground path changed the active tab; skip the extension notify
-    // (and any focusChrome) when opening in background so nothing steals focus.
-    if (!background) this.notifyExtensionsActiveTab(pw)
+    if (!background) {
+      // Only the foreground path changed the active tab; skip the extension notify
+      // (and any focusChrome) when opening in background so nothing steals focus.
+      this.notifyExtensionsActiveTab(pw)
+    } else if (prevActiveId && pw.state.activeId !== prevActiveId) {
+      // materializeTab registered the tab with the extension lib, whose addTab()
+      // calls setActiveTab() when it thinks the window has no active tab — that
+      // fires our selectTab hook and flips activeId onto the fresh tab, undoing
+      // addTabInactive. Restore the tab that WAS active so a background open truly
+      // stays in the background; selectTabIn re-syncs the extension lib too.
+      this.selectTabIn(pw, prevActiveId)
+    }
     this.layout(pw)
     this.pushTabs(pw)
     this.saveSession(pw)
@@ -1026,35 +1063,7 @@ export class ProfileManager {
       this.saveTimer = null
     }
     this.deps.persistSessions(this.sessions)
-    if (this.historyTimer) {
-      clearTimeout(this.historyTimer)
-      this.historyTimer = null
-    }
-    this.deps.persistHistory(this.history)
-    if (this.permissionsTimer) {
-      clearTimeout(this.permissionsTimer)
-      this.permissionsTimer = null
-    }
-    this.deps.persistPermissions(this.permissions)
-  }
-
-  /** Record a page visit into the global history. Skips non-web urls (about:blank,
-   * mira://settings, file://…) so only real browsing lands. recordVisit dedups by
-   * url (a re-visit bumps the existing entry), then the write is debounced. */
-  private recordVisit(url: string, title: string): void {
-    if (!/^https?:\/\//i.test(url)) return
-    this.history = recordVisitPure(this.history, { url, title, at: Date.now() })
-    this.scheduleHistoryFlush()
-  }
-
-  /** Arm the debounced flush of history.json. Like scheduleFlush, a pending timer
-   * already covers the latest in-memory list, so we don't reset it. */
-  private scheduleHistoryFlush(): void {
-    if (this.historyTimer) return
-    this.historyTimer = setTimeout(() => {
-      this.historyTimer = null
-      this.deps.persistHistory(this.history)
-    }, ProfileManager.SAVE_DEBOUNCE_MS)
+    this.data.flush()
   }
 
   /** Install the web-permission handlers on a profile's session, once per
@@ -1071,13 +1080,13 @@ export class ProfileManager {
     const ses = partition ? session.fromPartition(partition) : session.defaultSession
     ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
       const granted = shouldGrantPermission(permission)
-      if (granted) this.recordGrant(requestingOrigin, permission)
+      if (granted) this.data.recordGrant(requestingOrigin, permission)
       this.maybeHandleLocation(permission)
       return granted
     })
     ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
       const granted = shouldGrantPermission(permission)
-      if (granted) this.recordGrant(originOf(details.requestingUrl), permission)
+      if (granted) this.data.recordGrant(originOf(details.requestingUrl), permission)
       this.maybeHandleLocation(permission)
       callback(granted)
     })
@@ -1102,33 +1111,6 @@ export class ProfileManager {
     } else if (action === 'open-settings') {
       this.locationSettingsOpened = true
       this.openLocationSettings()
-    }
-  }
-
-  /** Record a granted permission into the global grant log, keyed by origin +
-   * permission (a re-grant bumps the existing entry). Skips empty origins (an
-   * internal / opaque requester). The write is debounced, then the Settings surface
-   * is nudged to refetch. */
-  private recordGrant(origin: string, permission: string): void {
-    if (!origin || origin === 'null') return
-    this.permissions = recordGrantPure(this.permissions, { origin, permission, at: Date.now() })
-    this.schedulePermissionsFlush()
-    this.broadcastPermissionsChanged()
-  }
-
-  /** Arm the debounced flush of permissions.json (one timer for the app). */
-  private schedulePermissionsFlush(): void {
-    if (this.permissionsTimer) return
-    this.permissionsTimer = setTimeout(() => {
-      this.permissionsTimer = null
-      this.deps.persistPermissions(this.permissions)
-    }, ProfileManager.SAVE_DEBOUNCE_MS)
-  }
-
-  /** Ping every open window so an open Settings tab refetches the grant list. */
-  private broadcastPermissionsChanged(): void {
-    for (const pw of this.openById.values()) {
-      if (!pw.window.isDestroyed()) pw.window.webContents.send('mira:permissions-changed')
     }
   }
 
@@ -1205,7 +1187,7 @@ export class ProfileManager {
       // global browsing history. recordVisit dedups by url and skips non-web urls.
       if ('url' in p || 'title' in p) {
         const t = pw.state.tabs.find((x) => x.id === tabId)
-        if (t) this.recordVisit(t.url, t.title)
+        if (t) this.data.recordVisit(t.url, t.title)
       }
     }
     // The home page is a blank tab: keep its stored url (and the address bar) empty
@@ -1396,190 +1378,6 @@ export class ProfileManager {
       this.settingsSaveTimer = null
       this.deps.persistSettings(this.appSettings)
     }, 300)
-  }
-
-  /** The skills AI engine: summarize `text` with `prompt` using the configured
-   * provider. The native edge behind the `summarize` context method — 'extractive'
-   * is pure/local; 'anthropic-api' hits the API; 'claude-cli' shells out to
-   * `claude -p` (Mickael's subscription). Errors propagate so run-skill can show
-   * them in the pane. */
-  private async runLlm(config: LlmConfig, prompt: string, text: string): Promise<string> {
-    if (config.provider === 'extractive') return extractiveSummary(text)
-    if (config.provider === 'anthropic-api') {
-      const req = buildAnthropicRequest(config, prompt, text)
-      const res = await fetch(req.url, {
-        method: 'POST',
-        headers: req.headers,
-        body: JSON.stringify(req.body)
-      })
-      return parseAnthropicResponse(await res.json())
-    }
-    // 'claude-cli': feed the composed prompt on stdin, read the answer from stdout.
-    return this.runClaudeCli(config, composePrompt(prompt, text))
-  }
-
-  /** The chat engine behind the `chat` context method (run-prompt): answer the
-   * last turn given the whole thread and the page's text as context. Same three
-   * providers as runLlm, but multi-turn. 'extractive' has no real model, so it
-   * falls back to a lead-sentence summary of the page (ignoring the question). */
-  private async runLlmChat(
-    config: LlmConfig,
-    messages: ChatMessage[],
-    page: PageContext
-  ): Promise<string> {
-    const system = chatSystemPrompt(page.url, page.text)
-    if (config.provider === 'extractive') {
-      // No conversational model offline: summarize the page as a best effort, or
-      // echo the last question when there is no page.
-      const last = messages[messages.length - 1]?.text ?? ''
-      return extractiveSummary(page.text.trim() !== '' ? page.text : last)
-    }
-    if (config.provider === 'anthropic-api') {
-      const req = buildAnthropicChatRequest(config, system, messages, page.screenshot)
-      const res = await fetch(req.url, {
-        method: 'POST',
-        headers: req.headers,
-        body: JSON.stringify(req.body)
-      })
-      return parseAnthropicResponse(await res.json())
-    }
-    // 'claude-cli'. Plain -p can't take an image, so a turn WITH a screenshot goes
-    // through the stream-json path (which accepts an image block); a text-only
-    // turn stays on the simpler plain-text path.
-    if (page.screenshot) {
-      return this.runClaudeCliStream(
-        config,
-        buildClaudeStreamInput(system, messages, page.screenshot)
-      )
-    }
-    return this.runClaudeCli(config, composeChatPrompt(system, messages))
-  }
-
-  /** Spawn `claude -p --input-format stream-json` (image-capable) and resolve the
-   * assistant text from its NDJSON stdout. Same subscription/PATH story as
-   * runClaudeCli; used only when a screenshot is attached. */
-  private runClaudeCliStream(config: LlmConfig, streamInput: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const child = spawn('claude', buildClaudeStreamArgs(config), {
-        stdio: ['pipe', 'pipe', 'pipe']
-      })
-      let out = ''
-      let err = ''
-      child.stdout.on('data', (d) => (out += String(d)))
-      child.stderr.on('data', (d) => (err += String(d)))
-      child.on('error', (e) =>
-        reject(new Error(`claude CLI not runnable: ${e.message} (is it installed / on PATH?)`))
-      )
-      child.on('close', (code) => {
-        // Even on exit 0 the answer lives in the NDJSON result line; on non-zero,
-        // prefer stderr, else let the parser surface the stream's error result.
-        if (code !== 0 && err.trim() !== '') {
-          reject(new Error(err.trim()))
-          return
-        }
-        try {
-          resolve(parseClaudeStreamResult(out))
-        } catch (e) {
-          reject(e instanceof Error ? e : new Error(String(e)))
-        }
-      })
-      child.stdin.write(streamInput)
-      child.stdin.end()
-    })
-  }
-
-  /** Spawn `claude -p` and resolve its stdout. Uses the logged-in Claude Code
-   * subscription (no API key). PATH must contain the `claude` binary (true under
-   * `npm run dev`; a packaged build may need a resolved path — noted in track.md). */
-  private runClaudeCli(config: LlmConfig, fullPrompt: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const child = spawn('claude', buildClaudeCliArgs(config), {
-        stdio: ['pipe', 'pipe', 'pipe']
-      })
-      let out = ''
-      let err = ''
-      child.stdout.on('data', (d) => (out += String(d)))
-      child.stderr.on('data', (d) => (err += String(d)))
-      child.on('error', (e) =>
-        reject(new Error(`claude CLI not runnable: ${e.message} (is it installed / on PATH?)`))
-      )
-      child.on('close', (code) => {
-        if (code === 0) {
-          const text = out.trim()
-          if (text === '') reject(new Error('claude CLI returned no output'))
-          else resolve(text)
-        } else {
-          reject(new Error(err.trim() || `claude CLI exited with code ${code}`))
-        }
-      })
-      child.stdin.write(fullPrompt)
-      child.stdin.end()
-    })
-  }
-
-  /** Create the profile's tooltip overlay: a transparent, non-focusable child
-   * window. Being a child window, the OS composites it ABOVE the parent and every
-   * WebContentsView inside it — where a DOM bubble would be hidden. It is inert
-   * (no preload, click-through); main drives its text/size via executeJavaScript. */
-  private ensureTooltip(pw: ProfileWindow): void {
-    const tip = new BrowserWindow({
-      parent: pw.window,
-      show: false,
-      frame: false,
-      transparent: true,
-      hasShadow: false,
-      resizable: false,
-      movable: false,
-      minimizable: false,
-      maximizable: false,
-      fullscreenable: false,
-      skipTaskbar: true,
-      focusable: false,
-      backgroundColor: '#00000000',
-      width: 10,
-      height: 10
-    })
-    // Never swallow a click meant for the page under the bubble.
-    tip.setIgnoreMouseEvents(true)
-    pw.tooltipReady = new Promise((resolve) => {
-      tip.webContents.once('did-finish-load', () => resolve())
-    })
-    tip.loadURL(TOOLTIP_URL)
-    pw.tooltip = tip
-  }
-
-  /** Show the tooltip with `text`, anchored over the hovered status-bar item
-   * (given in the chrome's client coords). Measures the bubble in its own page,
-   * converts the anchor to screen space, and places it above/below within the
-   * display's work area. The tooltipSeq guard drops a stale async measure whose
-   * hover has already ended. */
-  private async showTooltipIn(
-    pw: ProfileWindow,
-    text: string,
-    clientRect: TooltipRect
-  ): Promise<void> {
-    const tip = pw.tooltip
-    if (!tip || tip.isDestroyed()) return
-    const seq = ++pw.tooltipSeq
-    await pw.tooltipReady
-    if (seq !== pw.tooltipSeq || tip.isDestroyed() || pw.window.isDestroyed()) return
-    const size = (await tip.webContents.executeJavaScript(measureScript(text))) as Size
-    if (seq !== pw.tooltipSeq || tip.isDestroyed() || pw.window.isDestroyed()) return
-    const anchor = clientRectToScreen(clientRect, pw.window.getContentBounds())
-    const display = screen.getDisplayNearestPoint({
-      x: Math.round(anchor.x),
-      y: Math.round(anchor.y)
-    })
-    tip.setBounds(tooltipBounds(anchor, size, display.workArea, { gap: 6, margin: 4 }))
-    tip.showInactive()
-  }
-
-  /** Hide the tooltip (no-op if already hidden). Bumping tooltipSeq also cancels
-   * any in-flight showTooltipIn so a late measure can't pop it back up. */
-  private hideTooltipIn(pw: ProfileWindow): void {
-    pw.tooltipSeq++
-    const tip = pw.tooltip
-    if (tip && !tip.isDestroyed() && tip.isVisible()) tip.hide()
   }
 
   /** Move keyboard focus from the (possibly just-created) web view back to the
@@ -1810,6 +1608,20 @@ export class ProfileManager {
       this.layout(pw)
       return false
     }
+    this.openActiveDevTools(pw, id, view)
+    return true
+  }
+
+  /** Ensure the active tab's docked DevTools host view exists, creating it on the
+   * first call. Returns the host and whether it was just created (so callers can
+   * wait for the frontend to finish loading before driving it). */
+  private openActiveDevTools(
+    pw: ProfileWindow,
+    id: string,
+    view: WebContentsView
+  ): { host: WebContentsView; created: boolean } {
+    const existing = pw.devtools.get(id)
+    if (existing) return { host: existing, created: false }
     // The DevTools frontend is Mira's own chrome (devtools://), not profile
     // content, so the host view needs no session partition.
     const host = new WebContentsView()
@@ -1818,6 +1630,33 @@ export class ProfileManager {
     view.webContents.setDevToolsWebContents(host.webContents)
     view.webContents.openDevTools({ mode: 'detach' })
     this.layout(pw)
+    return { host, created: true }
+  }
+
+  /** Open the active tab's docked DevTools (if needed) and reveal the Cookies
+   * view of the Application panel. The reveal drives the DevTools frontend — which
+   * is Chromium's own chrome and whose internals shift between versions — so the
+   * script is self-retrying and fully wrapped in try/catch: at worst DevTools stay
+   * open on their default panel. Never closes an already-open inspector. Returns
+   * true (DevTools are open after). Throws when there is no active web page. */
+  private async inspectCookiesInActive(pw: ProfileWindow): Promise<boolean> {
+    const id = pw.state.activeId
+    if (!id || id === pw.settingsTabId) throw new Error('no active web page')
+    const view = pw.views.get(id)
+    if (!view) throw new Error('no active tab')
+    const { host, created } = this.openActiveDevTools(pw, id, view)
+    // A freshly opened host hasn't committed its devtools:// document yet; wait
+    // for the load so executeJavaScript runs in the frontend, not about:blank.
+    if (created && host.webContents.isLoadingMainFrame()) {
+      await new Promise<void>((resolve) =>
+        host.webContents.once('did-finish-load', () => resolve())
+      )
+    }
+    try {
+      await host.webContents.executeJavaScript(REVEAL_COOKIES_SCRIPT)
+    } catch {
+      // Frontend internals moved; leaving DevTools open is still useful.
+    }
     return true
   }
 
@@ -2005,6 +1844,9 @@ export class ProfileManager {
    * already-saved page (anywhere in the tree) returns the existing node with
    * created:false and no write. Throws when a url must be resolved from the active
    * tab but there is none, or when parentId is unknown / not a folder. */
+  /** Add a url favorite. With no url, bookmark `target`'s active tab (resolving the
+   * url/title here is the only window-bound part; the tree work is the controller's).
+   * Idempotent by url — see BookmarksController.addUrl. */
   private addBookmarkIn(
     target: ProfileWindow | null,
     url?: string,
@@ -2020,68 +1862,7 @@ export class ProfileManager {
       finalUrl = active.url
       if (finalTitle === undefined) finalTitle = active.title
     }
-    const existing = findBookmarkUrl(this.bookmarks, finalUrl)
-    if (existing) return { node: existing, created: false }
-    const node: BookmarkUrl = {
-      id: randomUUID(),
-      kind: 'url',
-      title: finalTitle ?? '',
-      url: finalUrl
-    }
-    // insertNode throws on an unknown / non-folder parentId before we persist.
-    this.bookmarks = insertNode(this.bookmarks, parentId ?? null, node)
-    this.commitBookmarks()
-    return { node, created: true }
-  }
-
-  private addFolderIn(title: string, parentId?: string): { node: BookmarkNode } {
-    const node: BookmarkNode = { id: randomUUID(), kind: 'folder', title, children: [] }
-    this.bookmarks = insertNode(this.bookmarks, parentId ?? null, node)
-    this.commitBookmarks()
-    return { node }
-  }
-
-  private removeBookmarkGlobal(id: string): { removed: boolean } {
-    const removed = findNode(this.bookmarks, id) !== undefined
-    if (removed) {
-      this.bookmarks = removeNode(this.bookmarks, id)
-      this.commitBookmarks()
-    }
-    return { removed }
-  }
-
-  private renameBookmarkGlobal(id: string, title: string): { node: BookmarkNode } {
-    this.bookmarks = renameNode(this.bookmarks, id, title)
-    this.commitBookmarks()
-    return { node: findNode(this.bookmarks, id)! }
-  }
-
-  private moveBookmarkGlobal(
-    id: string,
-    parentId: string | null,
-    index?: number
-  ): { moved: boolean } {
-    this.bookmarks = moveNode(this.bookmarks, id, parentId, index)
-    this.commitBookmarks()
-    return { moved: true }
-  }
-
-  /** Persist the tree, broadcast it to every window's chrome (the address-bar
-   * star), and rebuild the native Bookmarks menu. Bookmarks are global, so one
-   * change refreshes them all — unlike the per-window tab strip push (pushTabs). */
-  private commitBookmarks(): void {
-    this.deps.persistBookmarks(this.bookmarks)
-    for (const pw of this.openById.values()) {
-      if (!pw.window.isDestroyed()) {
-        pw.window.webContents.send('mira:bookmarks-changed', { tree: this.bookmarks })
-      }
-    }
-    this.deps.onBookmarksChange?.()
-  }
-
-  /** The favorites tree, for the native Bookmarks menu (menu.ts). */
-  listBookmarksTree(): BookmarkTree {
-    return this.bookmarks
+    return this.bookmarks.addUrl(finalUrl, finalTitle ?? '', parentId)
   }
 
   /** Open a favorite's url in a new tab of `target` and focus it (address-bar
@@ -2089,11 +1870,14 @@ export class ProfileManager {
    * target. */
   private openBookmarkIn(target: ProfileWindow | null, id: string): { tabId: string; url: string } {
     if (!target || target.window.isDestroyed()) throw new Error('no target window')
-    const node = findNode(this.bookmarks, id)
-    if (!node) throw new Error(`unknown bookmark: ${id}`)
-    if (node.kind !== 'url') throw new Error(`not a url bookmark: ${id}`)
-    const tab = this.newTabIn(target, node.url, true)
-    return { tabId: tab.id, url: node.url }
+    const url = this.bookmarks.urlFor(id)
+    const tab = this.newTabIn(target, url, true)
+    return { tabId: tab.id, url }
+  }
+
+  /** The favorites tree, for the native Bookmarks menu (menu.ts, via index.ts). */
+  listBookmarksTree(): BookmarkTree {
+    return this.bookmarks.get()
   }
 
   listProfiles(): {
@@ -2413,11 +2197,11 @@ export class ProfileManager {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
         // Fire-and-forget: the async measure/position runs in the background; the
         // command returns once queued (tooltipSeq guards against stale hovers).
-        void this.showTooltipIn(target, text, anchor)
+        void showTooltip(target, text, anchor)
         return { shown: true }
       },
       hideTooltip: () => {
-        if (target) this.hideTooltipIn(target)
+        if (target) hideTooltip(target)
         return { hidden: true }
       },
       execJsInTab: async (code, tabId) => {
@@ -2457,6 +2241,12 @@ export class ProfileManager {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
         return this.toggleActiveDevTools(target)
       },
+      inspectCookiesInActiveTab: () => {
+        // Open the inspector (if needed) on the active tab and jump to its
+        // Cookies view — the status-bar 🍪 click lands here.
+        if (!target || target.window.isDestroyed()) throw new Error('no target window')
+        return this.inspectCookiesInActive(target)
+      },
       activeUrl: () => {
         // The active tab's current url (null for no window / Settings tab), so
         // list-skills / run-skill can decide which skills apply.
@@ -2494,12 +2284,12 @@ export class ProfileManager {
       summarize: async (prompt: string, text: string) => {
         // Run the configured AI engine (subscription CLI / API / local extractive).
         // Errors propagate to run-skill, which surfaces them in the pane.
-        return this.runLlm(this.appSettings.llm, prompt, text)
+        return this.llm.run(this.appSettings.llm, prompt, text)
       },
       chat: async (messages: ChatMessage[], page: PageContext) => {
         // The multi-turn engine (run-prompt): the same configured provider, given
         // the whole conversation + page (URL + text). Errors propagate for the pane.
-        return this.runLlmChat(this.appSettings.llm, messages, page)
+        return this.llm.chat(this.appSettings.llm, messages, page)
       },
       showSkillPane: (state) => {
         if (target) this.setSkillPaneIn(target, state)
@@ -2588,43 +2378,20 @@ export class ProfileManager {
         if (!target) throw new Error('no target window')
         return this.reopenClosedTabIn(target)
       },
-      listHistory: (limit) => recentHistory(this.history, limit),
-      searchHistory: (query, limit) => searchHistoryPure(this.history, query, limit),
-      clearHistory: () => {
-        const cleared = this.history.length
-        this.history = []
-        // Write the empty list now (and cancel any pending debounced flush) so a
-        // clear is durable even if the app is quit immediately after.
-        if (this.historyTimer) {
-          clearTimeout(this.historyTimer)
-          this.historyTimer = null
-        }
-        this.deps.persistHistory(this.history)
-        return { cleared }
-      },
-      listPermissions: () => listGrants(this.permissions),
-      clearPermissions: () => {
-        const cleared = this.permissions.length
-        this.permissions = []
-        // Write the empty log now (and cancel any pending debounced flush) so a
-        // clear is durable even if the app is quit immediately after.
-        if (this.permissionsTimer) {
-          clearTimeout(this.permissionsTimer)
-          this.permissionsTimer = null
-        }
-        this.deps.persistPermissions(this.permissions)
-        this.broadcastPermissionsChanged()
-        return { cleared }
-      },
+      listHistory: (limit) => this.data.listHistory(limit),
+      searchHistory: (query, limit) => this.data.searchHistory(query, limit),
+      clearHistory: () => this.data.clearHistory(),
+      listPermissions: () => this.data.listPermissions(),
+      clearPermissions: () => this.data.clearPermissions(),
       openLocationSettings: () => this.openLocationSettings(),
       locationAuthStatus: () => locationAuthStatus(),
       requestLocationAuthorization: () => requestLocationAuthorization(),
       addBookmark: (url, title, parentId) => this.addBookmarkIn(target, url, title, parentId),
-      addFolder: (title, parentId) => this.addFolderIn(title, parentId),
-      removeBookmark: (id) => this.removeBookmarkGlobal(id),
-      renameBookmark: (id, title) => this.renameBookmarkGlobal(id, title),
-      moveBookmark: (id, parentId, index) => this.moveBookmarkGlobal(id, parentId, index),
-      listBookmarks: () => ({ tree: this.bookmarks }),
+      addFolder: (title, parentId) => this.bookmarks.addFolder(title, parentId),
+      removeBookmark: (id) => this.bookmarks.remove(id),
+      renameBookmark: (id, title) => this.bookmarks.rename(id, title),
+      moveBookmark: (id, parentId, index) => this.bookmarks.move(id, parentId, index),
+      listBookmarks: () => ({ tree: this.bookmarks.get() }),
       openBookmark: (id) => this.openBookmarkIn(target, id),
       // Extensions act on the TARGET window's profile session — sets are per
       // profile (D2): installing in "Work" leaves "Default" untouched.
