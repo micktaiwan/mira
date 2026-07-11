@@ -228,15 +228,27 @@ function GeneralSection(): React.JSX.Element {
 function ProfileRow({
   profile,
   focused,
+  encrypted,
+  unlocked,
   onRename,
   onSetColor,
-  onOpen
+  onOpen,
+  onEncrypt,
+  onUnlock,
+  onLock
 }: {
   profile: Profile
   focused: boolean
+  /** This profile is password-protected (its data lives in a vault at rest). */
+  encrypted: boolean
+  /** An encrypted profile currently unlocked this session (plaintext live). */
+  unlocked: boolean
   onRename: (label: string) => void
   onSetColor: (color: string | null) => void
   onOpen: () => void
+  onEncrypt: () => void
+  onUnlock: () => void
+  onLock: () => void
 }): React.JSX.Element {
   // Local draft, seeded from the prop. The parent remounts this row (via key)
   // when the committed label changes, so no prop-sync effect is needed.
@@ -283,10 +295,129 @@ function ProfileRow({
         />
       </div>
       <span className={`profile-status status-${status}`}>{status}</span>
-      <button className="btn btn-ghost" onClick={onOpen}>
-        {profile.open ? 'Focus' : 'Open'}
-      </button>
+      {encrypted && (
+        <span className={`vault-badge ${unlocked ? 'unlocked' : 'locked'}`}>
+          {unlocked ? '🔓 Unlocked' : '🔒 Locked'}
+        </span>
+      )}
+      {/* Encrypt: only a plaintext, non-default profile. The default profile has no
+          self-contained dir to vault. Disabled while its window is open (encrypt
+          needs the partition's handles released). */}
+      {!encrypted && profile.id !== 'default' && (
+        <button
+          className="btn btn-ghost"
+          onClick={onEncrypt}
+          disabled={profile.open}
+          title={profile.open ? 'Close its window first' : 'Encrypt this profile'}
+        >
+          Encrypt
+        </button>
+      )}
+      {encrypted && !unlocked && (
+        <button className="btn" onClick={onUnlock}>
+          Unlock
+        </button>
+      )}
+      {encrypted && unlocked && (
+        <button
+          className="btn btn-ghost"
+          onClick={onLock}
+          disabled={profile.open}
+          title={profile.open ? 'Close its window first' : 'Lock this profile'}
+        >
+          Lock
+        </button>
+      )}
+      {/* Open / Focus — hidden while locked (there is nothing to open until unlock). */}
+      {(!encrypted || unlocked) && (
+        <button className="btn btn-ghost" onClick={onOpen}>
+          {profile.open ? 'Focus' : 'Open'}
+        </button>
+      )}
     </li>
+  )
+}
+
+/** A password prompt for encrypting or unlocking a profile. Chrome UI (rendered
+ * inside the Settings tab, not over web content), so a plain overlay is fine.
+ * onSubmit returns an error string to show inline, or null on success (then close). */
+function VaultPasswordDialog({
+  mode,
+  profileLabel,
+  onSubmit,
+  onClose
+}: {
+  mode: 'encrypt' | 'unlock'
+  profileLabel: string
+  onSubmit: (password: string) => Promise<string | null>
+  onClose: () => void
+}): React.JSX.Element {
+  const [password, setPassword] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const submit = async (): Promise<void> => {
+    if (password.length === 0) {
+      setError('Enter a password')
+      return
+    }
+    if (mode === 'encrypt' && password !== confirm) {
+      setError('Passwords do not match')
+      return
+    }
+    setBusy(true)
+    const err = await onSubmit(password)
+    setBusy(false)
+    if (err) setError(err)
+    else onClose()
+  }
+
+  return (
+    <div className="vault-overlay" onClick={onClose}>
+      <div className="vault-dialog" onClick={(e) => e.stopPropagation()}>
+        <h3>
+          {mode === 'encrypt' ? 'Encrypt' : 'Unlock'} “{profileLabel}”
+        </h3>
+        <p>
+          {mode === 'encrypt'
+            ? 'This profile’s cookies, storage and history will be encrypted at rest. There is no recovery: if you forget this password, the data is lost.'
+            : 'Enter the password to unlock this profile for this session.'}
+        </p>
+        <input
+          className="vault-input"
+          type="password"
+          autoFocus
+          placeholder="Password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && mode === 'unlock') void submit()
+          }}
+        />
+        {mode === 'encrypt' && (
+          <input
+            className="vault-input"
+            type="password"
+            placeholder="Confirm password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void submit()
+            }}
+          />
+        )}
+        {error && <p className="vault-error">{error}</p>}
+        <div className="vault-actions">
+          <button className="btn btn-ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button className="btn" onClick={() => void submit()} disabled={busy}>
+            {busy ? 'Working…' : mode === 'encrypt' ? 'Encrypt' : 'Unlock'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -295,17 +426,30 @@ function ProfilesSection(): React.JSX.Element {
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [focused, setFocused] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Vault state, kept as sets for O(1) per-row lookup. Fetched alongside the
+  // profile list (list-vaults is the runtime source of encrypted/unlocked).
+  const [encrypted, setEncrypted] = useState<Set<string>>(new Set())
+  const [unlocked, setUnlocked] = useState<Set<string>>(new Set())
+  // The open password dialog, or null. Keyed to one profile + a mode.
+  const [dialog, setDialog] = useState<{ mode: 'encrypt' | 'unlock'; profile: Profile } | null>(
+    null
+  )
 
   useEffect(() => {
     const load = async (): Promise<void> => {
-      const res = await run('list-profiles')
-      if (!res.ok) return
-      setProfiles((res.profiles as Profile[]) ?? [])
-      setFocused((res.focused as string | null) ?? null)
+      const [res, vaults] = await Promise.all([run('list-profiles'), run('list-vaults')])
+      if (res.ok) {
+        setProfiles((res.profiles as Profile[]) ?? [])
+        setFocused((res.focused as string | null) ?? null)
+      }
+      if (vaults.ok) {
+        setEncrypted(new Set((vaults.encrypted as string[]) ?? []))
+        setUnlocked(new Set((vaults.unlocked as string[]) ?? []))
+      }
     }
     void load()
-    // Main pushes on every profile change (create/rename here, or from the menu
-    // / socket / another window), so the list stays live without manual refetching.
+    // Main pushes on every profile change (create/rename/encrypt/unlock/lock here,
+    // or from the menu / socket / another window), so the list stays live.
     return window.mira.onProfilesChanged(load)
   }, [])
 
@@ -333,6 +477,21 @@ function ProfilesSection(): React.JSX.Element {
     void run('open-profile', { id })
   }
 
+  const lock = async (id: string): Promise<void> => {
+    const res = await run('lock-profile', { id })
+    setError(res.ok ? null : String(res.error))
+  }
+
+  // The dialog's submit for both modes: run the command, return its error (shown
+  // inline in the dialog) or null on success. On success the profiles-changed push
+  // refetches the list, so the row updates on its own.
+  const submitDialog = async (password: string): Promise<string | null> => {
+    if (!dialog) return null
+    const command = dialog.mode === 'encrypt' ? 'encrypt-profile' : 'unlock-profile'
+    const res = await run(command, { id: dialog.profile.id, password })
+    return res.ok ? null : String(res.error)
+  }
+
   return (
     <div className="settings-section">
       <div className="settings-section-head">
@@ -343,6 +502,7 @@ function ProfilesSection(): React.JSX.Element {
       <p className="settings-hint">
         A profile keeps its own cookies. Renaming changes the label only — the session is preserved.
         The theme color tints the profile window&apos;s chrome, so windows are tellable apart.
+        Encrypting a profile keeps its data in a password-protected vault at rest.
       </p>
       {error && <p className="settings-error">{error}</p>}
       <ul className="profile-list">
@@ -351,12 +511,25 @@ function ProfilesSection(): React.JSX.Element {
             key={`${p.id}:${p.label}`}
             profile={p}
             focused={p.id === focused}
+            encrypted={encrypted.has(p.id)}
+            unlocked={unlocked.has(p.id)}
             onRename={(label) => rename(p.id, label)}
             onSetColor={(color) => void setColor(p.id, color)}
             onOpen={() => open(p.id)}
+            onEncrypt={() => setDialog({ mode: 'encrypt', profile: p })}
+            onUnlock={() => setDialog({ mode: 'unlock', profile: p })}
+            onLock={() => void lock(p.id)}
           />
         ))}
       </ul>
+      {dialog && (
+        <VaultPasswordDialog
+          mode={dialog.mode}
+          profileLabel={dialog.profile.label}
+          onSubmit={submitDialog}
+          onClose={() => setDialog(null)}
+        />
+      )}
     </div>
   )
 }

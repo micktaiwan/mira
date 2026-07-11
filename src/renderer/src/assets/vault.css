@@ -1,0 +1,92 @@
+/* Encrypted-profile (vault) UI: the lock badge in a profile row and the password
+   dialog. The dialog is chrome UI (rendered inside the Settings tab, not over web
+   content), so a plain absolute overlay is fine — no piège #3 here. */
+
+.vault-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--ev-c-gray-2);
+  color: var(--color-text);
+  background: var(--color-background-mute);
+}
+
+.vault-badge.locked {
+  color: #d9534f;
+  border-color: #d9534f;
+}
+
+.vault-badge.unlocked {
+  color: #46a05a;
+  border-color: #46a05a;
+}
+
+/* Modal backdrop: covers the Settings surface and centers the dialog. */
+.vault-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.vault-dialog {
+  width: min(380px, 90vw);
+  padding: 20px;
+  border-radius: 12px;
+  border: 1px solid var(--ev-c-gray-3);
+  background: var(--color-background);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.vault-dialog h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.vault-dialog p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-soft, #999);
+  line-height: 1.4;
+}
+
+.vault-input {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--ev-c-gray-2);
+  border-radius: 6px;
+  background: var(--color-background-mute);
+  color: var(--color-text);
+  font-size: 13px;
+  outline: none;
+  user-select: text;
+}
+
+.vault-input:focus {
+  border-color: #6988e6;
+}
+
+.vault-error {
+  margin: 0;
+  color: #d9534f;
+  font-size: 12px;
+}
+
+.vault-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}

@@ -3,6 +3,7 @@
 @import './skill-pane.css';
 @import './extension-actions.css';
 @import './find-bar.css';
+@import './vault.css';
 
 :root {
   /* Must match TOOLBAR_HEIGHT in src/main/index.ts. */
@@ -232,6 +233,15 @@ body {
   align-items: baseline;
   font-variant-numeric: tabular-nums;
   cursor: default;
+}
+
+.status-clickable {
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+
+.status-clickable:hover {
+  color: var(--color-text);
 }
 
 .status-tabs {
