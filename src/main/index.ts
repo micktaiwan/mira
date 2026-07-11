@@ -3,6 +3,7 @@
 import { initLogging } from './log'
 import { app, BrowserWindow, globalShortcut, ipcMain, session } from 'electron'
 import { join } from 'path'
+import { pathToFileURL } from 'url'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -47,6 +48,21 @@ let manager: ProfileManager | null = null
 const pendingUrls: string[] = []
 app.on('open-url', (event, url) => {
   event.preventDefault()
+  if (manager) manager.openUrl(url)
+  else pendingUrls.push(url)
+})
+
+// Default-handler handoff for LOCAL FILES: `open foo.html` / a double-click on a
+// file whose type Mira handles (CFBundleDocumentTypes, electron-builder.yml)
+// fires 'open-file', NOT 'open-url'. macOS delivers an absolute path; turn it
+// into a file:// URL and route it through the same queue as clicked links. Like
+// open-url this can fire BEFORE whenReady on a cold launch (the open IS the
+// launch), so queue until the manager exists. NOTE: macOS only routes these to
+// the PACKAGED bundle — `npm run dev` never receives them; test via the socket
+// `open-file` command instead (see CLAUDE.md, commands/open.ts).
+app.on('open-file', (event, path) => {
+  event.preventDefault()
+  const url = pathToFileURL(path).href
   if (manager) manager.openUrl(url)
   else pendingUrls.push(url)
 })
@@ -365,7 +381,18 @@ app.whenReady().then(() => {
   function rebuildMenu(): void {
     buildAppMenu({
       listProfiles: () => profiles.listProfiles(),
-      openProfile: (id) => profiles.openProfile(id),
+      openProfile: (id) => {
+        // openProfile THROWS for a locked encrypted profile — never let that
+        // escape a menu click (it would be an uncaught exception and crash the
+        // app). On failure, route the user to Settings → Profiles, where the
+        // profile's Unlock button lives.
+        try {
+          profiles.openProfile(id)
+        } catch (error) {
+          console.warn('[mira] menu open-profile:', (error as Error).message)
+          runDetached('open-settings', { section: 'profiles' }, profiles.contextForFocused())
+        }
+      },
       newProfile: () => profiles.createProfile(),
       // Route through the registry so it opens a Settings tab in the focused
       // window, like the toolbar / socket / Cmd+, path.
