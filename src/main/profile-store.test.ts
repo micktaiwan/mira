@@ -10,6 +10,7 @@ import {
   setProfileColor,
   isProfileColor,
   nextProfileLabel,
+  parseProfileArg,
   type Profile
 } from './profile-store'
 
@@ -184,6 +185,19 @@ describe('normalizeProfiles (colors)', () => {
   })
 })
 
+describe('normalizeProfiles (encrypted)', () => {
+  it('keeps encrypted:true and omits the flag otherwise', () => {
+    const list = normalizeProfiles([
+      { id: 'a', label: 'A', encrypted: true },
+      { id: 'b', label: 'B', encrypted: false },
+      { id: 'c', label: 'C' }
+    ])
+    expect(list.find((p) => p.id === 'a')).toEqual({ id: 'a', label: 'A', encrypted: true })
+    expect(list.find((p) => p.id === 'b')).toEqual({ id: 'b', label: 'B' })
+    expect('encrypted' in list.find((p) => p.id === 'c')!).toBe(false)
+  })
+})
+
 describe('addProfile (colors)', () => {
   it('keeps the color of the appended profile', () => {
     const next = addProfile(defaultProfiles(), { id: 'new', label: 'Work', color: '#22c55e' })
@@ -213,5 +227,35 @@ describe('nextProfileLabel', () => {
       { id: 'a', label: 'Profile 2' }
     ]
     expect(nextProfileLabel(profiles)).toBe('Profile 3')
+  })
+})
+
+describe('parseProfileArg', () => {
+  it('reads --profile <id> (space form)', () => {
+    expect(parseProfileArg(['electron', '.', '--profile', 'abc'], {})).toBe('abc')
+  })
+
+  it('reads --profile=<id> (equals form)', () => {
+    expect(parseProfileArg(['electron', '--profile=abc'], {})).toBe('abc')
+  })
+
+  it('falls back to the MIRA_PROFILE env var', () => {
+    expect(parseProfileArg(['electron'], { MIRA_PROFILE: 'env-id' })).toBe('env-id')
+  })
+
+  it('lets the flag win over the env var', () => {
+    expect(parseProfileArg(['--profile', 'flag-id'], { MIRA_PROFILE: 'env-id' })).toBe('flag-id')
+  })
+
+  it('returns null when neither is set', () => {
+    expect(parseProfileArg(['electron', '.'], {})).toBeNull()
+  })
+
+  it('ignores --profile with no value (next arg is another flag)', () => {
+    expect(parseProfileArg(['--profile', '--other'], {})).toBeNull()
+  })
+
+  it('ignores an empty env var', () => {
+    expect(parseProfileArg([], { MIRA_PROFILE: '  ' })).toBeNull()
   })
 })

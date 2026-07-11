@@ -12,6 +12,12 @@ export interface Profile {
   label: string
   /** Theme color as a #rrggbb hex, or absent for the neutral chrome. */
   color?: string
+  /** True when this profile is password-protected: its data (partition + trails)
+   * lives in an encrypted vault at rest and must be unlocked (mounted + copied out)
+   * before its window can open. Absent = a normal, plaintext profile. The vault
+   * itself lives outside this model (userData/vaults/<id>.sparsebundle); this flag
+   * only records that the profile IS encrypted. See vault.ts. */
+  encrypted?: boolean
 }
 
 /** The preset theme colors offered in Settings. Any valid hex is accepted by
@@ -58,13 +64,23 @@ export function normalizeProfiles(raw: unknown): Profile[] {
   const list = Array.isArray(raw) ? raw : []
   for (const item of list) {
     if (!item || typeof item !== 'object') continue
-    const { id, label, color } = item as { id?: unknown; label?: unknown; color?: unknown }
+    const { id, label, color, encrypted } = item as {
+      id?: unknown
+      label?: unknown
+      color?: unknown
+      encrypted?: unknown
+    }
     if (typeof id !== 'string' || id.trim() === '') continue
     if (typeof label !== 'string' || label.trim() === '') continue
     if (seen.has(id)) continue
     seen.add(id)
     // A malformed persisted color degrades to "no color", never throws.
-    out.push({ id, label: label.trim(), ...(isProfileColor(color) ? { color } : {}) })
+    out.push({
+      id,
+      label: label.trim(),
+      ...(isProfileColor(color) ? { color } : {}),
+      ...(encrypted === true ? { encrypted: true } : {})
+    })
   }
   const def = out.find((p) => p.id === DEFAULT_PROFILE_ID) ?? {
     id: DEFAULT_PROFILE_ID,
@@ -118,4 +134,24 @@ export function nextProfileLabel(profiles: Profile[]): string {
   let n = 2
   while (labels.has(`Profile ${n}`)) n++
   return `Profile ${n}`
+}
+
+/** Which profile to open at cold launch, if the caller forced one — from a
+ * `--profile <id>` / `--profile=<id>` CLI flag, or the `MIRA_PROFILE` env var
+ * (the flag wins). Returns the id, or null to fall back to the normal startup
+ * (reopen the last-open set). Purely a parse: it does NOT check the id exists —
+ * the manager validates and falls back on an unknown id. Kept here (pure) so the
+ * "launch a specific profile" feature is unit-tested without booting Electron. */
+export function parseProfileArg(argv: readonly string[], env: NodeJS.ProcessEnv): string | null {
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    if (arg === '--profile') {
+      const next = argv[i + 1]
+      if (next && !next.startsWith('--')) return next.trim() || null
+    } else if (arg.startsWith('--profile=')) {
+      return arg.slice('--profile='.length).trim() || null
+    }
+  }
+  const fromEnv = env.MIRA_PROFILE?.trim()
+  return fromEnv ? fromEnv : null
 }
