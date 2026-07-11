@@ -69,4 +69,59 @@ describe('skill pane commands', () => {
     expect(pane(ctx).messages).toEqual([])
     expect(pane(ctx).status).toBe('idle')
   })
+
+  it('copy-chat writes the latest assistant answer to the clipboard', async () => {
+    const { ctx, clipboardWrites } = makeContext()
+    registry.execute('new-tab', { url: 'https://example.com/article' }, ctx)
+    await registry.execute('run-skill', { id: 'summarize-page' }, ctx)
+    expect(registry.execute('copy-chat', {}, ctx)).toEqual({
+      ok: true,
+      length: 'summary(extracted:readability)'.length
+    })
+    expect(clipboardWrites).toEqual(['summary(extracted:readability)'])
+  })
+
+  it('copy-chat reports nothing to copy on an empty thread', () => {
+    const { ctx } = makeContext()
+    expect(registry.execute('copy-chat', {}, ctx)).toEqual({ ok: false, error: 'nothing to copy' })
+  })
+
+  it('set-chat-options merges model + MCP into the llm config, keeping provider/apiKey', () => {
+    const { ctx, llm } = makeContext()
+    // Start from an API config with a key, to prove the merge preserves it.
+    registry.execute('set-llm-config', { provider: 'anthropic-api', apiKey: 'sk-x' }, ctx)
+
+    expect(registry.execute('set-chat-options', { model: 'claude-opus-4-8', loadMcp: true }, ctx)) //
+      .toEqual({ ok: true, model: 'claude-opus-4-8', loadMcp: true })
+    expect(llm()).toEqual({
+      provider: 'anthropic-api',
+      apiKey: 'sk-x',
+      model: 'claude-opus-4-8',
+      loadMcp: true
+    })
+
+    // A partial change touches only what it names (model stays put when only MCP flips).
+    registry.execute('set-chat-options', { loadMcp: false }, ctx)
+    expect(llm()).toMatchObject({ model: 'claude-opus-4-8', loadMcp: false })
+
+    // An empty model clears the override (back to the provider's default).
+    expect(registry.execute('set-chat-options', { model: '' }, ctx)).toEqual({
+      ok: true,
+      model: '',
+      loadMcp: false
+    })
+    expect(llm().model).toBeUndefined()
+  })
+
+  it('set-chat-options rejects a non-string model / non-boolean loadMcp', () => {
+    const { ctx } = makeContext()
+    expect(registry.execute('set-chat-options', { model: 5 }, ctx)).toEqual({
+      ok: false,
+      error: '"model" must be a string'
+    })
+    expect(registry.execute('set-chat-options', { loadMcp: 'yes' }, ctx)).toEqual({
+      ok: false,
+      error: '"loadMcp" must be a boolean'
+    })
+  })
 })

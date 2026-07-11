@@ -49,6 +49,16 @@ export interface PaneContext {
   closeSkillPane: () => void
   /** The current pane state, for the chrome to render on mount. */
   getSkillPane: () => SkillPaneState
+  /** Write text to the OS clipboard (the native edge behind copy-chat). */
+  writeClipboard: (text: string) => void
+}
+
+/** The most recent assistant answer in a thread, or undefined if none yet. */
+function lastAnswer(messages: ChatMessage[]): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant') return messages[i].text
+  }
+  return undefined
 }
 
 export const paneCommands: CommandMap<CommandContext> = {
@@ -94,6 +104,50 @@ export const paneCommands: CommandMap<CommandContext> = {
       const pane = ctx.getSkillPane()
       ctx.showSkillPane({ ...pane, messages: [], status: 'idle', error: undefined })
       return { ok: true, cleared: true }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // Copy the latest assistant answer to the OS clipboard (the "Copy" button).
+  // Pilotable too: an agent can pull the last answer out of Mira via the socket.
+  'copy-chat': (ctx) => {
+    try {
+      const answer = lastAnswer(ctx.getSkillPane().messages)
+      if (answer === undefined || answer.trim() === '') {
+        return { ok: false, error: 'nothing to copy' }
+      }
+      ctx.writeClipboard(answer)
+      return { ok: true, length: answer.length }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // The chat's options bar (below the thread, beside Send): the user drives the
+  // model and whether the CLI loads their MCP servers. A partial merge onto the
+  // persisted llm config — provider/apiKey (set in Settings) are left untouched —
+  // so the very next run-prompt uses the chosen model / MCP policy (chat reads
+  // appSettings.llm). Pilotable: an agent can flip the model over the socket.
+  'set-chat-options': (ctx, params) => {
+    const { model, loadMcp } = (params ?? {}) as { model?: unknown; loadMcp?: unknown }
+    if (model !== undefined && typeof model !== 'string') {
+      return { ok: false, error: '"model" must be a string' }
+    }
+    if (loadMcp !== undefined && typeof loadMcp !== 'boolean') {
+      return { ok: false, error: '"loadMcp" must be a boolean' }
+    }
+    try {
+      const current = ctx.getSettings().llm
+      const next = { ...current }
+      // Empty string clears the override (back to the provider's own default).
+      if (model !== undefined) {
+        if (model.trim() === '') delete next.model
+        else next.model = model.trim()
+      }
+      if (loadMcp !== undefined) next.loadMcp = loadMcp
+      const saved = ctx.setLlmConfig(next).llm
+      return { ok: true, model: saved.model ?? '', loadMcp: saved.loadMcp === true }
     } catch (error) {
       return fail(error)
     }

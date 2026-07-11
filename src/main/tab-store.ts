@@ -38,6 +38,15 @@ export function addTab(state: TabState, tab: TabMeta): TabState {
   return { tabs: [...state.tabs, tab], activeId: tab.id }
 }
 
+/** Append a tab WITHOUT focusing it: it joins the end of the strip and the active
+ * tab is left untouched. This is the "open in background" path (new-tab with
+ * background:true) — useful for a socket/MCP caller that spins up a tab to drive
+ * with CDP / exec-js without pulling Mira to the foreground. On an empty strip
+ * the tab still becomes active (activeId was null and something must be shown). */
+export function addTabInactive(state: TabState, tab: TabMeta): TabState {
+  return { tabs: [...state.tabs, tab], activeId: state.activeId ?? tab.id }
+}
+
 /** Insert a tab directly after the tab `afterId` and focus it — the behavior for
  * a link that opens a new tab (window.open / Cmd+click), so the child sits right
  * under its opener instead of at the end of the strip. `tab` is always a regular

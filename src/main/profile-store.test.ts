@@ -7,6 +7,8 @@ import {
   findById,
   renameProfile,
   addProfile,
+  setProfileColor,
+  isProfileColor,
   nextProfileLabel,
   type Profile
 } from './profile-store'
@@ -120,6 +122,83 @@ describe('addProfile', () => {
   it('rejects empty id or label', () => {
     expect(() => addProfile(defaultProfiles(), { id: '', label: 'X' })).toThrow(/empty id/)
     expect(() => addProfile(defaultProfiles(), { id: 'a', label: '  ' })).toThrow(/empty label/)
+  })
+})
+
+describe('isProfileColor', () => {
+  it('accepts #rgb and #rrggbb hex', () => {
+    expect(isProfileColor('#4d7cfe')).toBe(true)
+    expect(isProfileColor('#ABC')).toBe(true)
+  })
+
+  it('rejects anything else (names, rgb(), junk, non-strings)', () => {
+    expect(isProfileColor('red')).toBe(false)
+    expect(isProfileColor('rgb(1,2,3)')).toBe(false)
+    expect(isProfileColor('#12345')).toBe(false)
+    expect(isProfileColor('#4d7cfe;background:red')).toBe(false)
+    expect(isProfileColor(42)).toBe(false)
+    expect(isProfileColor(null)).toBe(false)
+  })
+})
+
+describe('setProfileColor', () => {
+  const profiles: Profile[] = [
+    { id: 'default', label: 'Default' },
+    { id: 'x', label: 'Work', color: '#ef4444' }
+  ]
+
+  it('sets a color on a profile, touching nothing else', () => {
+    const next = setProfileColor(profiles, 'default', '#4d7cfe')
+    expect(next[0]).toEqual({ id: 'default', label: 'Default', color: '#4d7cfe' })
+    expect(next[1]).toEqual(profiles[1])
+  })
+
+  it('clears a color with null', () => {
+    const next = setProfileColor(profiles, 'x', null)
+    expect(next[1]).toEqual({ id: 'x', label: 'Work' })
+    expect('color' in next[1]).toBe(false)
+  })
+
+  it('does not mutate the input list', () => {
+    setProfileColor(profiles, 'default', '#4d7cfe')
+    expect(profiles[0].color).toBeUndefined()
+  })
+
+  it('rejects an unknown id', () => {
+    expect(() => setProfileColor(profiles, 'ghost', '#4d7cfe')).toThrow(/unknown profile/)
+  })
+
+  it('rejects a malformed color', () => {
+    expect(() => setProfileColor(profiles, 'x', 'red')).toThrow(/invalid color/)
+  })
+})
+
+describe('normalizeProfiles (colors)', () => {
+  it('keeps a valid persisted color and drops a malformed one', () => {
+    const list = normalizeProfiles([
+      { id: 'a', label: 'A', color: '#4d7cfe' },
+      { id: 'b', label: 'B', color: 'not-a-color' }
+    ])
+    expect(list.find((p) => p.id === 'a')).toEqual({ id: 'a', label: 'A', color: '#4d7cfe' })
+    expect(list.find((p) => p.id === 'b')).toEqual({ id: 'b', label: 'B' })
+  })
+})
+
+describe('addProfile (colors)', () => {
+  it('keeps the color of the appended profile', () => {
+    const next = addProfile(defaultProfiles(), { id: 'new', label: 'Work', color: '#22c55e' })
+    expect(next[1]).toEqual({ id: 'new', label: 'Work', color: '#22c55e' })
+  })
+})
+
+describe('renameProfile (colors)', () => {
+  it('preserves the color across a rename', () => {
+    const withColor: Profile[] = [{ id: 'default', label: 'Default', color: '#ec4899' }]
+    expect(renameProfile(withColor, 'default', 'Home')[0]).toEqual({
+      id: 'default',
+      label: 'Home',
+      color: '#ec4899'
+    })
   })
 })
 

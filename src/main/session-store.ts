@@ -37,6 +37,15 @@ export interface PersistedBounds {
    * an unplugged screen falls back to the default instead of landing off-screen.
    * Optional: a pre-displayId file simply skips that check. */
   displayId?: number
+  /** Which macOS virtual desktop (Space) the window was on, as a 0-based index
+   * among the USER desktops of `displayId`, in Mission Control order. An index —
+   * not a raw Space id — because Space ids change across reboots while the
+   * user's mental model ("my mail lives on desktop 2") follows the order. x/y
+   * cannot encode this: every Space shares the same coordinate plane, so without
+   * it a relaunch piles all windows onto the current desktop (see spaces.ts).
+   * Optional: absent off macOS, when the addon is unavailable, or when the
+   * window was on a fullscreen Space (the fullScreen flag covers that). */
+  spaceIndex?: number
 }
 
 /** One profile window's saved tab strip and geometry. `bounds` is optional: a
@@ -141,6 +150,11 @@ export function normalizeBounds(raw: unknown): PersistedBounds | undefined {
     typeof v.displayId === 'number' && Number.isFinite(v.displayId)
       ? Math.floor(v.displayId)
       : undefined
+  // A negative or fractional index is meaningless — drop it, keep the rest.
+  const spaceIndex =
+    typeof v.spaceIndex === 'number' && Number.isInteger(v.spaceIndex) && v.spaceIndex >= 0
+      ? v.spaceIndex
+      : undefined
   return {
     x: Math.floor(v.x as number),
     y: Math.floor(v.y as number),
@@ -148,7 +162,8 @@ export function normalizeBounds(raw: unknown): PersistedBounds | undefined {
     height,
     maximized: v.maximized === true,
     fullScreen: v.fullScreen === true,
-    ...(displayId !== undefined ? { displayId } : {})
+    ...(displayId !== undefined ? { displayId } : {}),
+    ...(spaceIndex !== undefined ? { spaceIndex } : {})
   }
 }
 

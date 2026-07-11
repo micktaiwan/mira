@@ -18,6 +18,9 @@ export interface ProfileContext {
   /** Relabel an existing profile. The id (and its cookies) are untouched.
    * Throws on unknown id or empty label. */
   renameProfile: (id: string, label: string) => ProfileInfo
+  /** Set (a #rgb/#rrggbb hex) or clear (null) a profile's theme color — the tint
+   * of its window chrome. Throws on unknown id or a malformed color. */
+  setProfileColor: (id: string, color: string | null) => ProfileInfo
   /** All known profiles (open or not), each flagged open/closed, plus the id of
    * the currently focused profile. */
   listProfiles: () => {
@@ -37,6 +40,12 @@ export interface CreateProfileParams {
 export interface RenameProfileParams {
   id: string
   label: string
+}
+
+export interface SetProfileColorParams {
+  id: string
+  /** A #rgb/#rrggbb hex, or null / '' to clear the color. */
+  color: string | null
 }
 
 export const profileCommands: CommandMap<CommandContext> = {
@@ -77,6 +86,24 @@ export const profileCommands: CommandMap<CommandContext> = {
     try {
       const renamed = ctx.renameProfile(id.trim(), label.trim())
       return { ok: true, id: renamed.id, label: renamed.label }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  'set-profile-color': (ctx, params) => {
+    const { id, color } = (params ?? {}) as Partial<SetProfileColorParams>
+    if (typeof id !== 'string' || id.trim() === '') {
+      return { ok: false, error: 'missing "id"' }
+    }
+    // '' and null both mean "clear the color"; anything else must be a string
+    // (the model validates the hex shape and reports a clear error).
+    if (color !== undefined && color !== null && typeof color !== 'string') {
+      return { ok: false, error: '"color" must be a string or null' }
+    }
+    try {
+      const updated = ctx.setProfileColor(id.trim(), color ? color.trim() : null)
+      return { ok: true, id: updated.id, color: updated.color ?? null }
     } catch (error) {
       return fail(error)
     }

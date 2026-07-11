@@ -12,6 +12,28 @@ describe('navigate', () => {
     expect(loaded).toEqual(['https://example.com'])
   })
 
+  it('opens the Settings surface on its section for chrome:// aliases', () => {
+    const { ctx, loaded, settingsOpened, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    const result = registry.execute('navigate', { url: 'chrome://extensions' }, ctx)
+    expect(result).toEqual({ ok: true, settings: 'extensions' })
+    // Settings is chrome, not a page: nothing loads, no search happens.
+    expect(loaded).toEqual([])
+    expect(settingsOpened).toEqual(['extensions'])
+    const settings = tabState().tabs.find((t) => t.title === 'Settings')
+    expect(settings?.url).toBe('mira://settings/extensions')
+  })
+
+  it('opens the Settings surface plainly for chrome://settings', () => {
+    const { ctx, settingsOpened } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('navigate', { url: 'chrome://settings' }, ctx)).toEqual({
+      ok: true,
+      settings: 'general'
+    })
+    expect(settingsOpened).toEqual(['general'])
+  })
+
   it('does nothing on empty input', () => {
     const { ctx, loaded } = makeContext()
     const registry = createCommandRegistry()
@@ -62,6 +84,66 @@ describe('navigate', () => {
       ok: false,
       error: '"newTab" must be a boolean'
     })
+  })
+
+  it('focuses the existing tab instead of opening a twin when newTab is set', () => {
+    const { ctx, tabState, loaded } = makeContext()
+    const registry = createCommandRegistry()
+    // Open the destination once (tab-2), then move away to a third tab.
+    registry.execute('navigate', { url: 'example.com', newTab: true }, ctx)
+    registry.execute('new-tab', { url: 'https://other.test' }, ctx)
+    expect(tabState().activeId).toBe('tab-3')
+    // Cmd+K to the same URL again: no new tab, the existing one is focused.
+    const result = registry.execute('navigate', { url: 'example.com', newTab: true }, ctx)
+    expect(result).toEqual({ ok: true, url: 'https://example.com', id: 'tab-2', focused: true })
+    expect(tabState().activeId).toBe('tab-2')
+    expect(tabState().tabs).toHaveLength(3)
+    expect(loaded).toEqual([])
+  })
+
+  it('focuses the existing tab from the URL bar too (no newTab), leaving the current tab alone', () => {
+    const { ctx, tabState, loaded } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('navigate', { url: 'example.com', newTab: true }, ctx)
+    registry.execute('new-tab', { url: 'https://other.test' }, ctx)
+    // Typing the already-open URL in the bar focuses tab-2 instead of loading
+    // it into tab-3.
+    const result = registry.execute('navigate', { url: 'example.com' }, ctx)
+    expect(result).toEqual({ ok: true, url: 'https://example.com', id: 'tab-2', focused: true })
+    expect(tabState().activeId).toBe('tab-2')
+    expect(loaded).toEqual([])
+  })
+
+  it('matches despite the trailing slash a loaded page acquires', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    // The existing tab settled on the slashed form, as Chromium reports it.
+    registry.execute('new-tab', { url: 'https://example.com/' }, ctx)
+    registry.execute('new-tab', { url: 'https://other.test' }, ctx)
+    const result = registry.execute('navigate', { url: 'example.com', newTab: true }, ctx)
+    expect(result).toEqual({ ok: true, url: 'https://example.com', id: 'tab-2', focused: true })
+    expect(tabState().activeId).toBe('tab-2')
+  })
+
+  it('does not dedup against the active tab without newTab (re-typing the URL reloads in place)', () => {
+    const { ctx, tabState, loaded } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('navigate', { url: 'example.com', newTab: true }, ctx)
+    // Same URL typed in the bar while that tab is active: plain load, no focus hop.
+    const result = registry.execute('navigate', { url: 'example.com' }, ctx)
+    expect(result).toEqual({ ok: true, url: 'https://example.com' })
+    expect(loaded).toEqual(['https://example.com'])
+    expect(tabState().tabs).toHaveLength(2)
+  })
+
+  it('swallows a duplicate open of the active tab itself (newTab on the current URL)', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('navigate', { url: 'example.com', newTab: true }, ctx)
+    expect(tabState().activeId).toBe('tab-2')
+    const result = registry.execute('navigate', { url: 'example.com', newTab: true }, ctx)
+    expect(result).toEqual({ ok: true, url: 'https://example.com', id: 'tab-2', focused: true })
+    expect(tabState().tabs).toHaveLength(2)
   })
 
   it('opens a fresh tab when the Settings tab is active (it has no web view)', () => {

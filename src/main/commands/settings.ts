@@ -11,8 +11,9 @@ import type { CommandContext } from './context'
 /** Settings capability slice. */
 export interface SettingsContext {
   /** Open the Settings surface (a settings tab in the target window), or focus it
-   * if one is already open. */
-  openSettings: () => void
+   * if one is already open. An optional section ('extensions', 'profiles', …)
+   * selects which sub-section the panel shows; omitted keeps the default. */
+  openSettings: (section?: string) => void
   /** The current app settings (home URL, …). */
   getSettings: () => AppSettings
   /** Set the home page URL (already normalized by the command). An empty value
@@ -33,9 +34,16 @@ export interface SetHomeUrlParams {
 }
 
 export const settingsCommands: CommandMap<CommandContext> = {
-  'open-settings': (ctx) => {
+  // Open the Settings surface, optionally on a specific sub-section (the same
+  // names as the panel's tabs: 'general', 'ai', 'profiles', 'extensions',
+  // 'permissions', 'data'). Unknown names fall back to the default section.
+  'open-settings': (ctx, params) => {
+    const { section } = (params ?? {}) as { section?: unknown }
+    if (section !== undefined && typeof section !== 'string') {
+      return { ok: false, error: '"section" must be a string' }
+    }
     try {
-      ctx.openSettings()
+      ctx.openSettings(section)
       return { ok: true }
     } catch (error) {
       return fail(error)

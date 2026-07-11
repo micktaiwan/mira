@@ -1,0 +1,15 @@
+/* Extension action buttons in the toolbar (features/extensions). The row is a
+ * <browser-action-list> custom element (shadow DOM); its inner buttons are
+ * styled by the lib. Keep the host aligned with the toolbar's nav buttons and
+ * let it stay out of the window-drag region (buttons must be clickable). */
+
+.extension-actions {
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+}
+
+.extension-actions browser-action-list {
+  display: flex;
+  align-items: center;
+}

@@ -30,6 +30,9 @@ export interface PaletteEntry {
   params?: Record<string, unknown>
   /** Extra terms folded into the fuzzy match but not displayed. */
   keywords?: string
+  /** Keyboard shortcut shown dimmed at the right of the row (display only — the
+   * actual accelerator is registered by the menu, see menu.ts). Mac symbols. */
+  shortcut?: string
   /** Present when the entry navigates to a page (history / favorites). The chrome
    * routes it to the current tab or a new one depending on the palette mode and
    * the Cmd modifier (see CommandPalette), rather than running `command`. */
@@ -55,36 +58,66 @@ export interface PaletteState {
 }
 
 /** The always-present command entries, independent of any window/tab state. Order
- * here is the order they show under the "Commands" group. */
+ * here is the order they show under the "Commands" group. Shortcuts are display
+ * only and must stay in sync with the accelerators registered in menu.ts. */
 const STATIC_COMMANDS: ReadonlyArray<Omit<PaletteEntry, 'group'>> = [
-  { id: 'cmd:new-tab', title: 'New Tab', command: 'new-tab', keywords: 'open create' },
-  { id: 'cmd:close-tab', title: 'Close Tab', command: 'close-active-tab', keywords: 'quit' },
-  { id: 'cmd:reload', title: 'Reload Page', command: 'reload', keywords: 'refresh' },
-  { id: 'cmd:back', title: 'Back', command: 'back', keywords: 'history previous' },
-  { id: 'cmd:forward', title: 'Forward', command: 'forward', keywords: 'history next' },
+  {
+    id: 'cmd:new-tab',
+    title: 'New Tab',
+    command: 'new-tab',
+    keywords: 'open create',
+    shortcut: '⌘T'
+  },
+  {
+    id: 'cmd:close-tab',
+    title: 'Close Tab',
+    command: 'close-active-tab',
+    keywords: 'quit',
+    shortcut: '⌘W'
+  },
+  { id: 'cmd:reload', title: 'Reload Page', command: 'reload', keywords: 'refresh', shortcut: '⌘R' },
+  {
+    id: 'cmd:find',
+    title: 'Find in Page',
+    command: 'find-open',
+    keywords: 'search text match locate',
+    shortcut: '⌘F'
+  },
+  { id: 'cmd:back', title: 'Back', command: 'back', keywords: 'history previous', shortcut: '⌘←' },
+  {
+    id: 'cmd:forward',
+    title: 'Forward',
+    command: 'forward',
+    keywords: 'history next',
+    shortcut: '⌘→'
+  },
   {
     id: 'cmd:discard-tab',
     title: 'Discard Tab',
     command: 'discard-active-tab',
-    keywords: 'sleep unload memory ram'
+    keywords: 'sleep unload memory ram',
+    shortcut: '⌘S'
   },
   {
     id: 'cmd:toggle-panel',
     title: 'Toggle Tab Panel',
     command: 'toggle-tabs-panel',
-    keywords: 'sidebar hide show'
+    keywords: 'sidebar hide show',
+    shortcut: '⌘B'
   },
   {
     id: 'cmd:add-bookmark',
     title: 'Add to Favorites',
     command: 'add-bookmark',
-    keywords: 'bookmark star favorite'
+    keywords: 'bookmark star favorite',
+    shortcut: '⌘D'
   },
   {
     id: 'cmd:settings',
     title: 'Open Settings',
     command: 'open-settings',
-    keywords: 'preferences config options'
+    keywords: 'preferences config options',
+    shortcut: '⌘,'
   },
   { id: 'cmd:new-profile', title: 'New Profile', command: 'create-profile', keywords: 'account' },
   {

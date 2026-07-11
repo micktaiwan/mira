@@ -167,3 +167,32 @@ l'attaque — ne pas l'improviser en V1.
 
 Réinjection HTML (§6), UI d'édition intelligente (§7) et sortie externe explicitement
 hors V1 (sauf décision contraire).
+
+## 9. Bascule 2026-07-11 — l'agent lourd vit HORS de Mira (option A)
+
+Discussion tranchée le 2026-07-11 : le besoin réel (sur une page comme Kondo, analyser
+qui écrit, enrichir via web + MCP Panorama, rédiger une réponse contextualisée) est un
+**agent multi-étapes outillé**, pas le skill one-shot de ce plan. Décision : **on ne
+construit pas ce moteur agent dans Mira.** L'agent, c'est **Claude Code** tournant dans le
+terminal (Kova) ; il pilote Mira **depuis dehors** via le socket (`exec-js` + registre).
+C'est le paiement direct du principe fondateur « tout pilotable ».
+
+Conséquences pour ce plan :
+
+- Le moteur LLM interne (pane, provider `claude-cli`, toggle Agent) reste **utile pour
+  une Q/R rapide sur la page**, mais **cesse d'être la cible pour l'agentique**. Ne pas
+  investir à en faire un agent multi-outils : ce rôle part dehors.
+- Les skills built-in de Mira restent **légers** (résumé, traduction… un appel LLM), et
+  Mira garde son rôle de **navigateur pilotable**. L'ambition monte d'un cran **dans les
+  skills Claude Code**, pas dans le navigateur.
+- **Ordre A → B.** **A** = skill Claude Code → Mira via le socket, testable **sans une
+  ligne de code Mira**. **B** (plus tard) = lancer un skill depuis la palette Cmd+K, où
+  Mira spawne un pane Kova qui lance Claude Code, lequel repilote Mira.
+- **MCP Mira** = wrapper d'ergonomie par-dessus le socket, **pas un prérequis** (le socket
+  suffit pour tout tester).
+- **Premier test concret : skill Claude Code « Kondo triage »** (ouvrir Kondo, attendre le
+  chargement, lire le 1er message, décider si ça vaut une réponse). ⚠️ Kondo n'est pas une
+  simple page : c'est une **extension** (`kojhnafki…`) **+** une **web app** `app.trykondo.com`
+  couplées par un content script — l'agent pilote la web app, pas juste un DOM statique.
+
+État vivant + prochaine action dans `track.md` (ligne « Agent hors de Mira »).

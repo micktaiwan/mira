@@ -6,9 +6,12 @@
 // its own file. Extending a capability = editing that domain's slice; only a
 // brand-new domain touches the intersection below.
 
+import type { AppContext } from './app'
 import type { BookmarkContext } from './bookmarks'
 import type { CookieContext } from './cookies'
 import type { DevtoolsContext } from './devtools'
+import type { ExtensionsContext } from './extensions'
+import type { FindContext } from './find'
 import type { HistoryContext } from './history'
 import type { NavContext } from './navigation'
 import type { PaletteContext } from './palette'
@@ -17,13 +20,17 @@ import type { PermissionContext } from './permissions'
 import type { ProfileContext } from './profiles'
 import type { SettingsContext } from './settings'
 import type { SkillsContext } from './skills'
+import type { SpacesContext } from './spaces'
 import type { StatusContext } from './status'
 import type { TabsContext } from './tabs'
 import type { TooltipContext } from './tooltip'
 
-export type CommandContext = BookmarkContext &
+export type CommandContext = AppContext &
+  BookmarkContext &
   CookieContext &
   DevtoolsContext &
+  ExtensionsContext &
+  FindContext &
   HistoryContext &
   NavContext &
   PaletteContext &
@@ -32,6 +39,7 @@ export type CommandContext = BookmarkContext &
   ProfileContext &
   SettingsContext &
   SkillsContext &
+  SpacesContext &
   StatusContext &
   TabsContext &
   TooltipContext

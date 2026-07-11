@@ -14,9 +14,13 @@ import type { CommandContext } from './context'
 
 /** Devtools capability slice. */
 export interface DevtoolsContext {
-  /** Evaluate `code` in the active tab's page and resolve its (JSON-serializable)
-   * value. Throws when there is no active web page (empty window / Settings tab). */
-  execJsInActiveTab: (code: string) => Promise<unknown>
+  /** Evaluate `code` in a tab's page and resolve its (JSON-serializable) value.
+   * With a `tabId`, the tab is looked up across ALL open windows (ids are UUIDs,
+   * globally unique) — a socket/MCP caller can target any tab regardless of which
+   * window is focused. Without one, falls back to the target window's active tab.
+   * Throws on an unknown/asleep tab, or (active-tab path) when there is no active
+   * web page (empty window / Settings tab). */
+  execJsInTab: (code: string, tabId?: string) => Promise<unknown>
   /** Toggle the DevTools inspector on the active tab's OWN webContents, opened in
    * a detached window. Returns whether DevTools are open afterwards. Throws when
    * there is no active web page (empty window / Settings tab).
@@ -32,16 +36,21 @@ export interface DevtoolsContext {
 
 export interface ExecJsParams {
   code: string
+  /** Optional target tab (from list-tabs); defaults to the active tab. */
+  tabId?: string
 }
 
 export const devtoolsCommands: CommandMap<CommandContext> = {
   'exec-js': async (ctx, params) => {
-    const { code } = (params ?? {}) as Partial<ExecJsParams>
+    const { code, tabId } = (params ?? {}) as Partial<ExecJsParams>
     if (typeof code !== 'string' || code.trim() === '') {
       return { ok: false, error: 'missing "code"' }
     }
+    if (tabId !== undefined && (typeof tabId !== 'string' || tabId.trim() === '')) {
+      return { ok: false, error: 'invalid "tabId"' }
+    }
     try {
-      const result = await ctx.execJsInActiveTab(code)
+      const result = await ctx.execJsInTab(code, tabId)
       return { ok: true, result }
     } catch (error) {
       return fail(error)

@@ -21,6 +21,18 @@ describe('command registry', () => {
     )
   })
 
+  it('describes itself via list-commands (sorted, includes itself)', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    const res = registry.execute('list-commands', {}, ctx)
+    expect(res.ok).toBe(true)
+    const commands = (res as { ok: true; commands: string[] }).commands
+    expect(commands).toEqual([...commands].sort())
+    expect(commands).toEqual(expect.arrayContaining(['list-commands', 'navigate', 'exec-js']))
+    // Self-description stays in sync with the registry by construction.
+    expect(commands).toEqual([...registry.names()].sort())
+  })
+
   it('throws on an unknown command', () => {
     const { ctx } = makeContext()
     const registry = createCommandRegistry()

@@ -25,10 +25,12 @@ export interface NavigableContents {
   setZoomLevel: (level: number) => unknown
 }
 
-/** A profile as seen by a command: a stable id and its display label. */
+/** A profile as seen by a command: a stable id, its display label, and its
+ * optional theme color (a #rrggbb hex tinting the profile window's chrome). */
 export interface ProfileInfo {
   id: string
   label: string
+  color?: string
 }
 
 export type CommandResult = { ok: true; [key: string]: unknown } | { ok: false; error: string }
@@ -37,10 +39,7 @@ export type CommandResult = { ok: true; [key: string]: unknown } | { ok: false; 
  * against the composed context (which satisfies every slice), so the maps merge
  * cleanly into one registry. A handler may be async (e.g. import-cookies, which
  * awaits Electron's cookies.set per cookie); most stay synchronous. */
-export type CommandHandler<C> = (
-  ctx: C,
-  params: unknown
-) => CommandResult | Promise<CommandResult>
+export type CommandHandler<C> = (ctx: C, params: unknown) => CommandResult | Promise<CommandResult>
 
 /** A named set of commands sharing a context type. One per domain file. */
 export type CommandMap<C> = Record<string, CommandHandler<C>>
@@ -57,8 +56,16 @@ export interface CommandRegistryOf<C> {
   names: () => string[]
 }
 
-/** Build a registry from one merged command map. */
+/** Build a registry from one merged command map.
+ *
+ * Also injects the self-describing `list-commands` command here rather than in
+ * a domain file: a handler cannot see the registry it lives in, and only the
+ * composed map knows the full command list. This is what lets an external
+ * caller (socket/MCP/agent) discover what Mira can do without reading docs;
+ * the semantics and params of each command live in docs/socket.md. */
 export function buildRegistry<C>(commands: CommandMap<C>): CommandRegistryOf<C> {
+  const all: CommandMap<C> = { ...commands }
+  all['list-commands'] = () => ({ ok: true, commands: Object.keys(all).sort() })
   return {
     // `execute` is typed as returning a synchronous CommandResult so the many
     // sync callers/tests stay ergonomic. A handful of handlers are async
@@ -66,15 +73,15 @@ export function buildRegistry<C>(commands: CommandMap<C>): CommandRegistryOf<C> 
     // transports that can hit those (socket, IPC) await the result, which is a
     // no-op on a plain object. The cast localizes that imprecision here.
     execute(name, params, ctx) {
-      const handler = commands[name]
+      const handler = all[name]
       if (!handler) throw new Error(`Unknown command: ${name}`)
       return handler(ctx, params) as CommandResult
     },
     has(name) {
-      return name in commands
+      return name in all
     },
     names() {
-      return Object.keys(commands)
+      return Object.keys(all)
     }
   }
 }

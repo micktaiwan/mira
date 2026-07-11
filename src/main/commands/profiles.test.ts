@@ -131,6 +131,69 @@ describe('rename-profile', () => {
   })
 })
 
+describe('set-profile-color', () => {
+  it('sets a color and reports it', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('set-profile-color', { id: 'default', color: '#4d7cfe' }, ctx)).toEqual(
+      {
+        ok: true,
+        id: 'default',
+        color: '#4d7cfe'
+      }
+    )
+    expect((ctx.getTargetProfile() as ProfileInfo & { color?: string }).color).toBe('#4d7cfe')
+  })
+
+  it('clears the color with null and with an empty string', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('set-profile-color', { id: 'default', color: '#4d7cfe' }, ctx)
+    expect(registry.execute('set-profile-color', { id: 'default', color: null }, ctx)).toEqual({
+      ok: true,
+      id: 'default',
+      color: null
+    })
+    registry.execute('set-profile-color', { id: 'default', color: '#4d7cfe' }, ctx)
+    expect(registry.execute('set-profile-color', { id: 'default', color: '' }, ctx)).toEqual({
+      ok: true,
+      id: 'default',
+      color: null
+    })
+  })
+
+  it('fails on an unknown id', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('set-profile-color', { id: 'ghost', color: '#4d7cfe' }, ctx)).toEqual({
+      ok: false,
+      error: 'unknown profile: ghost'
+    })
+  })
+
+  it('rejects a malformed color and a non-string color', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('set-profile-color', { id: 'default', color: 'red' }, ctx)).toEqual({
+      ok: false,
+      error: 'invalid color: red'
+    })
+    expect(registry.execute('set-profile-color', { id: 'default', color: 42 }, ctx)).toEqual({
+      ok: false,
+      error: '"color" must be a string or null'
+    })
+  })
+
+  it('rejects a missing id', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('set-profile-color', { color: '#4d7cfe' }, ctx)).toEqual({
+      ok: false,
+      error: 'missing "id"'
+    })
+  })
+})
+
 describe('list-profiles', () => {
   it('reports every known profile with its open flag and the focused id', () => {
     const { ctx } = makeContext()

@@ -1,5 +1,32 @@
 import { describe, it, expect } from 'vitest'
-import { normalizeInput } from './url'
+import { normalizeInput, sameUrl, settingsSectionFor } from './url'
+
+describe('settingsSectionFor', () => {
+  it('maps chrome://extensions to the extensions section', () => {
+    expect(settingsSectionFor('chrome://extensions')).toBe('extensions')
+    expect(settingsSectionFor('chrome://extensions/')).toBe('extensions')
+    expect(settingsSectionFor('  CHROME://Extensions  ')).toBe('extensions')
+    expect(settingsSectionFor('mira://extensions')).toBe('extensions')
+  })
+
+  it('maps chrome://settings and mira://settings to the default section', () => {
+    expect(settingsSectionFor('chrome://settings')).toBe('general')
+    expect(settingsSectionFor('mira://settings')).toBe('general')
+  })
+
+  it('passes an explicit sub-section through', () => {
+    expect(settingsSectionFor('chrome://settings/profiles')).toBe('profiles')
+    expect(settingsSectionFor('mira://settings/extensions')).toBe('extensions')
+  })
+
+  it('returns null for regular web inputs and unknown internal pages', () => {
+    expect(settingsSectionFor('example.com')).toBeNull()
+    expect(settingsSectionFor('https://example.com')).toBeNull()
+    expect(settingsSectionFor('chrome extensions')).toBeNull()
+    expect(settingsSectionFor('chrome://history')).toBeNull()
+    expect(settingsSectionFor('chrome-extension://abcdef/options.html')).toBeNull()
+  })
+})
 
 describe('normalizeInput', () => {
   it('passes through full https/http URLs untouched', () => {
@@ -10,6 +37,12 @@ describe('normalizeInput', () => {
   it('passes through file: and about: URLs untouched', () => {
     expect(normalizeInput('about:blank')).toBe('about:blank')
     expect(normalizeInput('file:///Users/foo/bar.html')).toBe('file:///Users/foo/bar.html')
+  })
+
+  it('passes through chrome-extension: URLs untouched (extension pages)', () => {
+    expect(normalizeInput('chrome-extension://abcdef/options.html')).toBe(
+      'chrome-extension://abcdef/options.html'
+    )
   })
 
   it('defaults a bare domain to https', () => {
@@ -36,5 +69,27 @@ describe('normalizeInput', () => {
   it('returns empty string for empty or whitespace-only input', () => {
     expect(normalizeInput('')).toBe('')
     expect(normalizeInput('   ')).toBe('')
+  })
+})
+
+describe('sameUrl', () => {
+  it('matches identical URLs', () => {
+    expect(sameUrl('https://example.com/a?q=1', 'https://example.com/a?q=1')).toBe(true)
+  })
+
+  it('ignores the trailing slash a loaded page acquires on a bare origin', () => {
+    expect(sameUrl('https://example.com', 'https://example.com/')).toBe(true)
+    expect(sameUrl('https://a.com/path/', 'https://a.com/path')).toBe(true)
+  })
+
+  it('keeps different paths, queries and hashes distinct', () => {
+    expect(sameUrl('https://a.com/x', 'https://a.com/y')).toBe(false)
+    expect(sameUrl('https://a.com/?q=1', 'https://a.com/?q=2')).toBe(false)
+    expect(sameUrl('https://a.com/#top', 'https://a.com/#bottom')).toBe(false)
+  })
+
+  it('is false for non-URL strings (a sleeping tab placeholder, empty)', () => {
+    expect(sameUrl('home', 'https://a.com')).toBe(false)
+    expect(sameUrl('', '')).toBe(true)
   })
 })

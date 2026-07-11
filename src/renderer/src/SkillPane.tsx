@@ -11,23 +11,64 @@ import MarkdownView from './MarkdownView'
 // assistant answers). The prompt box appends a turn (run-prompt); a skill (Cmd+K)
 // appends one too. "Clear" empties the thread; the pane can be opened anytime.
 
+/** The user-driven chat options (the bar beside Send). `provider` decides which
+ * controls are relevant (the MCP toggle only bites for the claude-cli provider). */
+export interface ChatOptions {
+  provider: string
+  model: string
+  loadMcp: boolean
+}
+
+// The models the dropdown offers. Mirrors MODEL_CHOICES in src/main/llm.ts; kept
+// renderer-local (a 4-item list) to avoid importing main into the renderer bundle.
+// '' = Default: leave the model unset so the subscription / API picks its own.
+const MODELS: ReadonlyArray<{ label: string; model: string }> = [
+  { label: 'Default', model: '' },
+  { label: 'Haiku', model: 'claude-haiku-4-5-20251001' },
+  { label: 'Sonnet', model: 'claude-sonnet-5' },
+  { label: 'Opus', model: 'claude-opus-4-8' }
+]
+
 interface Props {
   state: SkillPaneState
   onClose: () => void
-  /** Run a free prompt (typed below) as the next chat turn. */
-  onPrompt: (prompt: string) => void
+  /** Run a free prompt (typed below) as the next chat turn. `withScreenshot`
+   * attaches a picture of the current page (the 📷 button). */
+  onPrompt: (prompt: string, withScreenshot?: boolean) => void
   /** Empty the conversation (Clear chat). */
   onClear: () => void
+  /** Copy the latest assistant answer to the clipboard (Copy). */
+  onCopy: () => void
+  /** Current chat options (model / MCP), driven from the bar beside Send. */
+  options: ChatOptions
+  /** Persist an option change; main merges it into the llm config. */
+  onOptions: (patch: { model?: string; loadMcp?: boolean }) => void
 }
 
-function SkillPane({ state, onClose, onPrompt, onClear }: Props): React.JSX.Element {
+function SkillPane({
+  state,
+  onClose,
+  onPrompt,
+  onClear,
+  onCopy,
+  options,
+  onOptions
+}: Props): React.JSX.Element {
   const [prompt, setPrompt] = useState('')
+  const [copied, setCopied] = useState(false)
   const threadRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLTextAreaElement>(null)
 
-  const submit = (): void => {
+  // The pane only mounts when it opens (App renders it under `open &&`), so
+  // focusing on mount = focus on every open (Cmd+J, toolbar ◪, run-skill).
+  useEffect(() => {
+    inputRef.current?.focus()
+  }, [])
+
+  const submit = (withScreenshot = false): void => {
     const p = prompt.trim()
     if (p === '') return
-    onPrompt(p)
+    onPrompt(p, withScreenshot)
     setPrompt('')
   }
 
@@ -47,11 +88,29 @@ function SkillPane({ state, onClose, onPrompt, onClear }: Props): React.JSX.Elem
   }, [turnCount, state.status])
 
   const empty = turnCount === 0
+  const hasAnswer = state.messages.some((m) => m.role === 'assistant' && m.text.trim() !== '')
+
+  // Copy the latest answer, with a brief "Copied" confirmation on the button.
+  const copy = (): void => {
+    onCopy()
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }
 
   return (
     <aside className="skill-pane">
       <header className="skill-pane-head">
         <span className="skill-pane-title">{state.title || 'AI'}</span>
+        <button
+          type="button"
+          className="skill-pane-copy"
+          aria-label="Copy answer"
+          title="Copy the latest answer"
+          disabled={!hasAnswer}
+          onClick={copy}
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </button>
         <button
           type="button"
           className="skill-pane-clear"
@@ -98,6 +157,7 @@ function SkillPane({ state, onClose, onPrompt, onClear }: Props): React.JSX.Elem
         }}
       >
         <textarea
+          ref={inputRef}
           className="skill-pane-input"
           value={prompt}
           onChange={(e) => setPrompt(e.target.value)}
@@ -106,9 +166,60 @@ function SkillPane({ state, onClose, onPrompt, onClear }: Props): React.JSX.Elem
           rows={2}
           spellCheck={false}
         />
-        <button type="submit" className="skill-pane-send" disabled={prompt.trim() === ''}>
-          Send
-        </button>
+        <div className="skill-pane-controls">
+          {/* The user drives everything: which model answers, and (claude-cli only)
+              whether their MCP servers load. Off = cheaper/faster (no MCP boot). */}
+          <div className="skill-pane-opts">
+            <label className="skill-pane-opt" title="Model that answers">
+              <span className="skill-pane-opt-label">Model</span>
+              <select
+                className="skill-pane-model"
+                value={options.model}
+                onChange={(e) => onOptions({ model: e.target.value })}
+              >
+                {/* Surface an unknown persisted model (e.g. set in Settings) too. */}
+                {!MODELS.some((m) => m.model === options.model) && options.model !== '' && (
+                  <option value={options.model}>{options.model}</option>
+                )}
+                {MODELS.map((m) => (
+                  <option key={m.model} value={m.model}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {options.provider === 'claude-cli' && (
+              <label
+                className="skill-pane-opt skill-pane-mcp"
+                title="Agent mode: let the chat use tools (Bash, WebFetch) and your MCP servers to ACT — not just answer. Off = a plain, page-only chat."
+              >
+                <input
+                  type="checkbox"
+                  checked={options.loadMcp}
+                  onChange={(e) => onOptions({ loadMcp: e.target.checked })}
+                />
+                <span className="skill-pane-opt-label">Agent</span>
+              </label>
+            )}
+          </div>
+          <div className="skill-pane-actions">
+            {/* Send WITH a screenshot of the page — for what the text can't capture
+                (a map, a canvas). Only on explicit click; plain Send stays text-only. */}
+            <button
+              type="button"
+              className="skill-pane-shot"
+              title="Send with a screenshot of this page"
+              aria-label="Send with screenshot"
+              disabled={prompt.trim() === ''}
+              onClick={() => submit(true)}
+            >
+              📷
+            </button>
+            <button type="submit" className="skill-pane-send" disabled={prompt.trim() === ''}>
+              Send
+            </button>
+          </div>
+        </div>
       </form>
     </aside>
   )

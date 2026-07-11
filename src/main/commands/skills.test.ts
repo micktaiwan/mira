@@ -111,18 +111,23 @@ describe('run-prompt', () => {
       ctx
     )) as { ok: true; text: string }
     expect(res.ok).toBe(true)
-    // The engine got the thread (this one turn) and the page text as context.
+    // The engine got the thread (this one turn) and the page context: URL + text.
     expect(chatCalls[0]).toEqual({
       messages: [{ role: 'user', text: 'What is the deadline?' }],
-      pageText: 'extracted:readability'
+      page: { url: 'https://example.com/article', text: 'extracted:readability' }
     })
-    expect(res.text).toBe('answer(What is the deadline?|extracted:readability)')
+    expect(res.text).toBe(
+      'answer(What is the deadline?|https://example.com/article|extracted:readability)'
+    )
     // Pane opened loading (question only) then idle (question + answer).
     expect(skillPaneStates.map((s) => s.status)).toEqual(['loading', 'idle'])
     expect(skillPaneStates[0].title).toBe('What is the deadline?')
     expect(skillPaneStates[1].messages).toEqual([
       { role: 'user', text: 'What is the deadline?' },
-      { role: 'assistant', text: 'answer(What is the deadline?|extracted:readability)' }
+      {
+        role: 'assistant',
+        text: 'answer(What is the deadline?|https://example.com/article|extracted:readability)'
+      }
     ])
   })
 
@@ -135,7 +140,10 @@ describe('run-prompt', () => {
     // the model keeps context — this is the "vrai chat avec historique".
     expect(chatCalls[1].messages).toEqual([
       { role: 'user', text: 'First?' },
-      { role: 'assistant', text: 'answer(First?|extracted:readability)' },
+      {
+        role: 'assistant',
+        text: 'answer(First?|https://example.com/article|extracted:readability)'
+      },
       { role: 'user', text: 'And then?' }
     ])
   })
@@ -148,6 +156,30 @@ describe('run-prompt', () => {
       text: string
     }
     expect(res.ok).toBe(true)
-    expect(chatCalls[0]).toEqual({ messages: [{ role: 'user', text: 'Hi' }], pageText: '' })
+    expect(chatCalls[0]).toEqual({
+      messages: [{ role: 'user', text: 'Hi' }],
+      page: { url: 'https://example.com/blank', text: '' }
+    })
+  })
+
+  it('includes the page URL in the context even when text is present', async () => {
+    const { ctx, chatCalls } = makeContext()
+    registry.execute('new-tab', { url: 'https://maps.google.com/place/Ajaccio' }, ctx)
+    await registry.execute('run-prompt', { prompt: 'Where am I?' }, ctx)
+    // The assistant can no longer be blind to which page it is on.
+    expect(chatCalls[0].page.url).toBe('https://maps.google.com/place/Ajaccio')
+  })
+
+  it('attaches a screenshot only when asked (📷), never by default', async () => {
+    const { ctx, chatCalls, captureCalls } = makeContext()
+    registry.execute('new-tab', { url: 'https://maps.google.com/place/Ajaccio' }, ctx)
+    // Plain question: no capture, no image in the page context.
+    await registry.execute('run-prompt', { prompt: 'Where?' }, ctx)
+    expect(captureCalls).toHaveLength(0)
+    expect(chatCalls[0].page.screenshot).toBeUndefined()
+    // 📷: capture once and the image rides along with the turn.
+    await registry.execute('run-prompt', { prompt: 'What do you see?', withScreenshot: true }, ctx)
+    expect(captureCalls).toHaveLength(1)
+    expect(chatCalls[1].page.screenshot).toBe('data:image/png;base64,ZmFrZQ==')
   })
 })

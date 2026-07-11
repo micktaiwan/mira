@@ -5,10 +5,11 @@
     <title>Electron</title>
     <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP
          img-src allows remote http(s) images so the sidebar can render the
-         tabs' real favicons (pushed by main from page-favicon-updated). -->
+         tabs' real favicons (pushed by main from page-favicon-updated), and
+         crx: so <browser-action-list> can render extension action icons. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http:"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: http: crx:"
     />
   </head>
 

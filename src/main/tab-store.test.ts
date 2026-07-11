@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   emptyTabState,
   addTab,
+  addTabInactive,
   addTabAfter,
   selectTab,
   updateTab,
@@ -24,6 +25,20 @@ describe('addTab', () => {
     s = addTab(s, tab('b'))
     expect(s.tabs.map((t) => t.id)).toEqual(['a', 'b'])
     expect(s.activeId).toBe('b')
+  })
+})
+
+describe('addTabInactive', () => {
+  it('appends without changing the active tab', () => {
+    let s = addTab(addTab(emptyTabState(), tab('a')), tab('b'))
+    s = addTabInactive(s, tab('c'))
+    expect(s.tabs.map((t) => t.id)).toEqual(['a', 'b', 'c'])
+    expect(s.activeId).toBe('b')
+  })
+
+  it('activates the tab when the strip was empty', () => {
+    const s = addTabInactive(emptyTabState(), tab('a'))
+    expect(s.activeId).toBe('a')
   })
 })
 

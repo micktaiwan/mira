@@ -77,6 +77,21 @@ describe('normalizeLlm', () => {
       provider: 'anthropic-api'
     })
   })
+
+  it('keeps loadMcp only when it is a real boolean', () => {
+    expect(normalizeLlm({ provider: 'claude-cli', loadMcp: true })).toEqual({
+      provider: 'claude-cli',
+      loadMcp: true
+    })
+    expect(normalizeLlm({ provider: 'claude-cli', loadMcp: false })).toEqual({
+      provider: 'claude-cli',
+      loadMcp: false
+    })
+    // A non-boolean (e.g. a corrupt file) is dropped, not coerced.
+    expect(normalizeLlm({ provider: 'claude-cli', loadMcp: 'yes' })).toEqual({
+      provider: 'claude-cli'
+    })
+  })
 })
 
 describe('clampWidth', () => {

@@ -9,7 +9,32 @@ describe('exec-js', () => {
     const { ctx, execJs } = makeContext()
     const res = await registry.execute('exec-js', { code: 'document.title' }, ctx)
     expect(res).toEqual({ ok: true, result: 'ran:document.title' })
-    expect(execJs).toEqual(['document.title'])
+    expect(execJs).toEqual([{ code: 'document.title', tabId: null }])
+  })
+
+  it('targets a specific (background) tab by id', async () => {
+    const { ctx, execJs, tabState } = makeContext()
+    // Open a second tab (becomes active), then go back to the first: tab-2 is
+    // now a background tab — exactly the case a socket caller needs to reach.
+    await registry.execute('new-tab', { url: 'https://example.com' }, ctx)
+    await registry.execute('select-tab', { id: 'tab-1' }, ctx)
+    expect(tabState().activeId).toBe('tab-1')
+
+    const res = await registry.execute(
+      'exec-js',
+      { code: 'document.title', tabId: 'tab-2' },
+      ctx
+    )
+    expect(res).toEqual({ ok: true, result: 'ran:document.title' })
+    expect(execJs).toEqual([{ code: 'document.title', tabId: 'tab-2' }])
+  })
+
+  it('fails on an unknown tabId', async () => {
+    const { ctx } = makeContext()
+    expect(await registry.execute('exec-js', { code: '1', tabId: 'nope' }, ctx)).toEqual({
+      ok: false,
+      error: 'unknown tab: nope'
+    })
   })
 
   it('rejects an empty or missing code', async () => {
@@ -21,6 +46,14 @@ describe('exec-js', () => {
     expect(await registry.execute('exec-js', { code: '   ' }, ctx)).toEqual({
       ok: false,
       error: 'missing "code"'
+    })
+  })
+
+  it('rejects a blank tabId', async () => {
+    const { ctx } = makeContext()
+    expect(await registry.execute('exec-js', { code: '1', tabId: '  ' }, ctx)).toEqual({
+      ok: false,
+      error: 'invalid "tabId"'
     })
   })
 })

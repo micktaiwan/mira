@@ -16,6 +16,12 @@ export interface AppMenuHandlers {
   /** Toggle the Cmd+K command palette in the focused window. A menu accelerator
    * (not a renderer keydown) so it fires whatever holds focus — chrome or page. */
   togglePalette: () => void
+  /** Toggle the left tab sidebar (Cmd+B) in the focused window. Wired to the
+   * toggle-tabs-panel command, so the same bus as the toolbar ◧/◨ button. */
+  toggleTabsPanel: () => void
+  /** Toggle the right AI panel (Cmd+J) in the focused window. Wired to the
+   * toggle-skill-pane command, so the same bus as the toolbar ◪ button. */
+  toggleSkillPane: () => void
   /** Navigate the focused window back / forward in its history. Wired to the
    * back / forward commands so the Cmd+Arrow accelerators stay pilotable. */
   goBack: () => void
@@ -47,6 +53,12 @@ export interface AppMenuHandlers {
   zoomIn: () => void
   zoomOut: () => void
   zoomReset: () => void
+  /** Find in page (Cmd+F): open the find bar in the focused window's chrome.
+   * Cmd+G / Cmd+Shift+G step the current search. Wired to the find-open /
+   * find-next / find-previous commands, same bus as the socket. */
+  openFind: () => void
+  findNext: () => void
+  findPrevious: () => void
   /** Toggle the DevTools inspector on the focused window's active tab (⌥⌘I).
    * Wired to the toggle-devtools command, which targets the tab's own webContents
    * and opens detached — NOT the default role:'toggleDevTools', which hits the
@@ -176,7 +188,36 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
   const template: MenuItemConstructorOptions[] = [
     ...(isMac ? [macAppMenu] : []),
     fileMenu,
-    { role: 'editMenu' },
+    {
+      // A hand-built Edit menu: the standard roles, plus Find. The default
+      // role:'editMenu' has no Find section, and Cmd+F must go through the
+      // registry (find-open) so the chrome's find bar opens whatever holds
+      // focus — the page or the chrome.
+      label: 'Edit',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'pasteAndMatchStyle' },
+        { role: 'delete' },
+        { role: 'selectAll' },
+        { type: 'separator' },
+        {
+          label: 'Find in Page…',
+          accelerator: 'CmdOrCtrl+F',
+          click: () => handlers.openFind()
+        },
+        { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: () => handlers.findNext() },
+        {
+          label: 'Find Previous',
+          accelerator: 'CmdOrCtrl+Shift+G',
+          click: () => handlers.findPrevious()
+        }
+      ]
+    },
     {
       // Back / forward. Cmd+Arrow accelerators work whatever holds focus (the
       // web content or the chrome), which a renderer keydown listener cannot do.
@@ -226,6 +267,19 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
       // active TAB via the registry). Keep the rest of the standard View items.
       label: 'View',
       submenu: [
+        // Show/hide the two side panels. Menu accelerators (not renderer keydowns)
+        // so they fire whatever holds focus — chrome or a focused page.
+        {
+          label: 'Toggle Tab Sidebar',
+          accelerator: 'CmdOrCtrl+B',
+          click: () => handlers.toggleTabsPanel()
+        },
+        {
+          label: 'Toggle AI Panel',
+          accelerator: 'CmdOrCtrl+J',
+          click: () => handlers.toggleSkillPane()
+        },
+        { type: 'separator' },
         {
           label: 'Toggle Developer Tools',
           accelerator: isMac ? 'Alt+Cmd+I' : 'Ctrl+Shift+I',

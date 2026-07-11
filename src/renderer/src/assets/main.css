@@ -1,6 +1,8 @@
 @import './base.css';
 @import './palette.css';
 @import './skill-pane.css';
+@import './extension-actions.css';
+@import './find-bar.css';
 
 :root {
   /* Must match TOOLBAR_HEIGHT in src/main/index.ts. */
@@ -67,7 +69,9 @@ body {
   align-items: center;
   padding: 0 10px;
   gap: 8px;
-  background: var(--color-background-soft);
+  /* --chrome-bg is the profile theme tint (set on <html> by profile-theme.ts);
+     unset = the neutral chrome. */
+  background: var(--chrome-bg, var(--color-background-soft));
   border-bottom: 1px solid var(--ev-c-gray-3);
   -webkit-app-region: drag;
 }
@@ -252,7 +256,8 @@ body {
   flex-direction: column;
   gap: 4px;
   padding: 8px;
-  background: var(--color-background-soft);
+  /* Same profile tint as the toolbar (see profile-theme.ts). */
+  background: var(--chrome-bg, var(--color-background-soft));
   border-right: 1px solid var(--ev-c-gray-3);
   overflow-y: auto;
 }
@@ -319,7 +324,9 @@ body {
    The active tab is always loaded, so it is never dimmed. */
 .tab-row.asleep .tab-title,
 .tab-row.asleep .tab-favicon {
-  opacity: 0.45;
+  /* Dim enough to read as asleep, but not so transparent that the profile
+     theme tint bleeding through kills the contrast. */
+  opacity: 0.6;
 }
 
 /* Drag-and-drop reorder: the dragged row dims; a drop line shows where it will
@@ -461,7 +468,7 @@ body {
 
 /* An asleep pinned tab dims its badge, like an asleep row. */
 .pinned-tab.asleep .tab-favicon {
-  opacity: 0.45;
+  opacity: 0.6;
 }
 
 /* Drag-and-drop reorder within the pinned block: the grid flows horizontally,
@@ -632,6 +639,45 @@ body {
   border-color: #6988e6;
 }
 
+/* Theme-color picker in a profile row: one round swatch per preset color, plus
+   a "none" swatch to clear. The selected one gets a visible ring. */
+.profile-colors {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+.profile-color-swatch {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 50%;
+  background: var(--swatch-color, transparent);
+  cursor: pointer;
+}
+
+.profile-color-swatch:hover {
+  transform: scale(1.15);
+}
+
+.profile-color-swatch.selected {
+  box-shadow: 0 0 0 2px var(--color-background-soft), 0 0 0 4px var(--swatch-color, var(--ev-c-gray-1));
+}
+
+/* The "no color" swatch: an empty circle with a diagonal strike. */
+.profile-color-none {
+  background:
+    linear-gradient(
+      135deg,
+      transparent 44%,
+      var(--ev-c-gray-1) 44%,
+      var(--ev-c-gray-1) 56%,
+      transparent 56%
+    );
+}
+
 .profile-status {
   flex-shrink: 0;
   font-size: 11px;
@@ -693,6 +739,56 @@ body {
   flex-shrink: 0;
   color: var(--ev-c-gray-1);
   font-size: 11px;
+}
+
+/* Settings → Extensions: one row per installed extension, permission-row style. */
+.extension-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.extension-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--ev-c-gray-3);
+  border-radius: 8px;
+  background: var(--color-background-soft);
+  font-size: 12px;
+}
+
+.extension-name {
+  flex: 1;
+  font-weight: 600;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.extension-version {
+  flex-shrink: 0;
+  color: var(--ev-c-gray-1);
+  font-size: 11px;
+}
+
+/* Paused (disabled) extension: dim the identity, keep the buttons readable. */
+.extension-row.disabled .extension-name,
+.extension-row.disabled .extension-version {
+  opacity: 0.5;
+}
+
+.extension-state {
+  flex-shrink: 0;
+  color: var(--ev-c-gray-1);
+  font-size: 11px;
+  border: 1px solid var(--ev-c-gray-3);
+  border-radius: 999px;
+  padding: 1px 8px;
 }
 
 .btn {

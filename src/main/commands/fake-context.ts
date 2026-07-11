@@ -3,14 +3,15 @@
 // stable id and a renamable label) without spinning up Electron or real windows.
 // Not a *.test.ts file, so Vitest does not treat it as a suite.
 
-import type { CommandContext, ProfileInfo, SkillPaneState } from '.'
+import type { CommandContext, ExtensionInfo, FindStopAction, ProfileInfo, SkillPaneState } from '.'
 import type { CookieSetDetails } from '../chrome-import'
 import type { TooltipRect } from '../tooltip'
 import type { SkillSource } from '../skills'
-import type { LlmConfig, ChatMessage } from '../llm'
+import type { LlmConfig, ChatMessage, PageContext } from '../llm'
 import {
   emptyTabState,
   addTab,
+  addTabInactive,
   selectTab as selectTabPure,
   closeTab as closeTabPure,
   moveTab as moveTabPure,
@@ -45,7 +46,8 @@ export interface FakeContext {
   loaded: string[]
   nav: string[]
   opened: string[]
-  settingsOpened: boolean[]
+  /** One entry per openSettings call: the requested section, or null when none. */
+  settingsOpened: Array<string | null>
   profiles: Array<ProfileInfo & { open: boolean }>
   focused: string | null
   /** Live view of the fake window's tabs (reassigned by tab commands). */
@@ -62,26 +64,44 @@ export interface FakeContext {
   history: () => HistoryEntry[]
   /** Live view of the fake app's web-permission grant log (most-recent-first). */
   permissions: () => PermissionGrant[]
+  /** find-open pushes to the chrome (find-domain spy). */
+  findBarOpens: boolean[]
+  /** Every findInPage call, new sessions and steps alike (find-domain spy). */
+  findCalls: Array<{ text: string; forward: boolean; newSession: boolean }>
+  /** Actions passed to stopFindInPage (find-domain spy). */
+  findStops: FindStopAction[]
   /** Tooltips shown via show-tooltip (delegation spy). */
   tooltipShown: Array<{ text: string; anchor: TooltipRect }>
   /** hide-tooltip calls (delegation spy). */
   tooltipHidden: boolean[]
   /** Cookies set per profile id via cookieJarForProfile (import spy). */
   cookiesSet: Map<string, CookieSetDetails[]>
-  /** Code passed to execJsInActiveTab (exec-js spy). */
-  execJs: string[]
+  /** Code + target passed to execJsInTab (exec-js spy); tabId null = active tab. */
+  execJs: Array<{ code: string; tabId: string | null }>
   /** Sources passed to extractText (run-skill extraction spy). */
   extractCalls: SkillSource[]
   /** Prompt+text pairs passed to summarize (run-skill engine spy). */
   summarizeCalls: Array<{ prompt: string; text: string }>
-  /** Message-thread + page-text pairs passed to chat (run-prompt engine spy). */
-  chatCalls: Array<{ messages: ChatMessage[]; pageText: string }>
+  /** Message-thread + page-context pairs passed to chat (run-prompt engine spy). */
+  chatCalls: Array<{ messages: ChatMessage[]; page: PageContext }>
+  /** One entry per capturePage call (📷 screenshot spy). */
+  captureCalls: boolean[]
   /** Every skill-pane state pushed via showSkillPane / close (pane sink spy). */
   skillPaneStates: SkillPaneState[]
+  /** Text written to the clipboard via writeClipboard (copy-chat spy). */
+  clipboardWrites: string[]
   /** Live view of the fake app's LLM config (set-llm-config spy). */
   llm: () => LlmConfig
   /** Live view of the active tab's DevTools open flag (toggle-devtools spy). */
   devToolsOpen: () => boolean
+  /** Live view of one profile's loaded extensions (extensions-domain spy). */
+  extensionsFor: (profileId: string) => ExtensionInfo[]
+  /** One entry per focusApp call (focus-app spy). */
+  focusCalls: boolean[]
+  /** Desktop indexes requested via moveTargetWindowToSpace (spaces spy). */
+  spaceMoves: number[]
+  /** Live view of the fake window's virtual-desktop index (spaces spy). */
+  windowSpaceIndex: () => number
 }
 
 /** Options to shape the fake's native edges for a specific test. */
@@ -97,15 +117,25 @@ export function makeContext(
   const loaded: string[] = []
   const nav: string[] = []
   const opened: string[] = []
-  const settingsOpened: boolean[] = []
+  const settingsOpened: Array<string | null> = []
+  const findBarOpens: boolean[] = []
+  const findCalls: Array<{ text: string; forward: boolean; newSession: boolean }> = []
+  const findStops: FindStopAction[] = []
   const tooltipShown: Array<{ text: string; anchor: TooltipRect }> = []
   const tooltipHidden: boolean[] = []
   const cookiesSet = new Map<string, CookieSetDetails[]>()
-  const execJs: string[] = []
+  const execJs: Array<{ code: string; tabId: string | null }> = []
   const extractCalls: SkillSource[] = []
   const summarizeCalls: Array<{ prompt: string; text: string }> = []
-  const chatCalls: Array<{ messages: ChatMessage[]; pageText: string }> = []
+  const chatCalls: Array<{ messages: ChatMessage[]; page: PageContext }> = []
+  const captureCalls: boolean[] = []
   const skillPaneStates: SkillPaneState[] = []
+  const clipboardWrites: string[] = []
+  const focusCalls: boolean[] = []
+  const spaceMoves: number[] = []
+  // The fake Spaces world: three user desktops on one display (stable fake ids).
+  const fakeSpaceIds = [101, 103, 107]
+  let windowSpace = 0
   const state = {
     profiles: [{ id: 'default', label: 'Default', open: true }] as Array<
       ProfileInfo & { open: boolean }
@@ -120,6 +150,9 @@ export function makeContext(
     zoomLevel: 0,
     // Active tab's DevTools open flag, flipped by the toggle-devtools command.
     devToolsOpen: false,
+    // Remembered find-in-page text (per window, like the manager); '' = no
+    // active search, so find-next / find-previous are no-ops.
+    findText: '',
     paletteOpen: false,
     tabSeq: 1,
     // Bookmarks are a global (app-wide) tree, independent of tab/profile state.
@@ -158,6 +191,10 @@ export function makeContext(
         count: 1
       }
     ] as PermissionGrant[],
+    // Loaded extensions per profile id (mirrors ExtensionsService: one set per
+    // session/profile — D2). Grown by load-extension, shrunk by uninstall.
+    extensions: new Map<string, ExtensionInfo[]>(),
+    extensionSeq: 0,
     // Per-window closed-tab stack (newest last), for reopen-closed-tab.
     closedTabs: [] as Array<{
       url: string
@@ -200,6 +237,31 @@ export function makeContext(
     skillPaneWidth: state.skillPaneWidth
   })
   const ctx: CommandContext = {
+    focusApp: () => {
+      focusCalls.push(true)
+    },
+    // Spaces slice: one display with three virtual desktops, window on the first.
+    // Mirrors the real guards (no target / unknown index throw, same index noop).
+    getSpacesState: () => ({
+      displays: [
+        {
+          displayId: 1,
+          currentSpaceId: fakeSpaceIds[windowSpace],
+          spaces: fakeSpaceIds.map((id) => ({ id, type: 0 }))
+        }
+      ],
+      window: state.focused ? { displayId: 1, spaceIndex: windowSpace } : null
+    }),
+    moveTargetWindowToSpace: (spaceIndex: number) => {
+      if (!state.focused) throw new Error('no target window')
+      if (spaceIndex >= fakeSpaceIds.length) {
+        throw new Error(`no desktop at index ${spaceIndex} (display has ${fakeSpaceIds.length})`)
+      }
+      if (spaceIndex === windowSpace) return 'noop'
+      windowSpace = spaceIndex
+      spaceMoves.push(spaceIndex)
+      return 'moved'
+    },
     getTargetWebContents: () => ({
       loadURL: (url: string) => {
         loaded.push(url)
@@ -222,7 +284,7 @@ export function makeContext(
     }),
     getTargetProfile: () => {
       const p = state.profiles.find((x) => x.id === state.focused)
-      return p ? { id: p.id, label: p.label } : null
+      return p ? { id: p.id, label: p.label, ...(p.color ? { color: p.color } : {}) } : null
     },
     openProfile: (id: string) => {
       const profile = state.profiles.find((p) => p.id === id)
@@ -247,11 +309,30 @@ export function makeContext(
       profile.label = label
       return { id, label }
     },
+    setProfileColor: (id: string, color: string | null) => {
+      const profile = state.profiles.find((p) => p.id === id)
+      if (!profile) throw new Error(`unknown profile: ${id}`)
+      // Mirror the pure model's validation (any #rgb/#rrggbb hex, null clears).
+      if (color !== null && !/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(color)) {
+        throw new Error(`invalid color: ${color}`)
+      }
+      if (color === null) delete profile.color
+      else profile.color = color
+      return { id, label: profile.label, ...(color ? { color } : {}) }
+    },
     listProfiles: () => ({ profiles: state.profiles, focused: state.focused }),
-    openSettings: () => {
-      settingsOpened.push(true)
-      // Model the singleton Settings tab: reuse it if open, else add one (no view).
+    openSettings: (section?: string) => {
+      settingsOpened.push(section ?? null)
+      // Model the singleton Settings tab (url carries the section, like the
+      // manager): reuse it if open, else add one (no view).
+      const url = section ? `mira://settings/${section}` : 'mira://settings'
       if (state.settingsTabId && state.tabs.tabs.some((t) => t.id === state.settingsTabId)) {
+        if (section) {
+          state.tabs = {
+            ...state.tabs,
+            tabs: state.tabs.tabs.map((t) => (t.id === state.settingsTabId ? { ...t, url } : t))
+          }
+        }
         state.tabs = selectTabPure(state.tabs, state.settingsTabId)
         return
       }
@@ -259,7 +340,7 @@ export function makeContext(
       state.tabs = addTab(state.tabs, {
         id,
         title: 'Settings',
-        url: 'mira://settings',
+        url,
         favicon: null
       })
       state.settingsTabId = id
@@ -287,6 +368,9 @@ export function makeContext(
       skillPaneStates.push(state.skillPane)
     },
     getSkillPane: () => state.skillPane,
+    writeClipboard: (text: string) => {
+      clipboardWrites.push(text)
+    },
     setHomeUrl: (url: string) => {
       // Empty is allowed: it clears the home so new tabs open blank.
       state.homeUrl = url.trim()
@@ -337,6 +421,31 @@ export function makeContext(
       const total = state.tabs.tabs.length
       return { total, loaded: total, asleep: 0 }
     },
+    // Find slice: mirror the manager's guard (find needs an active WEB page),
+    // record the calls, remember the text so findStep works without resending it.
+    openFindBar: () => {
+      const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
+      if (!active || active.id === state.settingsTabId) throw new Error('no active web page')
+      findBarOpens.push(true)
+    },
+    findInPage: (text: string, forward: boolean, newSession: boolean) => {
+      const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
+      if (!active || active.id === state.settingsTabId) throw new Error('no active web page')
+      state.findText = text
+      findCalls.push({ text, forward, newSession })
+    },
+    findStep: (forward: boolean) => {
+      if (state.findText === '') return false
+      const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
+      if (!active || active.id === state.settingsTabId) throw new Error('no active web page')
+      // A step is a follow-up on the existing session, never a new one.
+      findCalls.push({ text: state.findText, forward, newSession: false })
+      return true
+    },
+    stopFindInPage: (action: FindStopAction) => {
+      state.findText = ''
+      findStops.push(action)
+    },
     showTooltip: (text: string, anchor: TooltipRect) => {
       tooltipShown.push({ text, anchor })
       return { shown: true }
@@ -345,10 +454,24 @@ export function makeContext(
       tooltipHidden.push(true)
       return { hidden: true }
     },
-    execJsInActiveTab: (code: string) => {
-      // The fake has no real page; it records the code and echoes a marker so the
-      // exec-js command's plumbing is testable without Chromium.
-      execJs.push(code)
+    execJsInTab: (code: string, tabId?: string) => {
+      // The fake has no real page; it records the call and echoes a marker so the
+      // exec-js command's plumbing is testable without Chromium. Mirrors the
+      // manager's resolution errors (unknown tab / Settings / no active page).
+      if (tabId !== undefined) {
+        const tab = state.tabs.tabs.find((t) => t.id === tabId)
+        if (!tab) return Promise.reject(new Error(`unknown tab: ${tabId}`))
+        if (tab.id === state.settingsTabId) {
+          return Promise.reject(new Error('not a web page (Settings tab)'))
+        }
+        execJs.push({ code, tabId })
+        return Promise.resolve(`ran:${code}`)
+      }
+      const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
+      if (!active || active.id === state.settingsTabId) {
+        return Promise.reject(new Error('no active web page'))
+      }
+      execJs.push({ code, tabId: null })
       return Promise.resolve(`ran:${code}`)
     },
     toggleDevToolsInActiveTab: () => {
@@ -371,21 +494,27 @@ export function makeContext(
       extractCalls.push(source)
       return Promise.resolve(opts.emptyExtract ? '' : `extracted:${source.kind}`)
     },
+    capturePage: () => {
+      // Record the call and echo a fixed fake PNG data URL, so run-prompt's
+      // screenshot branch is testable without a real WebContentsView.
+      captureCalls.push(true)
+      return Promise.resolve('data:image/png;base64,ZmFrZQ==')
+    },
     summarize: (prompt: string, text: string) => {
       summarizeCalls.push({ prompt, text })
       return Promise.resolve(`summary(${text})`)
     },
-    chat: (messages: ChatMessage[], pageText: string) => {
+    chat: (messages: ChatMessage[], page: PageContext) => {
       // Record the thread + page context and echo a deterministic marker built
       // from the last turn, so run-prompt's plumbing is testable without an LLM.
-      chatCalls.push({ messages, pageText })
+      chatCalls.push({ messages, page })
       const last = messages[messages.length - 1]?.text ?? ''
-      return Promise.resolve(`answer(${last}|${pageText})`)
+      return Promise.resolve(`answer(${last}|${page.url}|${page.text})`)
     },
-    newTab: (url?: string) => {
+    newTab: (url?: string, background?: boolean) => {
       const id = `tab-${++state.tabSeq}`
       const tab = { id, title: '', url: url ?? state.homeUrl, favicon: null }
-      state.tabs = addTab(state.tabs, tab)
+      state.tabs = background ? addTabInactive(state.tabs, tab) : addTab(state.tabs, tab)
       state.closeArmedId = null
       recordVisit(tab.url, '')
       return { ...tab, loaded: true, kind: 'web' as const, pinned: false }
@@ -570,6 +699,95 @@ export function makeContext(
       state.bookmarks = moveNode(state.bookmarks, id, parentId, index)
       return { moved: true }
     },
+    // Extensions slice: an in-memory per-profile store mirroring the real
+    // ExtensionsService (per-session sets, D2). The FOCUSED profile is the
+    // target, like the real context is bound to the target window's profile.
+    listExtensions: () => {
+      if (!state.focused) throw new Error('no target window')
+      return (state.extensions.get(state.focused) ?? []).slice()
+    },
+    loadExtension: (path: string) => {
+      if (!state.focused) return Promise.reject(new Error('no target window'))
+      // Model loadExtension's failure mode (bad dir / manifest) so the command's
+      // rejection path is testable: any path flagged 'missing' rejects.
+      if (path.includes('missing')) {
+        return Promise.reject(new Error(`unable to load extension at ${path}`))
+      }
+      const list = state.extensions.get(state.focused) ?? []
+      const existing = list.find((e) => e.path === path)
+      if (existing) return Promise.resolve(existing)
+      const info: ExtensionInfo = {
+        id: `ext-${++state.extensionSeq}`,
+        name: path.split('/').pop() ?? path,
+        version: '1.0.0',
+        path,
+        enabled: true
+      }
+      state.extensions.set(state.focused, [...list, info])
+      return Promise.resolve(info)
+    },
+    installExtension: (id: string) => {
+      // Model a Web Store install: same per-profile store as loadExtension, the
+      // path mirroring the store layout (Extensions/<profile>/<id>).
+      if (!state.focused) return Promise.reject(new Error('no target window'))
+      if (id.includes('unknown')) {
+        return Promise.reject(new Error(`Failed to download extension: ${id}`))
+      }
+      const list = state.extensions.get(state.focused) ?? []
+      const existing = list.find((e) => e.id === id)
+      if (existing) return Promise.resolve(existing)
+      const info: ExtensionInfo = {
+        id,
+        name: `store:${id}`,
+        version: '1.0.0',
+        path: `/extensions/${state.focused}/${id}`,
+        enabled: true
+      }
+      state.extensions.set(state.focused, [...list, info])
+      return Promise.resolve(info)
+    },
+    updateExtensions: () => {
+      // The fake has no store to check; record nothing, succeed.
+      return Promise.resolve()
+    },
+    disableExtension: (id: string) => {
+      // Mirror the real service: pause = flip to enabled:false, keep the entry
+      // (files stay on disk); idempotent on an already-paused id.
+      if (!state.focused) return Promise.reject(new Error('no target window'))
+      const list = state.extensions.get(state.focused) ?? []
+      const ext = list.find((e) => e.id === id)
+      if (!ext) return Promise.reject(new Error(`unknown extension: ${id}`))
+      const paused = { ...ext, enabled: false }
+      state.extensions.set(
+        state.focused,
+        list.map((e) => (e.id === id ? paused : e))
+      )
+      return Promise.resolve(paused)
+    },
+    enableExtension: (id: string) => {
+      if (!state.focused) return Promise.reject(new Error('no target window'))
+      const list = state.extensions.get(state.focused) ?? []
+      const ext = list.find((e) => e.id === id)
+      if (!ext) return Promise.reject(new Error(`unknown extension: ${id}`))
+      const resumed = { ...ext, enabled: true }
+      state.extensions.set(
+        state.focused,
+        list.map((e) => (e.id === id ? resumed : e))
+      )
+      return Promise.resolve(resumed)
+    },
+    uninstallExtension: (id: string) => {
+      if (!state.focused) return Promise.reject(new Error('no target window'))
+      const list = state.extensions.get(state.focused) ?? []
+      if (!list.some((e) => e.id === id)) {
+        return Promise.reject(new Error(`unknown extension: ${id}`))
+      }
+      state.extensions.set(
+        state.focused,
+        list.filter((e) => e.id !== id)
+      )
+      return Promise.resolve({ removed: true })
+    },
     listBookmarks: () => ({ tree: state.bookmarks }),
     openBookmark: (id: string) => {
       const node = findNode(state.bookmarks, id)
@@ -595,6 +813,9 @@ export function makeContext(
     bookmarks: () => state.bookmarks,
     history: () => state.history,
     permissions: () => state.permissions,
+    findBarOpens,
+    findCalls,
+    findStops,
     tooltipShown,
     tooltipHidden,
     cookiesSet,
@@ -602,8 +823,14 @@ export function makeContext(
     extractCalls,
     summarizeCalls,
     chatCalls,
+    captureCalls,
     skillPaneStates,
+    clipboardWrites,
     llm: () => state.llm,
-    devToolsOpen: () => state.devToolsOpen
+    devToolsOpen: () => state.devToolsOpen,
+    extensionsFor: (profileId: string) => (state.extensions.get(profileId) ?? []).slice(),
+    focusCalls,
+    spaceMoves,
+    windowSpaceIndex: () => windowSpace
   }
 }

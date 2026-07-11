@@ -1,6 +1,6 @@
 // Navigation domain: driving the active view's URL and session history.
 
-import { normalizeInput } from '../url'
+import { normalizeInput, sameUrl, settingsSectionFor } from '../url'
 import { type CommandMap, type NavigableContents, fail } from './registry'
 import type { CommandContext } from './context'
 
@@ -39,6 +39,19 @@ export const navigationCommands: CommandMap<CommandContext> = {
     if (newTab !== undefined && typeof newTab !== 'boolean') {
       return { ok: false, error: '"newTab" must be a boolean' }
     }
+    // Internal pages first: chrome://extensions & co open the Settings surface
+    // on the right section instead of turning into a Google search or a load
+    // that Chromium cannot serve. Delegated to the settings slice — the
+    // Settings tab is chrome, not a web view.
+    const section = settingsSectionFor(url ?? '')
+    if (section !== null) {
+      try {
+        ctx.openSettings(section)
+        return { ok: true, settings: section }
+      } catch (error) {
+        return fail(error)
+      }
+    }
     const normalized = normalizeInput(url ?? '')
     if (normalized === '') return { ok: false, error: 'empty input' }
     // Explicit new-tab, or no web view to load into: an empty window (last tab
@@ -48,6 +61,21 @@ export const navigationCommands: CommandMap<CommandContext> = {
     // is no target window at all.
     const { tabs, activeId } = ctx.listTabs()
     const active = tabs.find((t) => t.id === activeId)
+    // Dedup: if a tab already shows this URL, focus it instead of opening a
+    // twin (or loading the current tab). The active tab only counts as a match
+    // on newTab (it swallows the duplicate open); without newTab, re-typing the
+    // current URL keeps its plain "load in place" semantics.
+    const existing = tabs.find(
+      (t) => t.kind === 'web' && sameUrl(t.url, normalized) && (newTab === true || t.id !== activeId)
+    )
+    if (existing) {
+      try {
+        ctx.selectTab(existing.id)
+        return { ok: true, url: normalized, id: existing.id, focused: true }
+      } catch (error) {
+        return fail(error)
+      }
+    }
     if (newTab === true || activeId === null || active?.kind === 'settings') {
       try {
         const tab = ctx.newTab(normalized)

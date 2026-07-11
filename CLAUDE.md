@@ -20,7 +20,22 @@ Conséquences concrètes :
 2. **L'UI n'est qu'un appelant.** La chrome React ne mute JAMAIS l'état du browser directement : elle **envoie une commande** (via IPC) que le main exécute. Un click handler = un `invoke('command-name', params)`, pas de la logique métier dans le renderer.
 3. **Trois transports, un seul bus.** Le même registre de commandes est atteignable par :
    - **IPC** (interne) : la chrome React ↔ main.
-   - **Socket unix** (externe, façon Kova) : `MIRA_SOCKET`, une requête JSON par ligne, pour piloter Mira depuis un shell / un agent.
+   - **Socket unix** (externe, façon Kova) : `MIRA_SOCKET` (défaut `/tmp/mira.sock`), une requête JSON par ligne, pour piloter Mira depuis un shell / un agent. **Référence API : `docs/socket.md`** (protocole + toutes les commandes et leurs params) ; en live, la commande `list-commands` liste les noms connus du build qui tourne.
+     - **⚠️ NE PAS piloter le socket avec `printf … | nc -U`.** Le `nc` de macOS ferme la connexion dès que stdin fait EOF (juste après le `printf`), donc il **rate toute réponse asynchrone** : `get-status` (réponse instantanée) passe parfois, mais `exec-js` et toute commande qui `await` (CDP, navigation…) renvoient **0 octet** — un « vide » trompeur qui ressemble à un hang ou à un bug de la commande (vérifié le 2026-07-11, m'a fait perdre des heures à croire exec-js cassé). Fix fiable : un **client socket brut** qui lit jusqu'au `\n`. Helper posé pour les sessions de debug : `scratchpad/mira.py` (`call({...})` / `execjs(tabId, code)`), à recréer si absent :
+       ```python
+       import socket, json
+       def call(obj, timeout=30):
+           s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.settimeout(timeout); s.connect('/tmp/mira.sock')
+           s.sendall((json.dumps(obj)+'\n').encode()); buf=b''
+           while b'\n' not in buf:
+               c=s.recv(65536)
+               if not c: break
+               buf+=c
+           return json.loads(buf.decode())
+       ```
+       Dépannage rapide en shell si vraiment besoin de `nc` : garder stdin ouvert le temps de la réponse — `{ printf '%s\n' '{…}'; sleep 1; } | nc -U /tmp/mira.sock`. Mais préférer le client Python.
+     - **`exec-js` prend un `tabId`** (UUID via `list-tabs`) : toujours le passer pour viser un onglet précis. Un onglet endormi renvoie `{"ok":false,"error":"tab is asleep"}` (le réveiller via `select-tab`). Pour du code async, `exec-js` peut ne pas attendre la promesse dans certains builds — contourner par « lance l'async, stocke dans `window.__x`, relis en sync » sur un 2ᵉ appel.
+     - **Pour ouvrir un onglet de test, TOUJOURS `new-tab` avec `background:true`.** Un `new-tab` normal met l'onglet actif ET ramène Mira au premier plan — or quand tu testes, Mickael est probablement en train de faire autre chose et voir Mira surgir devant le dérange. Le mode background charge la page cachée sans voler le focus ni faire passer la fenêtre devant ; tu récupères le `tabId` dans la réponse et tu la pilotes via `exec-js`.
    - **MCP** : un serveur mince qui wrappe la socket. Il n'ajoute pas de logique, il expose les commandes existantes.
 4. **Une commande = un nom + un schéma de params.** Ainsi elle est appelable à l'identique depuis IPC, socket ou MCP, sans réécriture.
 
@@ -81,11 +96,13 @@ Test avant d'écrire : « ma feature touche-t-elle un fichier qu'une autre sessi
 
 Le pont : **`WebContentsView`** (API Electron moderne). Un onglet = un `WebContentsView`, créé côté **main** (`src/main/`), positionné sous la barre d'adresse, écouté (`did-navigate`, `page-title-updated`, `page-favicon-updated`) et piloté (`loadURL`, `goBack`, `reload`). La chrome (renderer) et le main communiquent par **IPC**.
 
-## Les deux pièges à connaître d'avance
+## Les pièges à connaître d'avance
 
 1. **`WebContentsView` n'est PAS un élément DOM.** C'est une couche native posée par-dessus la fenêtre à des coordonnées x/y/w/h explicites. Quand la chrome bouge (resize, sidebar qui s'ouvre), il faut **recalculer et repositionner la vue à la main**. C'est le bug classique du browser Electron.
 2. **Ne pas utiliser `<webview>` ni `BrowserView`** — dépréciés. Toujours `WebContentsView`. (L'IA propose souvent l'ancien `<webview>` : à corriger.)
 3. **Un overlay HTML par-dessus le contenu web est impossible ; il faut une fenêtre native.** Corollaire du #1 : le `WebContentsView` étant composité **au-dessus de tout le DOM de la chrome**, une bulle CSS/absolue (tooltip, popover, menu contextuel) qui déborde sur la zone d'un onglet est **cachée derrière la page**. Le tooltip natif `title=""` n'est PAS une option de secours : il est **cassé sur Electron 41.x macOS arm64** ([#49843](https://github.com/electron/electron/issues/49843), ok en 37.x), en plus d'être non-stylable et temporisé. La seule voie pour dessiner au-dessus du contenu web est une **fenêtre native** que l'OS composite plus haut : une `BrowserWindow` enfant transparente + `focusable:false` + `setIgnoreMouseEvents(true)`, montrée avec `showInactive()` (une couche `WebContentsView` sœur ré-empilée marche aussi, mais son alpha au-dessus d'une vue sœur est réputé peu fiable). Implémenté pour le tooltip de la status bar : commandes `show-tooltip`/`hide-tooltip` (registre), géométrie pure et testée dans `src/main/tooltip.ts`, overlay natif dans `src/main/profiles.ts`.
+4. **`globalShortcut` enregistre par position de touche QWERTY, pas par caractère.** Sur le clavier French AZERTY de Mickael, l'accélérateur `'M'` se pose sur le keycode 46 (position du M QWERTY = touche « , » en AZERTY) : la touche M physique (keycode 41, position « ; » QWERTY) ne déclenche rien. Vérifié en vrai le 2026-07-10 (frappe simulée par keycode vs frappe réelle). Parade : enregistrer les deux accélérateurs (`'M'` et `';'`) sur le même handler — voir le raccourci focus-app dans `src/main/index.ts`. Concerne toute lettre qui change de place entre QWERTY et AZERTY : A, Z, Q, W, M.
+5. **Les bureaux virtuels macOS (Spaces) sont invisibles pour Electron.** Tous les Spaces partagent le même plan de coordonnées (même x/y sur le bureau 1 et le bureau 3), et une app relancée ouvre TOUJOURS ses fenêtres sur le bureau courant : sauver/restaurer les bounds ne restaure jamais le bureau. Aucune API publique (ni Electron ni AppKit) ne place une fenêtre sur un Space donné — la seule voie est l'API privée SkyLight, et `SLSMoveWindowsToManagedSpace` **ne marche que pour les fenêtres du process appelant** (verrouillé pour les fenêtres d'autres apps depuis macOS 14.5 — vérifié en vrai le 2026-07-11 sur Darwin 25 : move refusé sur une fenêtre Calculator, accepté sur une fenêtre à soi). D'où l'addon `native/mira-spaces/` (wrappers minces), la logique pure dans `src/main/spaces.ts` (indexation par ordre Mission Control — les ids de Space changent au reboot, l'index non), le champ `spaceIndex` de `session-store.ts`, et les commandes `list-spaces` / `move-window-to-space`. Autre piège dedans : déplacer une fenêtre vers un autre bureau via Mission Control n'émet AUCUN événement Electron (mêmes coordonnées) — la capture se fait sur `focus` et à la fermeture.
 
 ## Chemin d'incréments
 

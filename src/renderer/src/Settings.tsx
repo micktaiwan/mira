@@ -9,8 +9,23 @@ import { useEffect, useState } from 'react'
 interface Profile {
   id: string
   label: string
+  /** Theme color (#rrggbb) tinting the profile window's chrome, if set. */
+  color?: string
   open: boolean
 }
+
+/** Preset theme colors offered per profile. Must match PROFILE_COLORS in
+ * src/main/profile-store.ts (the model also accepts any hex via the bus). */
+const PROFILE_COLORS = [
+  '#4d7cfe',
+  '#8b5cf6',
+  '#ec4899',
+  '#ef4444',
+  '#f97316',
+  '#eab308',
+  '#22c55e',
+  '#14b8a6'
+]
 
 /** Thin wrapper around the command bus; every command returns a result object
  * shaped { ok, ... } or { ok: false, error }. */
@@ -18,7 +33,7 @@ async function run(name: string, params?: unknown): Promise<Record<string, unkno
   return (await window.mira.command(name, params)) as Record<string, unknown>
 }
 
-type Section = 'general' | 'ai' | 'profiles' | 'permissions' | 'data'
+type Section = 'general' | 'ai' | 'profiles' | 'extensions' | 'permissions' | 'data'
 
 type LlmProvider = 'claude-cli' | 'anthropic-api' | 'extractive'
 
@@ -214,11 +229,13 @@ function ProfileRow({
   profile,
   focused,
   onRename,
+  onSetColor,
   onOpen
 }: {
   profile: Profile
   focused: boolean
   onRename: (label: string) => void
+  onSetColor: (color: string | null) => void
   onOpen: () => void
 }): React.JSX.Element {
   // Local draft, seeded from the prop. The parent remounts this row (via key)
@@ -243,6 +260,28 @@ function ProfileRow({
         spellCheck={false}
         aria-label="Profile name"
       />
+      <div className="profile-colors" role="radiogroup" aria-label="Theme color">
+        {PROFILE_COLORS.map((color) => (
+          <button
+            key={color}
+            role="radio"
+            aria-checked={profile.color === color}
+            className={`profile-color-swatch${profile.color === color ? ' selected' : ''}`}
+            style={{ '--swatch-color': color } as React.CSSProperties}
+            title={color}
+            aria-label={`Theme color ${color}`}
+            onClick={() => onSetColor(profile.color === color ? null : color)}
+          />
+        ))}
+        <button
+          role="radio"
+          aria-checked={!profile.color}
+          className={`profile-color-swatch profile-color-none${profile.color ? '' : ' selected'}`}
+          title="No color"
+          aria-label="No theme color"
+          onClick={() => onSetColor(null)}
+        />
+      </div>
       <span className={`profile-status status-${status}`}>{status}</span>
       <button className="btn btn-ghost" onClick={onOpen}>
         {profile.open ? 'Focus' : 'Open'}
@@ -278,6 +317,13 @@ function ProfilesSection(): React.JSX.Element {
     setError(res.ok ? null : String(res.error))
   }
 
+  const setColor = async (id: string, color: string | null): Promise<void> => {
+    // Main persists, re-tints the profile's open window live, and pushes
+    // profiles-changed — which refetches this list, updating the swatches.
+    const res = await run('set-profile-color', { id, color })
+    setError(res.ok ? null : String(res.error))
+  }
+
   const create = async (): Promise<void> => {
     const res = await run('create-profile')
     if (!res.ok) setError(String(res.error))
@@ -296,6 +342,7 @@ function ProfilesSection(): React.JSX.Element {
       </div>
       <p className="settings-hint">
         A profile keeps its own cookies. Renaming changes the label only — the session is preserved.
+        The theme color tints the profile window&apos;s chrome, so windows are tellable apart.
       </p>
       {error && <p className="settings-error">{error}</p>}
       <ul className="profile-list">
@@ -305,6 +352,7 @@ function ProfilesSection(): React.JSX.Element {
             profile={p}
             focused={p.id === focused}
             onRename={(label) => rename(p.id, label)}
+            onSetColor={(color) => void setColor(p.id, color)}
             onOpen={() => open(p.id)}
           />
         ))}
@@ -354,6 +402,104 @@ function DataSection(): React.JSX.Element {
       </p>
       {status && <p className="settings-hint">{status}</p>}
       {error && <p className="settings-error">{error}</p>}
+    </div>
+  )
+}
+
+interface ExtensionInfo {
+  id: string
+  name: string
+  version: string
+  path: string
+  /** false = paused: unloaded from the session but kept on disk. */
+  enabled: boolean
+}
+
+/** The "Extensions" sub-section: the extensions of THIS window's profile
+ * (extension sets are per profile — installing in one leaves the others
+ * untouched). Install happens by browsing the Chrome Web Store or via
+ * `load-extension {path}` (socket) for an unpacked dir; here: list, update,
+ * remove. The list is fetched on mount (the section remounts on each tab
+ * switch), and refreshed after every action. */
+function ExtensionsSection(): React.JSX.Element {
+  const [extensions, setExtensions] = useState<ExtensionInfo[]>([])
+  const [status, setStatus] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  // Bumped after every action; the fetch effect below re-runs on it.
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  useEffect(() => {
+    const load = async (): Promise<void> => {
+      const res = await run('list-extensions')
+      if (res.ok) setExtensions((res.extensions as ExtensionInfo[]) ?? [])
+      else setError(String(res.error))
+    }
+    void load()
+  }, [refreshKey])
+
+  const remove = async (ext: ExtensionInfo): Promise<void> => {
+    setStatus(null)
+    setError(null)
+    const res = await run('uninstall-extension', { id: ext.id })
+    if (res.ok) setStatus(`Removed ${ext.name}.`)
+    else setError(String(res.error))
+    setRefreshKey((k) => k + 1)
+  }
+
+  // Pause (unload without uninstalling) or resume an extension.
+  const toggle = async (ext: ExtensionInfo): Promise<void> => {
+    setStatus(null)
+    setError(null)
+    const command = ext.enabled ? 'disable-extension' : 'enable-extension'
+    const res = await run(command, { id: ext.id })
+    if (res.ok) setStatus(`${ext.enabled ? 'Disabled' : 'Enabled'} ${ext.name}.`)
+    else setError(String(res.error))
+    setRefreshKey((k) => k + 1)
+  }
+
+  const update = async (): Promise<void> => {
+    setStatus(null)
+    setError(null)
+    const res = await run('update-extensions')
+    if (res.ok) setStatus('Checked the Chrome Web Store for updates.')
+    else setError(String(res.error))
+    setRefreshKey((k) => k + 1)
+  }
+
+  return (
+    <div className="settings-section">
+      <p className="settings-hint">
+        Extensions of this profile only — each profile has its own set. Install by browsing the
+        Chrome Web Store, right here in Mira.
+      </p>
+      {extensions.length > 0 && (
+        <div className="settings-section-head">
+          <button className="btn btn-ghost" onClick={update}>
+            Check for updates
+          </button>
+        </div>
+      )}
+      {status && <p className="settings-hint">{status}</p>}
+      {error && <p className="settings-error">{error}</p>}
+      {extensions.length === 0 ? (
+        <p className="settings-hint">No extensions installed in this profile.</p>
+      ) : (
+        <ul className="extension-list">
+          {extensions.map((ext) => (
+            <li key={ext.id} className={`extension-row${ext.enabled ? '' : ' disabled'}`}>
+              <span className="extension-name">{ext.name}</span>
+              {!ext.enabled && <span className="extension-state">disabled</span>}
+              <span className="extension-version">{ext.version}</span>
+              <button className="btn btn-ghost" onClick={() => toggle(ext)}>
+                {ext.enabled ? 'Disable' : 'Enable'}
+              </button>
+              <button className="btn btn-danger" onClick={() => remove(ext)}>
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   )
 }
@@ -423,12 +569,21 @@ const SECTIONS: Array<{ key: Section; label: string }> = [
   { key: 'general', label: 'General' },
   { key: 'ai', label: 'AI' },
   { key: 'profiles', label: 'Profiles' },
+  { key: 'extensions', label: 'Extensions' },
   { key: 'permissions', label: 'Permissions' },
   { key: 'data', label: 'Data' }
 ]
 
-function Settings(): React.JSX.Element {
-  const [section, setSection] = useState<Section>('general')
+/** The shown sub-section is NOT local state: it lives in the settings tab's url
+ * (mira://settings/<section>), owned by main. `section` is that url's section,
+ * passed down by App; clicking a panel tab sends open-settings with the new
+ * section, main updates the tab url, and the fresh state flows back down. So
+ * the chrome://extensions alias, the palette, the socket and a plain click all
+ * drive the panel the same way. Unknown/missing names show General. */
+function Settings({ section: requested }: { section?: string }): React.JSX.Element {
+  const section: Section = SECTIONS.some((s) => s.key === requested)
+    ? (requested as Section)
+    : 'general'
 
   return (
     <div className="settings">
@@ -442,7 +597,7 @@ function Settings(): React.JSX.Element {
             role="tab"
             aria-selected={section === s.key}
             className={`settings-tab${section === s.key ? ' active' : ''}`}
-            onClick={() => setSection(s.key)}
+            onClick={() => run('open-settings', { section: s.key })}
           >
             {s.label}
           </button>
@@ -451,6 +606,7 @@ function Settings(): React.JSX.Element {
       {section === 'general' && <GeneralSection />}
       {section === 'ai' && <AiSection />}
       {section === 'profiles' && <ProfilesSection />}
+      {section === 'extensions' && <ExtensionsSection />}
       {section === 'permissions' && <PermissionsSection />}
       {section === 'data' && <DataSection />}
     </div>

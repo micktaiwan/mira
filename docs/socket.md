@@ -1,0 +1,178 @@
+# Mira control socket
+
+Mira is fully drivable from outside (the "tout pilotable" principle, see CLAUDE.md): a
+unix-domain socket dispatches to the SAME command registry as the UI's IPC. This doc is
+the API reference for that surface — what an agent or a shell needs to pilot Mira.
+
+## Protocol
+
+- Path: `/tmp/mira.sock` (override with the `MIRA_SOCKET` env var).
+- One JSON request per line; one JSON response per line.
+
+```bash
+printf '%s\n' '{"command":"navigate","params":{"url":"example.com"}}' | nc -U /tmp/mira.sock
+# {"ok":true,"url":"https://example.com"}
+```
+
+- Request: `{"command":"<name>","params":{...}}` (`params` optional).
+- Response: `{"ok":true, ...result}` or `{"ok":false,"error":"..."}`.
+- **Discovery**: `{"command":"list-commands"}` returns every command name the running
+  build knows — always trust it over this doc if they disagree (this doc can lag).
+
+## Targeting: which window, which tab
+
+Each request binds to the **focused Mira window** at the moment it runs (fallback: any
+open window). With several windows open this is flaky for an external caller — so
+commands that can take an explicit target id should be preferred:
+
+- Tab ids are **UUIDs, globally unique across all windows**. `exec-js` resolves its
+  `tabId` across every open window; you are not tied to the focused one.
+- `list-tabs` only lists the tabs of the target (focused) window — a tab living in
+  another window is not discoverable yet (known limitation).
+- A tab can be **asleep** (in the strip but not loaded — lazy-load / discarded).
+  Page-bound commands fail on it (`tab is asleep: <id>`); `select-tab` wakes it.
+
+## Commands
+
+`params` legend: `?` = optional. Commands with no params listed take none.
+
+### Discovery & status
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `list-commands` | — | `{commands: string[]}` — every command name, sorted |
+| `get-status` | — | memory usage + tab counts (total / loaded / asleep) |
+| `whoami` | — | id of the profile owning the target window |
+
+### Navigation (active tab of the target window)
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `navigate` | `url`, `newTab?` | load a (normalized) url; `newTab:true` opens a new tab |
+| `back` / `forward` / `reload` | — | session-history step / reload |
+| `zoom-in` / `zoom-out` / `zoom-reset` | — | active tab zoom |
+
+### Find in page (active tab of the target window)
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `find-open` | — | show + focus the find bar in the window's chrome (Cmd+F). Fails when the active tab is not a web page |
+| `find-in-page` | `text`, `forward?`, `findNext?` | start a search (`findNext:false`, default) or step it (`findNext:true`); highlights matches in the page. Match counts are pushed to the chrome (Chromium reports them asynchronously), not returned here |
+| `find-next` / `find-previous` | — | step the remembered search (Cmd+G / Cmd+Shift+G); `{found:false}` when no search is active |
+| `find-stop` | `action?` | end the search; `action` is `clearSelection` (default), `keepSelection` or `activateSelection` |
+
+### Tabs
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `list-tabs` | — | `{tabs, activeId, panelCollapsed}` — tabs of the target window, with their UUID ids |
+| `new-tab` | `url?`, `background?` | open a tab (default: home). `background:true` opens it hidden without switching to it or bringing Mira to the foreground — use this when driving a page from a script so Mira does not pop in front of what you are doing |
+| `select-tab` | `id` | activate a tab (wakes it if asleep) |
+| `close-tab` | `id` | close a tab |
+| `close-active-tab` | — | close the active tab (Cmd+W semantics, pinned tabs are guarded) |
+| `discard-tab` | `id` | unload a tab's page, keep the tab (frees RAM) |
+| `discard-active-tab` | — | same, for the active tab |
+| `prev-tab` / `next-tab` | — | cycle the strip |
+| `pin-tab` / `unpin-tab` | `id` | pin state |
+| `move-tab` | `id`, `toIndex` | reorder the strip |
+| `reopen-closed-tab` | — | restore the most recently closed tab |
+| `toggle-tabs-panel` | `collapsed?` | collapse/expand the tab sidebar |
+
+### Page introspection (devtools domain)
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `exec-js` | `code`, `tabId?` | run JS in a tab's page world, return its JSON-serializable value. With `tabId` (from `list-tabs`), targets **any tab in any window**; without, the active tab. Errors: `unknown tab: <id>`, `tab is asleep: <id>`, `not a web page (Settings tab)` |
+| `toggle-devtools` | — | open/close the inspector on the active tab |
+
+### Skills & AI pane
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `list-skills` | — | skills applicable to the active page |
+| `run-skill` | `id` | extract page content, run the skill's engine, show in the pane |
+| `run-prompt` | `prompt`, `withScreenshot?` | one chat turn against the page (pane thread) |
+| `get-skill-pane` / `close-skill-pane` | — | pane state / hide (keeps content) |
+| `toggle-skill-pane` | `open?` | show/hide the pane |
+| `clear-chat` / `copy-chat` | — | reset / copy the pane thread |
+| `set-chat-options` | `model?`, `loadMcp?` | per-chat LLM options |
+
+### Bookmarks
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `list-bookmarks` | — | the whole bookmark tree |
+| `add-bookmark` | `url?`, `title?`, `parentId?` | default: bookmark the active tab |
+| `add-folder` | `title`, `parentId?` | create a folder |
+| `open-bookmark` | `id` | navigate to a bookmark |
+| `rename-bookmark` | `id`, `title` | rename a node |
+| `move-bookmark` | `id`, `parentId?`, `index?` | reparent/reorder |
+| `remove-bookmark` | `id` | delete a node |
+
+### History
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `list-history` | `limit?` | most recent visits |
+| `search-history` | `query`, `limit?` | fuzzy search |
+| `clear-history` | — | wipe it |
+
+### Profiles & windows
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `list-profiles` | — | profiles + which are open + focused id |
+| `open-profile` | `id` | open (or focus) a profile window |
+| `create-profile` | `label?` | new profile |
+| `rename-profile` | `id`, `label` | rename |
+| `set-profile-color` | `id`, `color` | `#rrggbb` hex, or null/'' to clear |
+| `focus-app` | — | bring Mira to the foreground |
+| `list-spaces` | — | macOS virtual desktops per display, in Mission Control order, plus where the target window sits (`window: {displayId, spaceIndex}`, null when unknown). `displays: []` = no Spaces support (non-mac / addon not built) |
+| `move-window-to-space` | `spaceIndex` | move the target window onto that desktop (0-based index on its display). `moved:false` = was already there. Persisted: the window reopens on that desktop next launch |
+
+### Settings
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `open-settings` | `section?` | open the Settings tab (`general`, `ai`, `profiles`, `extensions`, `permissions`, `data`) |
+| `get-settings` | — | current app settings |
+| `set-home-url` | `url` | home page |
+| `set-llm-config` | `provider`, `apiKey?`, `model?` | AI engine (`claude-cli`, `anthropic-api`, `extractive`) |
+| `set-sidebar-width` / `set-skill-pane-width` | `width` | panel widths (px, clamped) |
+
+### Cookies & data
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `import-cookies` | `to`, `profileDir`, `userDataDir?`, `safeStorageService?` | import Chrome cookies into a Mira profile |
+| `count-active-cookies` | — | cookies the active site would send |
+| `clear-site-data` | `url?` | cookies + storage for one site (default: active site) |
+| `clear-data` | `profile?` | wipe a profile's browsing data |
+
+### Extensions
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `list-extensions` | — | loaded extensions of the target profile |
+| `install-extension` | `id` | install from the Chrome Web Store id |
+| `load-extension` | `path` | load an unpacked extension |
+| `enable-extension` / `disable-extension` / `uninstall-extension` | `id` | lifecycle |
+| `update-extensions` | — | update all |
+
+### Permissions
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `list-permissions` / `clear-permissions` | — | web-permission grant log |
+| `location-auth-status` / `request-location-authorization` / `open-location-settings` | — | macOS location authorization |
+
+### UI plumbing (used by the chrome; rarely useful externally)
+
+`list-palette`, `toggle-palette {open?, mode?, query?}`, `show-tooltip {text, anchor}`,
+`hide-tooltip`.
+
+## Keeping this doc honest
+
+Source of truth = the registry (`src/main/commands/`, one file per domain). When you add
+or change a command, update its row here — and remember `list-commands` already exposes
+the *names* for free, so the only thing that can rot here is params/semantics.

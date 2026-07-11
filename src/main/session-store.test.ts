@@ -195,6 +195,14 @@ describe('normalizeBounds', () => {
     expect(normalizeBounds({ x: 0, y: 0, width: 100 })).toBeUndefined()
     expect(normalizeBounds(null)).toBeUndefined()
   })
+
+  it('carries a valid spaceIndex and drops a negative / fractional one', () => {
+    const base = { x: 0, y: 0, width: 100, height: 100 }
+    expect(normalizeBounds({ ...base, spaceIndex: 2 })!.spaceIndex).toBe(2)
+    expect('spaceIndex' in normalizeBounds({ ...base, spaceIndex: -1 })!).toBe(false)
+    expect('spaceIndex' in normalizeBounds({ ...base, spaceIndex: 1.5 })!).toBe(false)
+    expect('spaceIndex' in normalizeBounds(base)!).toBe(false)
+  })
 })
 
 describe('boundsOnScreen', () => {

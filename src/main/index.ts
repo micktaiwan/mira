@@ -1,12 +1,23 @@
-import { app, BrowserWindow, ipcMain } from 'electron'
+// MUST be the first import: its module-level side effect enables the extension
+// lib's `debug` logging before that lib binds its instances (see log.ts).
+import { initLogging } from './log'
+import { app, BrowserWindow, globalShortcut, ipcMain, session } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import { createCommandRegistry } from './commands'
+import { createCommandRegistry, type CommandContext } from './commands'
 import { startCommandSocket, cleanupSocket } from './socket'
 import { ProfileManager, DEFAULT_PROFILE_ID } from './profiles'
-import { normalizeProfiles, defaultProfiles, type Profile } from './profile-store'
+import { CHROME_PARTITION, DEFAULT_SESSION_ALIAS } from './chrome-session'
+import { ExtensionsService } from './extensions'
+import {
+  normalizeDisabled,
+  normalizeSideloaded,
+  type DisabledExtensions,
+  type SideloadedExtensions
+} from './extension-store'
+import { normalizeProfiles, defaultProfiles, partitionForId, type Profile } from './profile-store'
 import { normalizeSessions, type PersistedSessions } from './session-store'
 import { normalizeBookmarks, type BookmarkTree } from './bookmark-store'
 import { normalizeHistory, type HistoryEntry } from './history-store'
@@ -50,10 +61,16 @@ const STATUS_BAR_HEIGHT = 24
 // --sidebar-width / --skill-pane-width defaults as the pre-JS fallback.
 
 /** Load the chrome (React) into a profile window. Each window statically knows
- * its profile via the query string (id for identity, label for the badge), so
- * the badge needs no round-trip. */
+ * its profile via the query string (id for identity, label for the badge, and
+ * the session partition so <browser-action-list> binds to the right profile's
+ * extensions — empty for the default profile), so no round-trips. */
 function loadRenderer(window: BrowserWindow, profile: Profile): void {
-  const search = `profile=${encodeURIComponent(profile.id)}&label=${encodeURIComponent(profile.label)}`
+  // The default profile lives on the default session, which has no partition
+  // name — pass the alias the resolver in extensions.ts maps back to it.
+  const partition = partitionForId(profile.id) ?? DEFAULT_SESSION_ALIAS
+  const search =
+    `profile=${encodeURIComponent(profile.id)}&label=${encodeURIComponent(profile.label)}&partition=${encodeURIComponent(partition)}` +
+    (profile.color ? `&color=${encodeURIComponent(profile.color)}` : '')
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     window.loadURL(`${process.env['ELECTRON_RENDERER_URL']}?${search}`)
   } else {
@@ -65,6 +82,14 @@ function loadRenderer(window: BrowserWindow, profile: Profile): void {
 // In dev the Cmd+Tab label still reads "Electron" (that comes from the
 // Electron.app bundle, not from here); the packaged app shows "Mira".
 app.setName('Mira')
+
+// Rotating crash-forensics logs under userData/logs/ — one main-<ts>.log (JS
+// side, synchronous tee) + one chromium-<ts>.log (native side) per launch,
+// oldest pruned. After a crash, read the newest pair instead of reproducing.
+// Placed after setName (so userData is Mira's) and before app ready (the
+// Chromium switches must land early).
+const logging = initLogging(app.getPath('userData'))
+console.log(`[mira] logging to ${logging.logsDir}`)
 
 // Fill the native "About Mira" panel (app menu → About) with true metadata,
 // overriding the package.json scaffold defaults ("example.com", a doubled
@@ -231,6 +256,58 @@ app.whenReady().then(() => {
   }
   const initialSettings = loadSettings()
 
+  // Sideloaded extensions (unpacked dirs loaded via `load-extension`) are
+  // recorded per profile in userData/extensions.json, so they reload at boot —
+  // Electron forgets loaded extensions on quit. Bad/missing file degrades to
+  // no extensions. Web Store installs will come later (E5, extensions-plan.md).
+  const sideloadedPath = join(app.getPath('userData'), 'extensions.json')
+  const loadSideloaded = (): SideloadedExtensions => {
+    try {
+      return normalizeSideloaded(JSON.parse(readFileSync(sideloadedPath, 'utf8')))
+    } catch {
+      return {}
+    }
+  }
+  const persistSideloaded = (map: SideloadedExtensions): void => {
+    try {
+      writeFileSync(sideloadedPath, JSON.stringify(map, null, 2))
+    } catch (error) {
+      console.error('[mira] failed to persist extensions registry', error)
+    }
+  }
+  // Paused extensions (disable-extension) live in their own registry: at boot
+  // the loaders load everything, then the service unloads whatever is listed
+  // here. Same degradation contract as extensions.json.
+  const disabledPath = join(app.getPath('userData'), 'extensions-disabled.json')
+  const loadDisabled = (): DisabledExtensions => {
+    try {
+      return normalizeDisabled(JSON.parse(readFileSync(disabledPath, 'utf8')))
+    } catch {
+      return {}
+    }
+  }
+  const persistDisabled = (map: DisabledExtensions): void => {
+    try {
+      writeFileSync(disabledPath, JSON.stringify(map, null, 2))
+    } catch (error) {
+      console.error('[mira] failed to persist disabled-extensions registry', error)
+    }
+  }
+  const extensionsService = new ExtensionsService({
+    initialSideloaded: loadSideloaded(),
+    persistSideloaded,
+    initialDisabled: loadDisabled(),
+    persistDisabled,
+    // Web-Store installs land per profile (D2), Chrome-style layout on disk.
+    extensionsDirFor: (profileId) => join(app.getPath('userData'), 'Extensions', profileId)
+  })
+  // Extension action icons render in the chrome (<browser-action-list>), which
+  // runs on its own extension-free session (see chrome-session.ts). The crx:
+  // handler there serves icons of extensions from ANY profile session (it
+  // resolves the target session from the element's partition attribute —
+  // verified in lib source).
+  extensionsService.serveCrxIcons(session.fromPartition(CHROME_PARTITION))
+
   const preloadPath = join(__dirname, '../preload/index.js')
 
   // Settings is no longer a separate window: `open-settings` opens an internal
@@ -269,6 +346,7 @@ app.whenReady().then(() => {
       const rss = metrics.reduce((sum, m) => sum + m.memory.workingSetSize * 1024, 0)
       return { rss, processes: metrics.length }
     },
+    extensions: extensionsService,
     onChange: () => {
       rebuildMenu()
       // Keep any open Settings tab's profile list live. The Settings surface is a
@@ -280,8 +358,19 @@ app.whenReady().then(() => {
     // The page right-click menu routes its Mira actions through the registry,
     // targeting the window that owns the right-clicked view (same bus as the
     // toolbar and the socket).
-    runCommand: (wc, name, params) => registry.execute(name, params, profiles.contextForChrome(wc))
+    runCommand: (wc, name, params) => runDetached(name, params, profiles.contextForChrome(wc))
   })
+
+  // Menu accelerators and context-menu clicks are fire-and-forget: nothing
+  // awaits their result, so an async command (load-extension, import-cookies)
+  // that rejects would surface as an unhandled rejection. Route them through
+  // this wrapper, which awaits and logs instead. IPC and the socket await
+  // results themselves (registre async — extensions-plan.md §4.3).
+  function runDetached(name: string, params: unknown, ctx: CommandContext): void {
+    void Promise.resolve()
+      .then(() => registry.execute(name, params, ctx))
+      .catch((error) => console.error(`[mira] command ${name} failed`, error))
+  }
 
   // Profile switching lives in the native app menu (not the toolbar). Rebuilt on
   // every profile change via the manager's onChange hook above.
@@ -292,33 +381,42 @@ app.whenReady().then(() => {
       newProfile: () => profiles.createProfile(),
       // Route through the registry so it opens a Settings tab in the focused
       // window, like the toolbar / socket / Cmd+, path.
-      openSettings: () => registry.execute('open-settings', {}, profiles.contextForFocused()),
+      openSettings: () => runDetached('open-settings', {}, profiles.contextForFocused()),
       // Cmd+K: toggle the command palette in the focused window, through the same
       // bus as everything else (no `open` arg → flip the current state).
-      togglePalette: () => registry.execute('toggle-palette', {}, profiles.contextForFocused()),
+      togglePalette: () => runDetached('toggle-palette', {}, profiles.contextForFocused()),
+      // Cmd+B / Cmd+J: show/hide the left tab sidebar and the right AI panel, same
+      // bus as their toolbar buttons (no arg → flip the current state).
+      toggleTabsPanel: () => runDetached('toggle-tabs-panel', {}, profiles.contextForFocused()),
+      toggleSkillPane: () => runDetached('toggle-skill-pane', {}, profiles.contextForFocused()),
       // Route the accelerators through the registry so they hit the same bus as
       // the toolbar buttons and the socket — the focused window is the target.
-      goBack: () => registry.execute('back', {}, profiles.contextForFocused()),
-      goForward: () => registry.execute('forward', {}, profiles.contextForFocused()),
-      reload: () => registry.execute('reload', {}, profiles.contextForFocused()),
-      newTab: () => registry.execute('new-tab', {}, profiles.contextForFocused()),
-      closeTab: () => registry.execute('close-active-tab', {}, profiles.contextForFocused()),
-      reopenTab: () => registry.execute('reopen-closed-tab', {}, profiles.contextForFocused()),
-      discardTab: () => registry.execute('discard-active-tab', {}, profiles.contextForFocused()),
-      prevTab: () => registry.execute('prev-tab', {}, profiles.contextForFocused()),
-      nextTab: () => registry.execute('next-tab', {}, profiles.contextForFocused()),
-      addBookmark: () => registry.execute('add-bookmark', {}, profiles.contextForFocused()),
+      goBack: () => runDetached('back', {}, profiles.contextForFocused()),
+      goForward: () => runDetached('forward', {}, profiles.contextForFocused()),
+      reload: () => runDetached('reload', {}, profiles.contextForFocused()),
+      newTab: () => runDetached('new-tab', {}, profiles.contextForFocused()),
+      closeTab: () => runDetached('close-active-tab', {}, profiles.contextForFocused()),
+      reopenTab: () => runDetached('reopen-closed-tab', {}, profiles.contextForFocused()),
+      discardTab: () => runDetached('discard-active-tab', {}, profiles.contextForFocused()),
+      prevTab: () => runDetached('prev-tab', {}, profiles.contextForFocused()),
+      nextTab: () => runDetached('next-tab', {}, profiles.contextForFocused()),
+      addBookmark: () => runDetached('add-bookmark', {}, profiles.contextForFocused()),
       // Zoom the focused window's active tab through the registry, same bus as
       // the socket/MCP — targets the page, not Mira's chrome.
-      zoomIn: () => registry.execute('zoom-in', {}, profiles.contextForFocused()),
-      zoomOut: () => registry.execute('zoom-out', {}, profiles.contextForFocused()),
-      zoomReset: () => registry.execute('zoom-reset', {}, profiles.contextForFocused()),
+      zoomIn: () => runDetached('zoom-in', {}, profiles.contextForFocused()),
+      zoomOut: () => runDetached('zoom-out', {}, profiles.contextForFocused()),
+      zoomReset: () => runDetached('zoom-reset', {}, profiles.contextForFocused()),
+      // Cmd+F opens the find bar in the focused window; Cmd+G / Cmd+Shift+G step
+      // the current search. Same bus as the chrome's find bar and the socket.
+      openFind: () => runDetached('find-open', {}, profiles.contextForFocused()),
+      findNext: () => runDetached('find-next', {}, profiles.contextForFocused()),
+      findPrevious: () => runDetached('find-previous', {}, profiles.contextForFocused()),
       // Toggle the active tab's DevTools through the registry (same bus as the
       // socket/MCP) — targets the page's webContents, opened detached.
-      toggleDevTools: () => registry.execute('toggle-devtools', {}, profiles.contextForFocused()),
+      toggleDevTools: () => runDetached('toggle-devtools', {}, profiles.contextForFocused()),
       // The Bookmarks submenu renders the favorites tree; clicking a url opens it.
       listBookmarks: () => profiles.listBookmarksTree(),
-      openBookmark: (id) => registry.execute('open-bookmark', { id }, profiles.contextForFocused())
+      openBookmark: (id) => runDetached('open-bookmark', { id }, profiles.contextForFocused())
     })
   }
   rebuildMenu()
@@ -332,6 +430,28 @@ app.whenReady().then(() => {
   })
   startCommandSocket(SOCKET_PATH, registry, () => profiles.contextForFocused())
   console.log(`[mira] control socket listening on ${SOCKET_PATH}`)
+
+  // System-wide shortcut to summon Mira from any app (like Panorama's
+  // Cmd+Shift+P). Routed through the registry (focus-app) so the same action is
+  // reachable from the socket / MCP. Registration fails loudly when another app
+  // already owns the combo; Mira keeps working without it.
+  //
+  // Electron registers global shortcuts by PHYSICAL key position on a US QWERTY
+  // layout, not by the character the user's layout produces. On French AZERTY
+  // the M key sits where QWERTY has ';' (virtual keycode 41), so 'M' alone would
+  // bind the AZERTY ',' key instead. Register both accelerators: 'M' covers
+  // QWERTY, ';' covers the physical M key on AZERTY.
+  const FOCUS_ACCELERATORS = ['CommandOrControl+Shift+M', 'CommandOrControl+Shift+;']
+  for (const accelerator of FOCUS_ACCELERATORS) {
+    const registered = globalShortcut.register(accelerator, () =>
+      runDetached('focus-app', {}, profiles.contextForFocused())
+    )
+    if (!registered) {
+      console.error(
+        `[mira] failed to register global shortcut ${accelerator} (taken by another app?)`
+      )
+    }
+  }
 
   // Tell the manager the app is quitting BEFORE its windows close, so a window
   // open at quit keeps its "was open" flag (and reopens next launch) instead of
@@ -365,7 +485,9 @@ app.on('window-all-closed', () => {
   }
 })
 
-// Remove the control socket file on exit so a restart starts clean.
+// Remove the control socket file on exit so a restart starts clean, and release
+// the global shortcut back to the system.
 app.on('will-quit', () => {
+  globalShortcut.unregisterAll()
   cleanupSocket(SOCKET_PATH)
 })

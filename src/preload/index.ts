@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import { injectBrowserAction } from 'electron-chrome-extensions/browser-action'
+
+// Make the <browser-action-list> custom element (extension action buttons +
+// popups) available to the chrome. This preload only ever loads in Mira's own
+// chrome windows — never in tab WebContentsViews — so no url gating is needed.
+// The lib handles context isolation itself (contextBridge + main-world script).
+injectBrowserAction()
 
 // Custom APIs for renderer
 const api = {}
@@ -15,6 +22,14 @@ const mira = {
     const listener = (_event: unknown, label: string): void => callback(label)
     ipcRenderer.on('mira:profile-renamed', listener)
     return () => ipcRenderer.removeListener('mira:profile-renamed', listener)
+  },
+  // Main pushes the new theme color (a hex, or null when cleared) when this
+  // window's profile color changes, so the chrome re-tints without a reload.
+  // Returns an unsubscribe function.
+  onProfileThemeChanged: (callback: (color: string | null) => void): (() => void) => {
+    const listener = (_event: unknown, color: string | null): void => callback(color)
+    ipcRenderer.on('mira:profile-theme', listener)
+    return () => ipcRenderer.removeListener('mira:profile-theme', listener)
   },
   // Main pings the Settings window whenever the profile set changes (elsewhere),
   // so it can refetch the list. Returns an unsubscribe function.
@@ -45,6 +60,25 @@ const mira = {
     const listener = (): void => callback()
     ipcRenderer.on('mira:focus-address-bar', listener)
     return () => ipcRenderer.removeListener('mira:focus-address-bar', listener)
+  },
+  // Main asks the chrome to show + focus the find-in-page bar (Cmd+F, or the
+  // find-open command from the palette / socket). Returns an unsubscribe function.
+  onFindOpen: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('mira:find-open', listener)
+    return () => ipcRenderer.removeListener('mira:find-open', listener)
+  },
+  // Main pushes the current search's match tally (from Chromium's found-in-page
+  // event) so the find bar can show "n/m". Returns an unsubscribe function.
+  onFindResult: (
+    callback: (result: { matches: number; activeMatchOrdinal: number }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: unknown,
+      result: { matches: number; activeMatchOrdinal: number }
+    ): void => callback(result)
+    ipcRenderer.on('mira:find-result', listener)
+    return () => ipcRenderer.removeListener('mira:find-result', listener)
   },
   // Main pushes the URL of the link the cursor is hovering in the active page
   // (empty string when the cursor leaves the link), so the status bar can show it

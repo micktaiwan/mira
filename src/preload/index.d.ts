@@ -61,6 +61,9 @@ export interface MiraAPI {
   command: (name: string, params?: unknown) => Promise<unknown>
   /** Subscribe to this window's profile being relabelled. Returns unsubscribe. */
   onProfileRenamed: (callback: (label: string) => void) => () => void
+  /** Subscribe to this window's profile theme color changing (a hex, or null
+   * when cleared). Returns unsubscribe. */
+  onProfileThemeChanged: (callback: (color: string | null) => void) => () => void
   /** Subscribe to the profile set changing (Settings window). Returns unsubscribe. */
   onProfilesChanged: (callback: () => void) => () => void
   /** Subscribe to the web-permission grant log changing (Settings). Returns unsubscribe. */
@@ -69,6 +72,14 @@ export interface MiraAPI {
   onTabsChanged: (callback: (state: TabsState) => void) => () => void
   /** Subscribe to the "focus the address bar" push (new tab opened). Returns unsubscribe. */
   onFocusAddressBar: (callback: () => void) => () => void
+  /** Subscribe to the "show the find bar" push (Cmd+F / find-open). Returns
+   * unsubscribe. */
+  onFindOpen: (callback: () => void) => () => void
+  /** Subscribe to the current search's match tally ("n/m" in the find bar).
+   * Returns unsubscribe. */
+  onFindResult: (
+    callback: (result: { matches: number; activeMatchOrdinal: number }) => void
+  ) => () => void
   /** Subscribe to the hovered-link URL in the active page (empty string on leave).
    * Returns unsubscribe. */
   onHoverUrl: (callback: (url: string) => void) => () => void

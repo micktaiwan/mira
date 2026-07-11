@@ -33,8 +33,11 @@ export interface TabInfo {
  * window, and collapse-or-show its tab panel. Every method acts on the window
  * the command targets (the IPC sender, or the focused window for the socket). */
 export interface TabsContext {
-  /** Open a new tab (loading `url`, or the home page) and focus it. */
-  newTab: (url?: string) => TabInfo
+  /** Open a new tab (loading `url`, or the home page) and focus it. When
+   * `background` is true the tab is appended WITHOUT becoming active: its page
+   * loads hidden and the window is not brought to the foreground — the path for a
+   * socket/MCP caller spinning up a tab to drive (CDP / exec-js) unobtrusively. */
+  newTab: (url?: string, background?: boolean) => TabInfo
   /** Close a tab. Closing the last one leaves the window empty but open (the
    * window never closes here). Throws on an unknown id. */
   closeTab: (id: string) => { closed: boolean }
@@ -86,6 +89,8 @@ export interface TabsContext {
 
 export interface NewTabParams {
   url?: string
+  /** Open the tab hidden without switching to it or foregrounding the window. */
+  background?: boolean
 }
 
 export interface TabIdParams {
@@ -103,12 +108,15 @@ export interface ToggleTabsPanelParams {
 
 export const tabsCommands: CommandMap<CommandContext> = {
   'new-tab': (ctx, params) => {
-    const { url } = (params ?? {}) as Partial<NewTabParams>
+    const { url, background } = (params ?? {}) as Partial<NewTabParams>
     if (url !== undefined && typeof url !== 'string') {
       return { ok: false, error: '"url" must be a string' }
     }
+    if (background !== undefined && typeof background !== 'boolean') {
+      return { ok: false, error: '"background" must be a boolean' }
+    }
     try {
-      const tab = ctx.newTab(url?.trim() || undefined)
+      const tab = ctx.newTab(url?.trim() || undefined, background === true)
       return { ok: true, ...tab }
     } catch (error) {
       return fail(error)

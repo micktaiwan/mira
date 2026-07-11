@@ -19,6 +19,12 @@ export interface LlmConfig {
   apiKey?: string
   /** Optional model override. Empty → the provider's own default. */
   model?: string
+  /** Only 'claude-cli': load the user's MCP servers into each call. Off by default
+   * (and absent = off) because a full session boots every configured MCP server
+   * (~35k tokens + connection latency) and could even fire a tool mid-answer — a
+   * page chat needs none of that. Off → the CLI runs with --strict-mcp-config (zero
+   * servers). Ignored by the API / extractive providers. */
+  loadMcp?: boolean
 }
 
 /** Default model for the Anthropic API path (a fast, cheap summarizer). The CLI
@@ -27,6 +33,24 @@ export const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5-20251001'
 
 /** The set of valid providers, so settings / commands can validate input. */
 export const LLM_PROVIDERS: readonly LlmProvider[] = ['claude-cli', 'anthropic-api', 'extractive']
+
+/** One selectable model in the chat's options bar. `model` is the argv/API string
+ * ('' = let the provider/subscription pick its own default); `id`/`label` are for
+ * the UI. Kept here (pure) so the pane and the CLI/API paths agree on the set. */
+export interface ModelChoice {
+  id: string
+  label: string
+  model: string
+}
+
+/** The models the pane's options bar offers. "Default" ('') leaves the model unset,
+ * so claude-cli uses the subscription default and the API uses DEFAULT_ANTHROPIC_MODEL. */
+export const MODEL_CHOICES: readonly ModelChoice[] = [
+  { id: 'default', label: 'Default', model: '' },
+  { id: 'haiku', label: 'Haiku', model: 'claude-haiku-4-5-20251001' },
+  { id: 'sonnet', label: 'Sonnet', model: 'claude-sonnet-5' },
+  { id: 'opus', label: 'Opus', model: 'claude-opus-4-8' }
+]
 
 /** Combine a skill's system prompt and the extracted page text into one prompt
  * string. Used by the CLI path (which has no separate system role) and anywhere a
@@ -85,6 +109,17 @@ export function parseAnthropicResponse(json: unknown): string {
  * fed on stdin (not argv) to sidestep shell escaping and arg-length limits. Pure. */
 export function buildClaudeCliArgs(config: LlmConfig): string[] {
   const args = ['-p']
+  // Not agent mode (the default): lock `claude -p` down to a pure chat about the
+  // page. `claude -p` is the full Claude Code AGENT — it will otherwise use Bash,
+  // WebFetch, MCP servers, etc. and try to *act* (run nc against Mira's socket,
+  // drive chrome-devtools…) when asked to "control the page". Two clamps:
+  //   --strict-mcp-config (no --mcp-config) → ZERO MCP servers (also cuts the
+  //       full-session boot cost/latency).
+  //   --tools "" → disable the whole built-in tool set, so it can only answer.
+  //   --append-system-prompt → stop the phantom tool-call markup it emits anyway.
+  if (!config.loadMcp) {
+    args.push('--strict-mcp-config', '--tools', '', '--append-system-prompt', CHAT_NO_AGENCY_PROMPT)
+  }
   if (config.model && config.model.trim() !== '') args.push('--model', config.model.trim())
   return args
 }
@@ -101,31 +136,77 @@ export interface ChatMessage {
   text: string
 }
 
-/** Base instruction for the free-form page chat. The current page's extracted
- * text is appended (when there is one) so answers can draw on what the user is
- * looking at. */
-export const CHAT_SYSTEM_PROMPT =
-  "You are a helpful assistant embedded in a web browser. Answer the user's " +
-  'questions clearly and concisely. When page content is provided below, use it ' +
-  'as the context for the conversation.'
-
-/** The system prompt for a chat turn: the base instruction plus the current
- * page's text as context (omitted when the page yields nothing). Pure. */
-export function chatSystemPrompt(pageText: string): string {
-  const t = pageText.trim()
-  return t === '' ? CHAT_SYSTEM_PROMPT : `${CHAT_SYSTEM_PROMPT}\n\n---\n\nPage content:\n\n${t}`
+/** What the assistant knows about the page a chat turn is about: its URL, its
+ * extracted text, and — ONLY when the user explicitly asks (the 📷 button) — a
+ * screenshot (a PNG data URL). Assembled by run-prompt from the native edges
+ * (activeUrl / extractText / capturePage). */
+export interface PageContext {
+  url: string
+  text: string
+  /** A PNG `data:` URL screenshot, present only when the user attached one for
+   * this turn. Vision providers (anthropic-api, claude-cli via stream-json) send
+   * it as an image; the extractive path ignores it. Never sent automatically. */
+  screenshot?: string
 }
 
-/** The Anthropic Messages API request for a chat turn: the page context is the
- * `system`, the whole thread is the `messages` array. Pure. */
+/** Base instruction for the free-form page chat. The current page's URL and text
+ * are appended so answers can draw on what the user is looking at. */
+export const CHAT_SYSTEM_PROMPT =
+  "You are a helpful assistant embedded in a web browser. Answer the user's " +
+  'questions clearly and concisely. Use the current page (its URL and its text) ' +
+  'as the context for the conversation.'
+
+/** Appended to `claude -p`'s own system prompt in non-agent (pure chat) mode.
+ * `--tools ""` already blocks tool EXECUTION, but `claude -p` is still Claude Code
+ * under the hood: when asked to act it otherwise emits phantom tool-call markup and
+ * hallucinates a result. This tells it plainly it has no tools, so it just answers
+ * (or says it can't) instead. Verified: turns "<function_calls>…Glob…" + a made-up
+ * answer into "I don't have access to tools, so I can't do that." */
+export const CHAT_NO_AGENCY_PROMPT =
+  'You are a chat assistant embedded in a web browser, with NO tools and NO ability ' +
+  'to run commands or take any action. You cannot access the filesystem, the network, ' +
+  'or control the browser. Answer only from the conversation and the provided page ' +
+  'context; if asked to do something you cannot, say so plainly in one sentence.'
+
+/** The system prompt for a chat turn: the base instruction plus the current
+ * page's URL and text as context (each omitted when absent). Pure. */
+export function chatSystemPrompt(url: string, pageText: string): string {
+  const parts = [CHAT_SYSTEM_PROMPT]
+  if (url.trim() !== '') parts.push(`Current page URL: ${url.trim()}`)
+  const t = pageText.trim()
+  if (t !== '') parts.push(`Page content:\n\n${t}`)
+  return parts.join('\n\n---\n\n')
+}
+
+/** Split a `data:<media-type>;base64,<data>` URL into its parts, or null if it is
+ * not a base64 data URL. Pure. */
+export function parseDataUrl(dataUrl: string): { mediaType: string; data: string } | null {
+  const m = /^data:([^;,]+);base64,(.*)$/s.exec(dataUrl.trim())
+  return m ? { mediaType: m[1], data: m[2] } : null
+}
+
+/** An Anthropic image content block from a data URL, or null if it can't parse. */
+function imageBlock(screenshot: string): Record<string, unknown> | null {
+  const img = parseDataUrl(screenshot)
+  return img
+    ? { type: 'image', source: { type: 'base64', media_type: img.mediaType, data: img.data } }
+    : null
+}
+
+/** The Anthropic Messages API request for a chat turn: the page URL/text is the
+ * `system`, the whole thread is the `messages` array. When a screenshot is given,
+ * it rides as an image block on the LAST (user) turn so the model can see the
+ * page (e.g. a map). Pure. */
 export function buildAnthropicChatRequest(
   config: LlmConfig,
   systemPrompt: string,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  screenshot?: string
 ): { url: string; headers: Record<string, string>; body: Record<string, unknown> } {
   if (!config.apiKey || config.apiKey.trim() === '') {
     throw new Error('Anthropic API key is not set (Settings → AI)')
   }
+  const img = screenshot ? imageBlock(screenshot) : null
   return {
     url: 'https://api.anthropic.com/v1/messages',
     headers: {
@@ -137,7 +218,13 @@ export function buildAnthropicChatRequest(
       model: config.model?.trim() || DEFAULT_ANTHROPIC_MODEL,
       max_tokens: 1024,
       system: systemPrompt,
-      messages: messages.map((m) => ({ role: m.role, content: m.text }))
+      messages: messages.map((m, i) => {
+        // Attach the screenshot to the last user turn (the current question).
+        if (img && m.role === 'user' && i === messages.length - 1) {
+          return { role: m.role, content: [img, { type: 'text', text: m.text }] }
+        }
+        return { role: m.role, content: m.text }
+      })
     }
   }
 }
@@ -150,4 +237,71 @@ export function composeChatPrompt(systemPrompt: string, messages: ChatMessage[])
     .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.text.trim()}`)
     .join('\n\n')
   return `${systemPrompt.trim()}\n\n---\n\n${transcript}\n\nAssistant:`
+}
+
+// --- CLI stream-json (image-capable) ------------------------------------------
+// Plain `claude -p "<text>"` can't take an image. `claude -p --input-format
+// stream-json` accepts a user message whose `content` is a block array — text +
+// an image block, exactly like the API — so the CLI (Mickael's subscription) can
+// see a screenshot too. Used ONLY when a screenshot is attached; the text-only
+// chat stays on the simpler plain-text path.
+
+/** argv for the stream-json CLI call. --verbose is required by the CLI alongside
+ * --output-format=stream-json. Pure. */
+export function buildClaudeStreamArgs(config: LlmConfig): string[] {
+  const args = [
+    '-p',
+    '--input-format',
+    'stream-json',
+    '--output-format',
+    'stream-json',
+    '--verbose'
+  ]
+  // Same lock-down as the plain path (see buildClaudeCliArgs): no MCP, no tools,
+  // no phantom agency.
+  if (!config.loadMcp) {
+    args.push('--strict-mcp-config', '--tools', '', '--append-system-prompt', CHAT_NO_AGENCY_PROMPT)
+  }
+  if (config.model && config.model.trim() !== '') args.push('--model', config.model.trim())
+  return args
+}
+
+/** The single stdin line for the stream-json CLI call: one user message whose
+ * content is the composed transcript plus the screenshot as an image block. The
+ * whole conversation folds into this one text block (the input stream only takes
+ * user messages, so assistant turns can't be replayed as roles). Pure. */
+export function buildClaudeStreamInput(
+  systemPrompt: string,
+  messages: ChatMessage[],
+  screenshot: string
+): string {
+  const text = composeChatPrompt(systemPrompt, messages)
+  const img = imageBlock(screenshot)
+  const content = img ? [img, { type: 'text', text }] : [{ type: 'text', text }]
+  return JSON.stringify({ type: 'user', message: { role: 'user', content } }) + '\n'
+}
+
+/** Pull the answer out of the CLI's stream-json stdout: NDJSON where the final
+ * `{"type":"result"}` line carries the text in `result`. Throws on an error
+ * result or when no result line is present. Pure. */
+export function parseClaudeStreamResult(stdout: string): string {
+  type ResultLine = { type?: string; subtype?: string; is_error?: boolean; result?: string }
+  let result: ResultLine | null = null
+  for (const line of stdout.split('\n')) {
+    const trimmed = line.trim()
+    if (trimmed === '') continue
+    try {
+      const obj = JSON.parse(trimmed) as ResultLine
+      if (obj.type === 'result') result = obj
+    } catch {
+      // Non-JSON lines (rare) are ignored — only the result line matters.
+    }
+  }
+  if (!result) throw new Error('claude CLI returned no result')
+  if (result.is_error || result.subtype !== 'success') {
+    throw new Error(result.result?.trim() || 'claude CLI error')
+  }
+  const text = (result.result ?? '').trim()
+  if (text === '') throw new Error('claude CLI returned no output')
+  return text
 }

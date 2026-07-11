@@ -71,6 +71,7 @@ export function normalizeLlm(raw: unknown): LlmConfig {
   const config: LlmConfig = { provider }
   if (typeof v.apiKey === 'string' && v.apiKey.trim() !== '') config.apiKey = v.apiKey.trim()
   if (typeof v.model === 'string' && v.model.trim() !== '') config.model = v.model.trim()
+  if (typeof v.loadMcp === 'boolean') config.loadMcp = v.loadMcp
   return config
 }
 

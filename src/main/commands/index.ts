@@ -14,9 +14,12 @@
 
 import { buildRegistry, type CommandMap, type CommandRegistryOf } from './registry'
 import type { CommandContext } from './context'
+import { appCommands } from './app'
 import { bookmarksCommands } from './bookmarks'
 import { cookieCommands } from './cookies'
 import { devtoolsCommands } from './devtools'
+import { extensionsCommands } from './extensions'
+import { findCommands } from './find'
 import { historyCommands } from './history'
 import { navigationCommands } from './navigation'
 import { paletteCommands } from './palette'
@@ -25,6 +28,7 @@ import { permissionCommands } from './permissions'
 import { profileCommands } from './profiles'
 import { settingsCommands } from './settings'
 import { skillsCommands } from './skills'
+import { spacesCommands } from './spaces'
 import { statusCommands } from './status'
 import { tabsCommands } from './tabs'
 import { tooltipCommands } from './tooltip'
@@ -32,10 +36,14 @@ import { tooltipCommands } from './tooltip'
 // Public types, re-exported so consumers keep importing from './commands'.
 export type { CommandContext } from './context'
 export type { NavigableContents, ProfileInfo, CommandResult, CommandHandler } from './registry'
+export type { AppContext } from './app'
 export type { BookmarkContext } from './bookmarks'
 export type { BookmarkNode, BookmarkUrl, BookmarkFolder, BookmarkTree } from '../bookmark-store'
 export type { CookieContext, CookieSink, ImportCookiesParams } from './cookies'
 export type { DevtoolsContext } from './devtools'
+export type { ExtensionsContext, ExtensionInfo } from './extensions'
+export { toExtensionInfo } from './extensions'
+export type { FindContext, FindStopAction } from './find'
 export type { HistoryContext } from './history'
 export type { HistoryEntry } from '../history-store'
 export type { NavContext } from './navigation'
@@ -50,6 +58,8 @@ export type { ProfileContext } from './profiles'
 export type { SettingsContext } from './settings'
 export type { SkillsContext } from './skills'
 export type { Skill, SkillSource, SkillSink, SkillMatch } from '../skills'
+export type { SpacesContext, SpacesState } from './spaces'
+export type { DisplaySpaces, SpaceEntry, SpaceLocation } from '../spaces'
 export type { StatusContext, MemoryUsage, TabCounts } from './status'
 export type { TabsContext, TabInfo, TabKind } from './tabs'
 export type { TooltipContext } from './tooltip'
@@ -58,9 +68,12 @@ export type CommandRegistry = CommandRegistryOf<CommandContext>
 
 export function createCommandRegistry(): CommandRegistry {
   const commands: CommandMap<CommandContext> = {
+    ...appCommands,
     ...bookmarksCommands,
     ...cookieCommands,
     ...devtoolsCommands,
+    ...extensionsCommands,
+    ...findCommands,
     ...historyCommands,
     ...navigationCommands,
     ...paletteCommands,
@@ -69,6 +82,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...profileCommands,
     ...settingsCommands,
     ...skillsCommands,
+    ...spacesCommands,
     ...statusCommands,
     ...tabsCommands,
     ...tooltipCommands

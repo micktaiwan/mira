@@ -7,7 +7,38 @@ describe('open-settings', () => {
     const { ctx, settingsOpened } = makeContext()
     const registry = createCommandRegistry()
     expect(registry.execute('open-settings', {}, ctx)).toEqual({ ok: true })
-    expect(settingsOpened).toEqual([true])
+    expect(settingsOpened).toEqual([null])
+  })
+
+  it('passes the requested section through to the context', () => {
+    const { ctx, settingsOpened, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('open-settings', { section: 'extensions' }, ctx)).toEqual({ ok: true })
+    expect(settingsOpened).toEqual(['extensions'])
+    // The section travels in the settings tab's url (the chrome derives the
+    // shown panel from it).
+    const settings = tabState().tabs.find((t) => t.title === 'Settings')
+    expect(settings?.url).toBe('mira://settings/extensions')
+  })
+
+  it('re-points an already-open settings tab at the new section', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('open-settings', {}, ctx)
+    registry.execute('open-settings', { section: 'extensions' }, ctx)
+    const tabs = tabState().tabs.filter((t) => t.title === 'Settings')
+    expect(tabs).toHaveLength(1)
+    expect(tabs[0].url).toBe('mira://settings/extensions')
+  })
+
+  it('rejects a non-string section', () => {
+    const { ctx, settingsOpened } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('open-settings', { section: 42 }, ctx)).toEqual({
+      ok: false,
+      error: '"section" must be a string'
+    })
+    expect(settingsOpened).toEqual([])
   })
 })
 

@@ -14,6 +14,7 @@ export interface PaletteEntry {
   params?: Record<string, unknown>
   keywords?: string
   url?: string
+  shortcut?: string
 }
 
 /** How the palette was opened, which sets the DEFAULT target of a page pick:
@@ -34,6 +35,17 @@ interface Props {
 /** In address mode the palette is an address bar: only navigation targets belong
  * (history / favorites / open tabs), not commands or profile switches. */
 const ADDRESS_GROUPS = new Set<PaletteEntry['group']>(['History', 'Bookmarks', 'Tabs'])
+
+/** Leading glyph per group — pure decoration; the color accent comes from CSS
+ * keyed on the row's data-group attribute. */
+const GROUP_ICONS: Record<PaletteEntry['group'], string> = {
+  Skills: '✦',
+  Commands: '⌘',
+  Tabs: '▢',
+  Bookmarks: '★',
+  History: '↺',
+  Profiles: '◉'
+}
 
 /** The synthetic top row in address mode: "open exactly what you typed". Its url
  * is the raw query; `navigate` normalizes it (a bare domain → https, otherwise a
@@ -201,14 +213,19 @@ function CommandPalette({ onClose, mode, initialQuery }: Props): React.JSX.Eleme
                 ref={i === active ? selectedRef : undefined}
                 type="button"
                 className={`palette-row${i === active ? ' selected' : ''}`}
+                data-group={entry.group.toLowerCase()}
                 // Hover selects, so mouse and keyboard share one highlight.
                 onMouseMove={() => setSelected(i)}
                 onClick={(e) => runEntry(entry, e.metaKey)}
               >
+                <span className="palette-icon" aria-hidden="true">
+                  {entry.id === 'address:go' ? '↵' : GROUP_ICONS[entry.group]}
+                </span>
                 <span className="palette-row-main">
                   <span className="palette-title">{entry.title}</span>
                   {entry.subtitle && <span className="palette-subtitle">{entry.subtitle}</span>}
                 </span>
+                {entry.shortcut && <span className="palette-shortcut">{entry.shortcut}</span>}
                 <span className="palette-group-tag">
                   {entry.id === 'address:go' ? '↵' : entry.group}
                 </span>

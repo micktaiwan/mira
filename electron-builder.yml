@@ -18,6 +18,9 @@ files:
 extraResources:
   - from: native/mira-location/build/Release/mira_location.node
     to: mira_location.node
+  # Same deal for the Spaces addon (macOS virtual desktops, see src/main/spaces.ts).
+  - from: native/mira-spaces/build/Release/mira_spaces.node
+    to: mira_spaces.node
 asarUnpack:
   - resources/**
 win:

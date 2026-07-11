@@ -13,18 +13,25 @@
 import { randomUUID } from 'crypto'
 import { spawn } from 'child_process'
 import {
+  app,
   BrowserWindow,
   Menu,
+  MenuItem,
   WebContentsView,
+  clipboard,
   screen,
   session,
   shell,
   type MenuItemConstructorOptions,
+  type Session,
   type WebContents
 } from 'electron'
+import { CHROME_PARTITION } from './chrome-session'
+import type { ExtensionsService } from './extensions'
 import type {
   BookmarkNode,
   CommandContext,
+  FindStopAction,
   MemoryUsage,
   PaletteMode,
   ProfileInfo,
@@ -33,16 +40,21 @@ import type {
 } from './commands'
 import { closedSkillPane, formatMemory } from './commands'
 import { homePageUrl, isMiraHomeUrl, type HomeStats } from './home-doc'
+import { errorPageUrl, isMiraErrorUrl } from './error-doc'
 import {
   buildAnthropicRequest,
   buildAnthropicChatRequest,
   parseAnthropicResponse,
   buildClaudeCliArgs,
+  buildClaudeStreamArgs,
+  buildClaudeStreamInput,
+  parseClaudeStreamResult,
   composePrompt,
   composeChatPrompt,
   chatSystemPrompt,
   type LlmConfig,
-  type ChatMessage
+  type ChatMessage,
+  type PageContext
 } from './llm'
 import {
   type BookmarkTree,
@@ -60,6 +72,7 @@ import {
   partitionForId,
   addProfile,
   renameProfile,
+  setProfileColor as setProfileColorPure,
   findById,
   nextProfileLabel
 } from './profile-store'
@@ -69,6 +82,7 @@ import {
   emptyTabState,
   addTab,
   addTabAfter,
+  addTabInactive,
   selectTab as selectTabPure,
   closeTab as closeTabPure,
   moveTab as moveTabPure,
@@ -102,14 +116,23 @@ import { clientRectToScreen, tooltipBounds, type TooltipRect, type Size } from '
 import { buildPageMenu } from './page-menu'
 import { dockRight } from './devtools-layout'
 import { decideWindowOpen } from './window-open'
+import { installHoverReporter, reduceHover, hoverText, EMPTY_HOVER, type HoverEvent } from './hover'
+import { evalInWebContents } from './cdp-eval'
 import {
-  installHoverReporter,
-  reduceHover,
-  hoverText,
-  EMPTY_HOVER,
-  type HoverEvent
-} from './hover'
+  enterFullScreen,
+  panelChanged,
+  exitFullScreen,
+  type FullScreenEpisode
+} from './html-fullscreen'
 import { decideLocationAction, locationSettingsUrl } from './geolocation'
+import {
+  windowSpaceLocation,
+  resolveTargetSpaceId,
+  parseWindowNumber,
+  userSpaceIds,
+  type SpaceLocation
+} from './spaces'
+import { spacesLayout, windowSpaces, moveWindowToSpace } from './mac-spaces'
 import { locationAuthStatus, requestLocationAuthorization } from './mac-location'
 import { extractionScript, extractiveSummary, type SkillSource } from './skills'
 import { TOOLTIP_URL, measureScript } from './tooltip-doc'
@@ -190,6 +213,10 @@ interface ProfileWindow {
    * the web view — layout() shrinks the view's WIDTH by skillPaneWidth while it is
    * open, so the pane sits beside the page (no piège #3). Closed by default. */
   skillPane: SkillPaneState
+  /** Remembered find-in-page text (Cmd+F): the query of the current search on
+   * this window, so find-next / find-previous can step it without the chrome
+   * resending the text. '' = no active search; cleared by stopFindInPage. */
+  findText: string
   /** Pending debounced strip push (see schedulePush): page events (title /
    * favicon) fire in bursts, so we coalesce them into one IPC push instead of
    * re-serializing + re-rendering the sidebar on every one. null when idle. */
@@ -210,6 +237,18 @@ interface ProfileWindow {
   /** Bumped on every show/hide so a slow async measure from a stale hover can
    * detect it lost the race and bail instead of flashing an old bubble. */
   tooltipSeq: number
+  /** Live HTML fullscreen episode (a video fullscreened inside the active tab's
+   * page), or null. While set, both side panels are hidden and layout() gives the
+   * fullscreen tab the WHOLE window (Chromium only fills the view's own bounds —
+   * piège #1 territory). Panels are put back on exit; a panel toggled DURING the
+   * episode keeps its new state instead (see html-fullscreen.ts). */
+  htmlFullScreen: FullScreenEpisode | null
+  /** True once the window's saved tabs have been restored (or its first tab
+   * opened). Until then the live tab state is EMPTY — restore is async, gated on
+   * the extension load — so a saveSession fired by an early window event (the
+   * setBounds resize, first focus, an early close) must not snapshot it: that
+   * would overwrite the persisted strip with nothing. See saveSession. */
+  restored: boolean
 }
 
 export interface ProfileManagerDeps {
@@ -263,6 +302,10 @@ export interface ProfileManagerDeps {
   /** App-wide memory footprint (all Electron processes). Owned by index.ts,
    * which has `app`; exposed on the context so `get-status` stays pilotable. */
   getMemoryUsage: () => MemoryUsage
+  /** Chrome-extensions support: one extension system per profile session (D2,
+   * extensions-plan.md). Owned by index.ts (which persists the sideload
+   * registry); the manager wires it to windows/tabs and the command context. */
+  extensions: ExtensionsService
   /** Called when the set of profiles, their labels, or the focused one changes,
    * so the app menu can be rebuilt. */
   onChange?: () => void
@@ -331,6 +374,12 @@ export class ProfileManager {
    * the close path tell the two apart: a user close marks the profile not-open
    * (so it won't reopen), a quit leaves the open flag alone (so it will). */
   private quitting = false
+  /** True only while openSavedProfiles() recreates the windows of the previous
+   * session. Windows created then are put back on their saved virtual desktop;
+   * a window opened later (user action) opens on the CURRENT desktop instead —
+   * teleporting a window the user just asked for would read as "nothing
+   * happened". Its saved spaceIndex is refreshed by the next focus/close. */
+  private restoringStartup = false
 
   constructor(private readonly deps: ProfileManagerDeps) {
     this.profiles = deps.initialProfiles
@@ -349,14 +398,22 @@ export class ProfileManager {
   /** Reopen, at startup, exactly the set of profile windows that were open when
    * Mira last quit (one window per open profile, see PersistedWindow.open). Skips
    * unknown ids (a session for a profile since deleted). Falls back to the default
-   * profile when none is marked open — e.g. a first launch, or a fresh install. */
+   * profile when none is marked open — e.g. a first launch, or a fresh install.
+   * Only THIS path restores each window's virtual desktop: it recreates a world
+   * the user left, whereas a later explicit open must land on the desktop the
+   * user is looking at (see restoringStartup / create()). */
   openSavedProfiles(): void {
-    const toOpen = this.profiles.filter((p) => this.sessions[p.id]?.open === true)
-    if (toOpen.length === 0) {
-      this.openProfile(DEFAULT_PROFILE_ID)
-      return
+    this.restoringStartup = true
+    try {
+      const toOpen = this.profiles.filter((p) => this.sessions[p.id]?.open === true)
+      if (toOpen.length === 0) {
+        this.openProfile(DEFAULT_PROFILE_ID)
+        return
+      }
+      for (const p of toOpen) this.openProfile(p.id)
+    } finally {
+      this.restoringStartup = false
     }
-    for (const p of toOpen) this.openProfile(p.id)
   }
 
   /** Mark that the app is quitting, so windows closing during shutdown keep their
@@ -432,6 +489,26 @@ export class ProfileManager {
     return { id: updated.id, label: updated.label }
   }
 
+  /** Set (a hex) or clear (null) a profile's theme color, persist it, and
+   * live-push the new tint to that profile's open window: the chrome read its
+   * color once from the URL at load, so a change needs a push to re-tint. */
+  setProfileColor(id: string, color: string | null): ProfileInfo {
+    this.profiles = setProfileColorPure(this.profiles, id, color)
+    this.deps.persist(this.profiles)
+    const updated = findById(this.profiles, id)!
+    const open = this.openById.get(id)
+    if (open && !open.window.isDestroyed()) {
+      open.window.webContents.send('mira:profile-theme', updated.color ?? null)
+    }
+    // Other windows' open Settings tabs refetch so their swatches stay in sync.
+    this.broadcastProfilesChanged()
+    return {
+      id: updated.id,
+      label: updated.label,
+      ...(updated.color ? { color: updated.color } : {})
+    }
+  }
+
   /** Ping every open window's chrome that the profile set / labels changed, so an
    * open Settings tab refetches its list. The Settings surface now lives inside
    * each profile window (a tab), not a dedicated window, so the push must fan out
@@ -475,7 +552,11 @@ export class ProfileManager {
       ...(this.deps.icon ? { icon: this.deps.icon } : {}),
       webPreferences: {
         preload: this.deps.preloadPath,
-        sandbox: false
+        sandbox: false,
+        // The chrome gets its OWN session so profile extensions (loaded in the
+        // default session for the default profile) can never inject content
+        // scripts into Mira's UI (see chrome-session.ts).
+        partition: CHROME_PARTITION
       }
     })
     // Position via setBounds AFTER creation (show:false means it lands before the
@@ -485,6 +566,18 @@ export class ProfileManager {
     if (bounds) {
       window.setBounds({ x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height })
       if (bounds.fullScreen) {
+        // Same display staleness as the maximize path below: a fullscreen window
+        // can be moved to another monitor via Mission Control without its normal
+        // rect ever following, so fullscreening where the rect sits can pick the
+        // WRONG monitor. Snap onto the saved display first when they disagree.
+        const target = displays.find((d) => d.id === bounds.displayId)
+        const current = screen.getDisplayMatching({
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height
+        })
+        if (target && target.id !== current.id) window.setBounds(target.workArea)
         window.setFullScreen(true)
       } else if (bounds.maximized) {
         // macOS maximize() targets whichever display the window currently overlaps.
@@ -504,6 +597,17 @@ export class ProfileManager {
         window.setBounds(target.workArea)
         window.maximize()
       }
+      // Virtual desktop: x/y restore WHERE on screen, not WHICH desktop — every
+      // Space shares the same coordinates, so without this every window reopens
+      // on the current desktop. Move it back now (the window server already
+      // tracks the hidden window) and again at first show, in case the hidden
+      // move was ignored. Skipped for fullscreen (it owns a private Space), and
+      // only at startup restore — an explicitly opened window belongs on the
+      // desktop the user is looking at.
+      if (this.restoringStartup && !bounds.fullScreen && bounds.spaceIndex !== undefined) {
+        this.applySavedSpace(window, bounds)
+        window.once('show', () => this.applySavedSpace(window, bounds))
+      }
     }
     const profileWindow: ProfileWindow = {
       window,
@@ -517,12 +621,15 @@ export class ProfileManager {
       closedTabs: [],
       paletteOpen: false,
       skillPane: closedSkillPane(),
+      findText: '',
       pushTimer: null,
       layoutThrottled: false,
       layoutPending: false,
       tooltip: null,
       tooltipReady: Promise.resolve(),
-      tooltipSeq: 0
+      tooltipSeq: 0,
+      htmlFullScreen: null,
+      restored: false
     }
     this.openById.set(profile.id, profileWindow)
     // Pre-warm the transparent tooltip overlay so the first hover has no latency.
@@ -550,6 +657,11 @@ export class ProfileManager {
     // Track focus so the menu's active-profile checkmark stays in sync — but only
     // rebuild when focus moves to a DIFFERENT profile (skip plain re-focus).
     window.on('focus', () => {
+      // Also re-snapshot geometry: dragging a window to another virtual desktop
+      // in Mission Control fires no move/resize event (same coordinates on every
+      // Space), so the Space capture would otherwise wait until close. Focusing
+      // the window on its new desktop is the earliest reliable signal.
+      this.saveSession(profileWindow)
       if (this.menuFocusId === profileWindow.id) return
       this.menuFocusId = profileWindow.id
       this.deps.onChange?.()
@@ -582,14 +694,95 @@ export class ProfileManager {
 
     this.deps.loadRenderer(window, profile)
 
-    // Reopen the profile's saved tabs, or start on the home page if none.
-    const saved = this.sessions[profile.id]
-    if (saved && saved.tabs.length > 0) {
-      this.restoreSession(profileWindow, saved)
-    } else {
-      this.newTabIn(profileWindow, this.appSettings.homeUrl)
-    }
+    // Extensions: register this profile's session with the extension system NOW
+    // (synchronous — the instance wires its preload into the session, so it must
+    // exist before any page loads), then load its installed extensions BEFORE
+    // restoring tabs: a tab persisted on a chrome-extension:// page must find
+    // its extension registered, else it restores to ERR_FAILED
+    // (extensions-plan.md §4.5). The restore itself waits on that load.
+    this.initExtensions(profileWindow)
+      .catch((error) => console.error('[mira] failed to load extensions', error))
+      .then(() => {
+        if (profileWindow.window.isDestroyed()) return
+        // Reopen the profile's saved tabs, or start on the home page if none.
+        const saved = this.sessions[profile.id]
+        if (saved && saved.tabs.length > 0) {
+          this.restoreSession(profileWindow, saved)
+        } else {
+          this.newTabIn(profileWindow, this.appSettings.homeUrl)
+        }
+        // Only from here on may saveSession snapshot the live tab state.
+        profileWindow.restored = true
+      })
     return profileWindow
+  }
+
+  /** The Electron session behind a profile id. The default profile uses the
+   * default session explicitly — partitionForId returns undefined for it, and
+   * fromPartition(String(undefined)) would silently create an in-memory
+   * partition (see extensions-plan.md §4.1). */
+  private sessionFor(id: string): Session {
+    const partition = partitionForId(id)
+    return partition ? session.fromPartition(partition) : session.defaultSession
+  }
+
+  /** Create the extension system for this profile's session (idempotent) with
+   * hooks that route chrome.tabs calls onto OUR tab strip, then load the
+   * profile's installed extensions. Returns the loading promise so create() can
+   * order the session restore after it. */
+  private initExtensions(pw: ProfileWindow): Promise<void> {
+    const ses = this.sessionFor(pw.id)
+    const profileId = pw.id
+    // Hooks resolve the profile's CURRENT window at call time (not `pw`): the
+    // extension system outlives the window (sessions are never destroyed), so a
+    // background script can call chrome.tabs.create after a close/reopen cycle.
+    const live = (): ProfileWindow | null => {
+      const target = this.openById.get(profileId)
+      return target && !target.window.isDestroyed() ? target : null
+    }
+    this.deps.extensions.ensureFor(ses, {
+      createTab: async ({ url }) => {
+        const target = live()
+        if (!target) throw new Error('profile window is closed')
+        const tab = this.newTabIn(target, url ?? this.appSettings.homeUrl)
+        const view = target.views.get(tab.id)
+        if (!view) throw new Error('tab failed to materialize')
+        return [view.webContents, target.window]
+      },
+      selectTab: (wc) => {
+        const target = live()
+        const id = target ? this.tabIdForWebContents(target, wc) : null
+        if (target && id) this.selectTabIn(target, id)
+      },
+      removeTab: (wc) => {
+        const target = live()
+        const id = target ? this.tabIdForWebContents(target, wc) : null
+        if (target && id) this.closeTabIn(target, id)
+      }
+    })
+    // Web Store support first — it also loads the profile's store-installed
+    // extensions — then the sideloads recorded outside the store dir.
+    return this.deps.extensions
+      .installWebStore(ses, profileId)
+      .then(() => this.deps.extensions.loadInstalled(ses, profileId))
+  }
+
+  /** The tab id owning `wc` in this window, or null (e.g. a popup's contents). */
+  private tabIdForWebContents(pw: ProfileWindow, wc: WebContents): string | null {
+    for (const [id, view] of pw.views) {
+      if (view.webContents === wc) return id
+    }
+    return null
+  }
+
+  /** Tell the extension system which tab is active now (chrome.tabs.onActivated
+   * & friends). Called from every path that changes `state.activeId` — a tab
+   * without a view (asleep / Settings) is simply not reported. */
+  private notifyExtensionsActiveTab(pw: ProfileWindow): void {
+    const id = pw.state.activeId
+    if (!id || id === pw.settingsTabId) return
+    const view = pw.views.get(id)
+    if (view) this.deps.extensions.selectTab(view.webContents)
   }
 
   /** Give a tab (already in the state list) its live WebContentsView and start
@@ -608,12 +801,21 @@ export class ProfileManager {
     // default check. Once per partition (guarded inside).
     this.ensurePermissionHandlers(partition)
     const view = new WebContentsView({
-      webPreferences: partition ? { partition } : {}
+      // nodeIntegrationInSubFrames: without it Electron runs preload scripts in
+      // the MAIN frame only, and the extension service-worker bridge (the frame
+      // preload registered in extensions.ts) exists precisely for chrome-extension://
+      // iframes NESTED in web pages — Kondo's ext.html (extensions-plan.md §8.11).
+      // Both session preloads (the lib's and ours) gate out of non-extension
+      // frames immediately, so the per-iframe cost is negligible.
+      webPreferences: { ...(partition ? { partition } : {}), nodeIntegrationInSubFrames: true }
     })
     pw.window.contentView.addChildView(view)
     pw.views.set(tab.id, view)
 
     this.wireView(pw, tab.id, view.webContents)
+    // Track the fresh tab for chrome.tabs — the extension system follows our
+    // strip (materializeTab is the ONE place a tab webContents is born).
+    this.deps.extensions.addTab(view.webContents, pw.window)
     // See create(): Cmd+Up/Down must fire even when this page holds focus.
     this.wireTabShortcuts(pw, view.webContents)
     // Right-click on the page → a NATIVE menu (a CSS popover would sit behind the
@@ -637,7 +839,9 @@ export class ProfileManager {
             parent: pw.window,
             width: 520,
             height: 640,
-            webPreferences: partition ? { partition } : {}
+            // Same flag as the tab views: extension iframes (password managers…)
+            // nested in a popup page need frame preloads too.
+            webPreferences: { ...(partition ? { partition } : {}), nodeIntegrationInSubFrames: true }
           }
         }
       }
@@ -673,19 +877,34 @@ export class ProfileManager {
   /** Create a new tab in `pw`, load `url`, focus it, re-layout and persist.
    * `focusChrome` (the command path: click / Cmd+T) hands keyboard focus to the
    * address bar instead of the page — see focusAddressBar. */
-  private newTabIn(pw: ProfileWindow, url: string, focusChrome = false, afterId?: string): TabMeta {
+  private newTabIn(
+    pw: ProfileWindow,
+    url: string,
+    focusChrome = false,
+    afterId?: string,
+    background = false
+  ): TabMeta {
     const tab: TabMeta = { id: randomUUID(), title: '', url, favicon: null }
     // A tab opened from a link (afterId set) slots in right under its opener; a
     // plain new tab (Cmd+T, socket) appends. When the opener is pinned, addTabAfter
     // lands the child at the head of the regular zone (first in the list).
-    pw.state = afterId ? addTabAfter(pw.state, tab, afterId) : addTab(pw.state, tab)
-    // The active tab changed: a pinned tab armed by Cmd+W is disarmed.
+    // background:true appends WITHOUT switching the active tab — the page loads
+    // hidden (layout only shows the active view) and the window stays where it is.
+    pw.state = background
+      ? addTabInactive(pw.state, tab)
+      : afterId
+        ? addTabAfter(pw.state, tab, afterId)
+        : addTab(pw.state, tab)
+    // The active tab may have changed: a pinned tab armed by Cmd+W is disarmed.
     pw.closeArmedId = null
     this.materializeTab(pw, tab)
+    // Only the foreground path changed the active tab; skip the extension notify
+    // (and any focusChrome) when opening in background so nothing steals focus.
+    if (!background) this.notifyExtensionsActiveTab(pw)
     this.layout(pw)
     this.pushTabs(pw)
     this.saveSession(pw)
-    if (focusChrome) {
+    if (focusChrome && !background) {
       const view = pw.views.get(tab.id)
       // The freshly loading page grabs keyboard focus when it commits (after
       // loadURL resolves), which steals it back from the address bar. Bounce it
@@ -701,12 +920,20 @@ export class ProfileManager {
   /** Open the internal Settings tab in `pw`, or select it if already open (one per
    * window). The tab carries no WebContentsView — layout() hides the web views
    * while it is active and the chrome renders <Settings/> in the body. Returns the
-   * tab id. Not focus-chrome: the settings panel is the chrome, so focus stays put. */
-  private openSettingsTabIn(pw: ProfileWindow): { id: string } {
+   * tab id. Not focus-chrome: the settings panel is the chrome, so focus stays put.
+   * The requested sub-section travels in the tab url (mira://settings/<section>);
+   * the chrome derives which panel tab to show from it. */
+  private openSettingsTabIn(pw: ProfileWindow, section?: string): { id: string } {
+    const url = section ? `${SETTINGS_URL}/${section}` : SETTINGS_URL
     if (pw.settingsTabId && pw.state.tabs.some((t) => t.id === pw.settingsTabId)) {
+      // Re-point the existing tab at the requested section (an explicit ask
+      // wins over whatever the panel was showing); no section = plain focus.
+      if (section) {
+        pw.state = updateTab(pw.state, pw.settingsTabId, { url })
+      }
       return this.selectTabIn(pw, pw.settingsTabId)
     }
-    const tab: TabMeta = { id: randomUUID(), title: 'Settings', url: SETTINGS_URL, favicon: null }
+    const tab: TabMeta = { id: randomUUID(), title: 'Settings', url, favicon: null }
     pw.state = addTab(pw.state, tab) // becomes active
     pw.closeArmedId = null
     pw.settingsTabId = tab.id
@@ -737,6 +964,7 @@ export class ProfileManager {
     if (activeTab) {
       pw.state = selectTabPure(pw.state, activeTab.id)
       this.materializeTab(pw, activeTab)
+      this.notifyExtensionsActiveTab(pw)
     }
     pw.panelCollapsed = saved.panelCollapsed
     this.layout(pw)
@@ -763,6 +991,18 @@ export class ProfileManager {
     // that window won't reopen next launch). Startup reads this to reopen exactly
     // the windows that were showing at quit.
     const open = opts?.open ?? true
+    // Before the async tab restore lands, the live strip is EMPTY — snapshotting
+    // it would wipe the saved tabs (an early resize/focus/close during a slow
+    // extension load). Refresh only geometry + openness on the saved entry.
+    if (!pw.restored) {
+      const prev = this.sessions[pw.id]
+      if (prev) {
+        const bounds = this.currentBounds(pw)
+        this.sessions[pw.id] = { ...prev, ...(bounds ? { bounds } : {}), open }
+        this.scheduleFlush()
+      }
+      return
+    }
     this.sessions[pw.id] = toPersisted(persistable, pw.panelCollapsed, this.currentBounds(pw), open)
     this.scheduleFlush()
   }
@@ -902,6 +1142,20 @@ export class ProfileManager {
     return { opened: true }
   }
 
+  /** Put a restored window back on the virtual desktop it was saved on: resolve
+   * the persisted index ("2nd desktop of display X") against the LIVE Spaces
+   * layout, then ask the window server to move the window there. Every step
+   * degrades to a no-op (no addon, display gone, desktop removed, already on
+   * the target desktop), so this is safe to call twice. */
+  private applySavedSpace(window: BrowserWindow, bounds: PersistedBounds): void {
+    if (bounds.spaceIndex === undefined) return
+    const wid = parseWindowNumber(window.getMediaSourceId())
+    if (wid === undefined) return
+    const target = resolveTargetSpaceId(spacesLayout(), bounds.displayId, bounds.spaceIndex)
+    if (target === undefined) return
+    moveWindowToSpace(wid, target)
+  }
+
   /** The window's live geometry, or its last saved geometry once it is destroyed
    * (the 'closed' path can no longer read the native window). Uses getNormalBounds
    * so a maximized/fullscreen window still records the rectangle to restore to. */
@@ -916,6 +1170,14 @@ export class ProfileManager {
     // window reopen on the monitor it was moved to (see create()'s maximize path).
     const b = pw.window.getNormalBounds()
     const display = screen.getDisplayMatching(pw.window.getBounds())
+    // Which virtual desktop (Space) the window is on. Undefined when the window
+    // server can't say (fullscreen — its own Space —, addon unavailable): then
+    // keep the LAST saved value rather than erase it, so a window that was on
+    // desktop 2 and got fullscreened still remembers desktop 2.
+    const wid = parseWindowNumber(pw.window.getMediaSourceId())
+    const location =
+      wid === undefined ? undefined : windowSpaceLocation(spacesLayout(), windowSpaces(wid))
+    const spaceIndex = location?.spaceIndex ?? this.sessions[pw.id]?.bounds?.spaceIndex
     return {
       x: b.x,
       y: b.y,
@@ -923,7 +1185,8 @@ export class ProfileManager {
       height: b.height,
       maximized: pw.window.isMaximized(),
       fullScreen: pw.window.isFullScreen(),
-      displayId: display.id
+      displayId: display.id,
+      ...(spaceIndex !== undefined ? { spaceIndex } : {})
     }
   }
 
@@ -946,10 +1209,22 @@ export class ProfileManager {
       }
     }
     // The home page is a blank tab: keep its stored url (and the address bar) empty
-    // rather than mirroring the long data: URL Chromium actually loaded.
-    const mirrorUrl = (navUrl: string): string => (isMiraHomeUrl(navUrl) ? '' : navUrl)
+    // rather than mirroring the long data: URL Chromium actually loaded. Same idea
+    // for the error page: the address bar keeps the URL that FAILED (so the user
+    // can edit and retry it), not the error page's data: URL.
+    let failedUrl = ''
+    const mirrorUrl = (navUrl: string): string =>
+      isMiraHomeUrl(navUrl) ? '' : isMiraErrorUrl(navUrl) ? failedUrl : navUrl
     wc.on('page-title-updated', (_e, title) => patch({ title }))
     wc.on('did-navigate', (_e, navUrl) => patch({ url: mirrorUrl(navUrl) }))
+    // A failed main-frame load (DNS failure, refused connection, timeout…) would
+    // leave a blank void: show Mira's error page instead. ERR_ABORTED (-3) is not
+    // a failure — it fires when a load is superseded (stop, quick re-navigation).
+    wc.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
+      if (!isMainFrame || errorCode === -3) return
+      failedUrl = validatedURL
+      wc.loadURL(errorPageUrl({ url: validatedURL, errorCode, errorDescription }))
+    })
     wc.on('did-navigate-in-page', (_e, navUrl, isMainFrame) => {
       if (isMainFrame) patch({ url: mirrorUrl(navUrl) })
     })
@@ -966,6 +1241,53 @@ export class ProfileManager {
     }
     wc.on('update-target-url', (_e, url) => pushHover({ type: 'target', url }))
     installHoverReporter(wc, (active) => pushHover({ type: 'js', active }))
+    // Find-in-page match counts (Cmd+F). Chromium reports them asynchronously on
+    // this event; forward the final tally to the chrome so the find bar can show
+    // "n/m". Only the active tab is ever searched, so no tab filter is needed.
+    wc.on('found-in-page', (_e, result) => {
+      if (!result.finalUpdate || pw.window.isDestroyed()) return
+      pw.window.webContents.send('mira:find-result', {
+        matches: result.matches,
+        activeMatchOrdinal: result.activeMatchOrdinal
+      })
+    })
+    // A page element going fullscreen (a video's ⛶ button) should feel like real
+    // fullscreen: hide both side panels and stretch the view over the whole window
+    // — Chromium only fills the view's own bounds (piège #1), so without this the
+    // toolbar / status bar / panels would frame the "fullscreen" video.
+    wc.on('enter-html-full-screen', () => this.enterHtmlFullScreenIn(pw, tabId))
+    wc.on('leave-html-full-screen', () => this.leaveHtmlFullScreenIn(pw))
+    // A tab closed or discarded mid-fullscreen never emits leave: restore then too.
+    wc.on('destroyed', () => {
+      if (pw.htmlFullScreen?.tabId === tabId) this.leaveHtmlFullScreenIn(pw)
+    })
+  }
+
+  /** The active tab's page entered HTML fullscreen: snapshot the panels, hide
+   * them, and arm the episode (layout() then gives this tab the whole window).
+   * The panels are hidden through the normal toggle paths so the chrome
+   * re-renders — but BEFORE arming, so the forced hide is not recorded as a
+   * user toggle (only toggles made during the episode overwrite the snapshot). */
+  private enterHtmlFullScreenIn(pw: ProfileWindow, tabId: string): void {
+    if (pw.htmlFullScreen || pw.state.activeId !== tabId) return
+    const snapshot = { tabsCollapsed: pw.panelCollapsed, skillPaneOpen: pw.skillPane.open }
+    this.toggleTabsPanelIn(pw, true)
+    this.setSkillPaneIn(pw, { ...pw.skillPane, open: false })
+    pw.htmlFullScreen = enterFullScreen(tabId, snapshot)
+    this.layout(pw)
+  }
+
+  /** HTML fullscreen ended: put the panels back — to their pre-fullscreen state,
+   * or to whatever the user toggled them to during the episode (last change
+   * wins). Idempotent: a no-op when no episode is live. */
+  private leaveHtmlFullScreenIn(pw: ProfileWindow): void {
+    if (!pw.htmlFullScreen) return
+    const restore = exitFullScreen(pw.htmlFullScreen)
+    // Disarm BEFORE reapplying, so the restore toggles are not recorded as
+    // during-episode changes.
+    pw.htmlFullScreen = null
+    this.toggleTabsPanelIn(pw, restore.tabsCollapsed)
+    this.setSkillPaneIn(pw, { ...pw.skillPane, open: restore.skillPaneOpen })
   }
 
   /** Position the active view below the toolbar, offset right by the tab panel
@@ -988,11 +1310,24 @@ export class ProfileManager {
       width: Math.max(0, width - x - paneRight),
       height: Math.max(0, height - verticalChrome)
     }
+    // A tab in HTML fullscreen (video) owns the WHOLE window: no toolbar, no
+    // status bar, no panels — Chromium only fills the view's bounds, so the
+    // stretch must happen here (its docked DevTools is hidden meanwhile).
+    // Only while both panels are hidden: reopening one DURING fullscreen
+    // (Cmd+B / Cmd+J) falls back to the normal layout so the panel is actually
+    // visible — the page stays fullscreen within its shrunk bounds.
+    const panelsHidden = pw.panelCollapsed && !pw.skillPane.open
+    const fullScreenTabId = panelsHidden ? (pw.htmlFullScreen?.tabId ?? null) : null
     for (const [id, view] of pw.views) {
       // While the palette is open, every view is hidden so the chrome overlay is
       // visible over what would otherwise be the page (see paletteOpen).
       const active = id === pw.state.activeId && !pw.paletteOpen
       view.setVisible(active)
+      if (active && id === fullScreenTabId) {
+        view.setBounds({ x: 0, y: 0, width, height })
+        pw.devtools.get(id)?.setVisible(false)
+        continue
+      }
       // A tab may have a docked DevTools inspector (bound to its own webContents).
       // Only the active tab shows both; inactive tabs keep theirs but hidden.
       const devtools = pw.devtools.get(id)
@@ -1035,9 +1370,18 @@ export class ProfileManager {
    * width when open, restores it when closed), and push the state to the chrome so
    * it renders / hides the pane. The single path for both showSkillPane and close. */
   private setSkillPaneIn(pw: ProfileWindow, state: SkillPaneState): void {
+    const opening = state.open && !pw.skillPane.open
     pw.skillPane = state
+    // Toggled during HTML fullscreen: the new state becomes the restore target
+    // (the user's last word wins over the pre-fullscreen snapshot).
+    if (pw.htmlFullScreen) {
+      pw.htmlFullScreen = panelChanged(pw.htmlFullScreen, { skillPaneOpen: state.open })
+    }
     this.layout(pw)
     if (!pw.window.isDestroyed()) {
+      // On open, hand keyboard focus to the chrome (the page likely holds it)
+      // so the pane's prompt box can grab it — same move as the palette.
+      if (opening) pw.window.webContents.focus()
       pw.window.webContents.send('mira:skill-pane', state)
     }
   }
@@ -1081,17 +1425,17 @@ export class ProfileManager {
   private async runLlmChat(
     config: LlmConfig,
     messages: ChatMessage[],
-    pageText: string
+    page: PageContext
   ): Promise<string> {
-    const system = chatSystemPrompt(pageText)
+    const system = chatSystemPrompt(page.url, page.text)
     if (config.provider === 'extractive') {
       // No conversational model offline: summarize the page as a best effort, or
       // echo the last question when there is no page.
       const last = messages[messages.length - 1]?.text ?? ''
-      return extractiveSummary(pageText.trim() !== '' ? pageText : last)
+      return extractiveSummary(page.text.trim() !== '' ? page.text : last)
     }
     if (config.provider === 'anthropic-api') {
-      const req = buildAnthropicChatRequest(config, system, messages)
+      const req = buildAnthropicChatRequest(config, system, messages, page.screenshot)
       const res = await fetch(req.url, {
         method: 'POST',
         headers: req.headers,
@@ -1099,8 +1443,49 @@ export class ProfileManager {
       })
       return parseAnthropicResponse(await res.json())
     }
-    // 'claude-cli': flatten the thread + context into one stdin prompt.
+    // 'claude-cli'. Plain -p can't take an image, so a turn WITH a screenshot goes
+    // through the stream-json path (which accepts an image block); a text-only
+    // turn stays on the simpler plain-text path.
+    if (page.screenshot) {
+      return this.runClaudeCliStream(
+        config,
+        buildClaudeStreamInput(system, messages, page.screenshot)
+      )
+    }
     return this.runClaudeCli(config, composeChatPrompt(system, messages))
+  }
+
+  /** Spawn `claude -p --input-format stream-json` (image-capable) and resolve the
+   * assistant text from its NDJSON stdout. Same subscription/PATH story as
+   * runClaudeCli; used only when a screenshot is attached. */
+  private runClaudeCliStream(config: LlmConfig, streamInput: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const child = spawn('claude', buildClaudeStreamArgs(config), {
+        stdio: ['pipe', 'pipe', 'pipe']
+      })
+      let out = ''
+      let err = ''
+      child.stdout.on('data', (d) => (out += String(d)))
+      child.stderr.on('data', (d) => (err += String(d)))
+      child.on('error', (e) =>
+        reject(new Error(`claude CLI not runnable: ${e.message} (is it installed / on PATH?)`))
+      )
+      child.on('close', (code) => {
+        // Even on exit 0 the answer lives in the NDJSON result line; on non-zero,
+        // prefer stderr, else let the parser surface the stream's error result.
+        if (code !== 0 && err.trim() !== '') {
+          reject(new Error(err.trim()))
+          return
+        }
+        try {
+          resolve(parseClaudeStreamResult(out))
+        } catch (e) {
+          reject(e instanceof Error ? e : new Error(String(e)))
+        }
+      })
+      child.stdin.write(streamInput)
+      child.stdin.end()
+    })
   }
 
   /** Spawn `claude -p` and resolve its stdout. Uses the logged-in Claude Code
@@ -1292,7 +1677,15 @@ export class ProfileManager {
     if (view) {
       // A page never outlives its docked DevTools: tear the inspector down first.
       this.destroyDevToolsView(pw, id)
+      // Untrack from chrome.tabs before the webContents dies — but drop the view
+      // from pw.views FIRST: the lib re-invokes our removeTab hook synchronously
+      // (store.removeTab → impl.removeTab), and the hook resolves the tab via
+      // tabIdForWebContents. With the view already gone it resolves nothing and
+      // the re-entrant call is a no-op; otherwise it re-enters closeTabIn, throws
+      // on the already-closed id, and aborts this teardown halfway (tab closed in
+      // state but still on screen, webContents leaked).
       pw.views.delete(id)
+      this.deps.extensions.removeTab(view.webContents)
       pw.window.contentView.removeChildView(view)
       view.webContents.close()
     }
@@ -1301,6 +1694,7 @@ export class ProfileManager {
     if (wasActive && pw.state.activeId) {
       const next = pw.state.tabs.find((t) => t.id === pw.state.activeId)
       if (next) this.materializeTab(pw, next)
+      this.notifyExtensionsActiveTab(pw)
     }
     // Closing the last tab leaves the window open on an empty home (it never
     // closes here — Cmd+W closes tabs, not windows). Force the panel open so the
@@ -1335,6 +1729,7 @@ export class ProfileManager {
     pw.state = moveTabPure(pw.state, tab.id, closed.index)
     pw.closeArmedId = null
     this.materializeTab(pw, tab)
+    this.notifyExtensionsActiveTab(pw)
     this.layout(pw)
     this.pushTabs(pw)
     this.saveSession(pw)
@@ -1370,7 +1765,14 @@ export class ProfileManager {
     if (!view) return
     // A page never outlives its docked DevTools: tear the inspector down first.
     this.destroyDevToolsView(pw, id)
+    // Untrack from chrome.tabs before the webContents dies (a discarded tab has
+    // no webContents, so it simply disappears from chrome.tabs.query — same
+    // stance as `discarded`, see extensions-plan.md §4.1). Drop the view from
+    // pw.views FIRST: the lib re-invokes our removeTab hook synchronously, and
+    // with the view still mapped the hook would resolve the tab and closeTabIn
+    // it — turning a discard into a close (see the same guard in closeTabIn).
     pw.views.delete(id)
+    this.deps.extensions.removeTab(view.webContents)
     pw.window.contentView.removeChildView(view)
     view.webContents.close()
   }
@@ -1453,6 +1855,7 @@ export class ProfileManager {
       // The active tab changed: disarm any pinned tab armed by Cmd+W.
       pw.closeArmedId = null
       this.discardView(pw, id)
+      this.notifyExtensionsActiveTab(pw)
       this.layout(pw)
       this.pushTabs(pw)
       this.saveSession(pw)
@@ -1483,6 +1886,7 @@ export class ProfileManager {
     if (wasLoaded && tab.url === '' && id !== pw.settingsTabId) {
       pw.views.get(id)?.webContents.loadURL(this.blankPageUrl(pw))
     }
+    this.notifyExtensionsActiveTab(pw)
     this.layout(pw)
     this.pushTabs(pw)
     this.saveSession(pw)
@@ -1533,7 +1937,15 @@ export class ProfileManager {
           click: () => this.deps.runCommand?.(wc, item.command, item.params)
         }
       })
-      Menu.buildFromTemplate(template).popup({ window: pw.window })
+      const menu = Menu.buildFromTemplate(template)
+      // Extensions' own entries (chrome.contextMenus — e.g. Dark Reader's
+      // toggles) go at the bottom, Chrome-style, as ready-made native items.
+      const extensionItems = this.deps.extensions.contextMenuItems(wc, params)
+      if (extensionItems.length > 0) {
+        menu.append(new MenuItem({ type: 'separator' }))
+        for (const item of extensionItems) menu.append(item)
+      }
+      menu.popup({ window: pw.window })
     })
   }
 
@@ -1577,6 +1989,11 @@ export class ProfileManager {
 
   private toggleTabsPanelIn(pw: ProfileWindow, collapsed?: boolean): { collapsed: boolean } {
     pw.panelCollapsed = collapsed ?? !pw.panelCollapsed
+    // Toggled during HTML fullscreen: the new state becomes the restore target
+    // (the user's last word wins over the pre-fullscreen snapshot).
+    if (pw.htmlFullScreen) {
+      pw.htmlFullScreen = panelChanged(pw.htmlFullScreen, { tabsCollapsed: pw.panelCollapsed })
+    }
     this.layout(pw)
     this.pushTabs(pw)
     this.saveSession(pw)
@@ -1687,6 +2104,7 @@ export class ProfileManager {
       profiles: this.profiles.map((p) => ({
         id: p.id,
         label: p.label,
+        ...(p.color ? { color: p.color } : {}),
         open: this.openById.has(p.id)
       })),
       focused: this.focusedId()
@@ -1721,6 +2139,18 @@ export class ProfileManager {
   }
 
   private makeContext(target: ProfileWindow | null): CommandContext {
+    // The active tab's page webContents, for commands that only make sense on a
+    // real page (find-in-page). Throws on the Settings tab / an empty window,
+    // unlike getTargetWebContents' inert stub — a search there is an error, not
+    // a silent no-op.
+    const activeWebContents = (): WebContents => {
+      if (!target || target.window.isDestroyed()) throw new Error('no target window')
+      const activeId = target.state.activeId
+      if (!activeId || activeId === target.settingsTabId) throw new Error('no active web page')
+      const view = target.views.get(activeId)
+      if (!view) throw new Error('no active web page')
+      return view.webContents
+    }
     return {
       getTargetWebContents: () => {
         if (!target || target.window.isDestroyed()) {
@@ -1763,15 +2193,35 @@ export class ProfileManager {
       getTargetProfile: () => {
         if (!target) return null
         const profile = findById(this.profiles, target.id)
-        return profile ? { id: profile.id, label: profile.label } : null
+        if (!profile) return null
+        return {
+          id: profile.id,
+          label: profile.label,
+          ...(profile.color ? { color: profile.color } : {})
+        }
+      },
+      focusApp: () => {
+        // Fired by the global shortcut while another app is frontmost, so the
+        // target is usually the "any open window" fallback, not a focused one.
+        if (target && !target.window.isDestroyed()) {
+          if (target.window.isMinimized()) target.window.restore()
+          target.window.show()
+          target.window.focus()
+        } else {
+          this.openProfile(DEFAULT_PROFILE_ID)
+        }
+        // window.focus() alone does not reliably bring a background app forward
+        // on macOS; stealing app focus is the documented way.
+        app.focus({ steal: true })
       },
       openProfile: (id) => this.openProfile(id),
       createProfile: (label) => this.createProfile(label),
       renameProfile: (id, label) => this.renameProfile(id, label),
+      setProfileColor: (id, color) => this.setProfileColor(id, color),
       listProfiles: () => this.listProfiles(),
-      openSettings: () => {
+      openSettings: (section?: string) => {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
-        this.openSettingsTabIn(target)
+        this.openSettingsTabIn(target, section)
       },
       getSettings: () => ({ ...this.appSettings }),
       setHomeUrl: (url) => {
@@ -1873,6 +2323,47 @@ export class ProfileManager {
         })
         return { host: parsed.host, cookiesRemoved: cookies.length }
       },
+      getSpacesState: () => {
+        const displays = spacesLayout()
+        let windowLocation: SpaceLocation | null = null
+        if (target && !target.window.isDestroyed()) {
+          const wid = parseWindowNumber(target.window.getMediaSourceId())
+          if (wid !== undefined) {
+            windowLocation = windowSpaceLocation(displays, windowSpaces(wid)) ?? null
+          }
+        }
+        return { displays, window: windowLocation }
+      },
+      moveTargetWindowToSpace: (spaceIndex: number) => {
+        if (!target || target.window.isDestroyed()) throw new Error('no target window')
+        const layout = spacesLayout()
+        if (layout.length === 0) throw new Error('Spaces unavailable on this system')
+        const wid = parseWindowNumber(target.window.getMediaSourceId())
+        if (wid === undefined) throw new Error('window has no window-server id')
+        // Address the desktops of the display the window is on right now.
+        const displayId = screen.getDisplayMatching(target.window.getBounds()).id
+        const display = layout.find((d) => d.displayId === displayId) ?? layout[0]
+        const desktops = userSpaceIds(display)
+        if (spaceIndex >= desktops.length) {
+          throw new Error(`no desktop at index ${spaceIndex} (display has ${desktops.length})`)
+        }
+        // No-op when the WINDOW already sits on that desktop (not to be confused
+        // with the display's current desktop — the restore path's shortcut).
+        const where = windowSpaceLocation(layout, windowSpaces(wid))
+        if (where && where.displayId === display.displayId && where.spaceIndex === spaceIndex) {
+          return 'noop'
+        }
+        if (!moveWindowToSpace(wid, desktops[spaceIndex])) {
+          throw new Error('window server refused the move')
+        }
+        // Persist right away so a relaunch honors the new desktop even without
+        // any further window event. The window server may still report the OLD
+        // Space if re-read immediately, so stamp the index we know to be true.
+        this.saveSession(target)
+        const saved = this.sessions[target.id]
+        if (saved?.bounds) saved.bounds.spaceIndex = spaceIndex
+        return 'moved'
+      },
       getMemoryUsage: () => this.deps.getMemoryUsage(),
       getTabCounts: () => {
         if (!target) return { total: 0, loaded: 0, asleep: 0 }
@@ -1881,6 +2372,42 @@ export class ProfileManager {
         const total = target.state.tabs.length
         const loaded = target.views.size
         return { total, loaded, asleep: total - loaded }
+      },
+      openFindBar: () => {
+        // Guard first: the find bar is useless without a page to search.
+        activeWebContents()
+        if (!target || target.window.isDestroyed()) return
+        // The page likely holds keyboard focus — hand it to the chrome so the
+        // find input can grab it (same move as the palette).
+        target.window.webContents.focus()
+        target.window.webContents.send('mira:find-open')
+      },
+      findInPage: (text, forward, newSession) => {
+        const wc = activeWebContents()
+        if (target) target.findText = text
+        // Electron's `findNext` option is inverted from what its name suggests:
+        // TRUE begins a NEW find session, FALSE is a follow-up step. Stepping
+        // with true restarts the session — Chromium re-highlights every match
+        // and the whole page visibly flickers on each Cmd+G / Enter.
+        wc.findInPage(text, { forward, findNext: newSession })
+      },
+      findStep: (forward) => {
+        if (!target || target.findText === '') return false
+        const wc = activeWebContents()
+        // Follow-up (findNext: false — see above): move the active match only,
+        // keeping the session's existing highlights untouched.
+        wc.findInPage(target.findText, { forward, findNext: false })
+        return true
+      },
+      stopFindInPage: (action: FindStopAction) => {
+        // Lenient on purpose: closing the bar must never fail, even if the
+        // active tab changed to Settings (or closed) since the search started.
+        if (target) target.findText = ''
+        try {
+          activeWebContents().stopFindInPage(action)
+        } catch {
+          // No page to clear — nothing to do.
+        }
       },
       showTooltip: (text, anchor) => {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
@@ -1893,9 +2420,28 @@ export class ProfileManager {
         if (target) this.hideTooltipIn(target)
         return { hidden: true }
       },
-      execJsInActiveTab: async (code) => {
-        // Reach the active tab's OWN webContents and run in the page's world, so it
-        // sees the site exactly as the site does (same session, same DOM).
+      execJsInTab: async (code, tabId) => {
+        // Reach the tab's OWN webContents and run in the page's world, so it sees
+        // the site exactly as the site does (same session, same DOM).
+        if (tabId) {
+          // Explicit target: tab ids are UUIDs (globally unique), so look the tab
+          // up across ALL open windows — the socket/MCP caller is not tied to
+          // whichever Mira window happens to be focused.
+          for (const pw of this.openById.values()) {
+            if (pw.window.isDestroyed()) continue
+            const view = pw.views.get(tabId)
+            // Via the attached CDP debugger when present — plain executeJavaScript
+            // never settles under stealth's debugger (see cdp-eval.ts).
+            if (view) return evalInWebContents(view.webContents, code)
+            if (tabId === pw.settingsTabId) throw new Error('not a web page (Settings tab)')
+            if (pw.state.tabs.some((t) => t.id === tabId)) {
+              // In the strip but no view: discarded/lazy tab. Waking it here would
+              // race the page load; the caller should activate the tab first.
+              throw new Error(`tab is asleep: ${tabId}`)
+            }
+          }
+          throw new Error(`unknown tab: ${tabId}`)
+        }
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
         const activeId = target.state.activeId
         if (!activeId || activeId === target.settingsTabId) {
@@ -1903,8 +2449,7 @@ export class ProfileManager {
         }
         const view = target.views.get(activeId)
         if (!view) throw new Error('no active tab')
-        // userGesture=true so calls gated behind a user activation still run.
-        return view.webContents.executeJavaScript(code, true)
+        return evalInWebContents(view.webContents, code)
       },
       toggleDevToolsInActiveTab: () => {
         // The active tab's inspector, docked on the right into a host view we
@@ -1933,15 +2478,28 @@ export class ProfileManager {
         const text = await view.webContents.executeJavaScript(extractionScript(source), true)
         return typeof text === 'string' ? text : String(text ?? '')
       },
+      capturePage: async () => {
+        // Screenshot the active page as a PNG data URL — the pixel edge behind the
+        // 📷 button (run-prompt with a screenshot). null when there is no live page
+        // (Settings / empty), so run-prompt just skips the image best-effort.
+        if (!target || target.window.isDestroyed()) return null
+        const activeId = target.state.activeId
+        if (!activeId || activeId === target.settingsTabId) return null
+        const view = target.views.get(activeId)
+        if (!view) return null
+        const image = await view.webContents.capturePage()
+        if (image.isEmpty()) return null
+        return image.toDataURL()
+      },
       summarize: async (prompt: string, text: string) => {
         // Run the configured AI engine (subscription CLI / API / local extractive).
         // Errors propagate to run-skill, which surfaces them in the pane.
         return this.runLlm(this.appSettings.llm, prompt, text)
       },
-      chat: async (messages: ChatMessage[], pageText: string) => {
+      chat: async (messages: ChatMessage[], page: PageContext) => {
         // The multi-turn engine (run-prompt): the same configured provider, given
-        // the whole conversation. Errors propagate to run-prompt for the pane.
-        return this.runLlmChat(this.appSettings.llm, messages, pageText)
+        // the whole conversation + page (URL + text). Errors propagate for the pane.
+        return this.runLlmChat(this.appSettings.llm, messages, page)
       },
       showSkillPane: (state) => {
         if (target) this.setSkillPaneIn(target, state)
@@ -1952,11 +2510,20 @@ export class ProfileManager {
         if (target) this.setSkillPaneIn(target, { ...target.skillPane, open: false })
       },
       getSkillPane: () => (target ? target.skillPane : closedSkillPane()),
-      newTab: (url) => {
+      writeClipboard: (text: string) => clipboard.writeText(text),
+      newTab: (url, background = false) => {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
         // focusChrome: opening a tab (click or Cmd+T) focuses the address bar so a
         // url can be typed straight away. Not for the startup / restored tabs.
-        const tab = this.newTabIn(target, url ?? this.appSettings.homeUrl, true)
+        // background:true (a socket/MCP caller testing a page) opens the tab hidden
+        // without focusing the chrome, so Mira does not jump to the foreground.
+        const tab = this.newTabIn(
+          target,
+          url ?? this.appSettings.homeUrl,
+          !background,
+          undefined,
+          background
+        )
         // A freshly opened tab is always materialized (loaded), a web tab, and
         // never born pinned.
         return { ...tab, loaded: true, kind: 'web', pinned: false }
@@ -2058,7 +2625,39 @@ export class ProfileManager {
       renameBookmark: (id, title) => this.renameBookmarkGlobal(id, title),
       moveBookmark: (id, parentId, index) => this.moveBookmarkGlobal(id, parentId, index),
       listBookmarks: () => ({ tree: this.bookmarks }),
-      openBookmark: (id) => this.openBookmarkIn(target, id)
+      openBookmark: (id) => this.openBookmarkIn(target, id),
+      // Extensions act on the TARGET window's profile session — sets are per
+      // profile (D2): installing in "Work" leaves "Default" untouched.
+      listExtensions: () => {
+        if (!target) throw new Error('no target window')
+        return this.deps.extensions.list(this.sessionFor(target.id), target.id)
+      },
+      loadExtension: (path) => {
+        if (!target) throw new Error('no target window')
+        return this.deps.extensions.load(this.sessionFor(target.id), target.id, path)
+      },
+      installExtension: (id) => {
+        if (!target) throw new Error('no target window')
+        return this.deps.extensions.installFromStore(this.sessionFor(target.id), target.id, id)
+      },
+      updateExtensions: () => {
+        if (!target) throw new Error('no target window')
+        return this.deps.extensions.update(this.sessionFor(target.id), target.id)
+      },
+      disableExtension: (id) => {
+        if (!target) throw new Error('no target window')
+        return Promise.resolve(
+          this.deps.extensions.disable(this.sessionFor(target.id), target.id, id)
+        )
+      },
+      enableExtension: (id) => {
+        if (!target) throw new Error('no target window')
+        return this.deps.extensions.enable(this.sessionFor(target.id), target.id, id)
+      },
+      uninstallExtension: (id) => {
+        if (!target) throw new Error('no target window')
+        return this.deps.extensions.uninstall(this.sessionFor(target.id), target.id, id)
+      }
     }
   }
 }

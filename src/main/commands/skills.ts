@@ -13,7 +13,7 @@
 import { type CommandMap, fail } from './registry'
 import type { CommandContext } from './context'
 import { resolveSkills, type SkillSource } from '../skills'
-import type { ChatMessage } from '../llm'
+import type { ChatMessage, PageContext } from '../llm'
 
 /** Skills capability slice: the native edges run-skill / run-prompt need. */
 export interface SkillsContext {
@@ -27,8 +27,11 @@ export interface SkillsContext {
    * the skill's prompt. Today a local extractive summary; an LLM swaps in here. */
   summarize: (prompt: string, text: string) => Promise<string>
   /** The multi-turn AI engine (the pane chat): answer the last turn given the
-   * whole conversation and the current page's text as context. */
-  chat: (messages: ChatMessage[], pageText: string) => Promise<string>
+   * whole conversation and the current page (URL + text + optional screenshot). */
+  chat: (messages: ChatMessage[], page: PageContext) => Promise<string>
+  /** Screenshot the active page as a PNG data URL, or null when there is no live
+   * page. The pixel edge behind the 📷 button; only called on explicit request. */
+  capturePage: () => Promise<string | null>
 }
 
 export interface RunSkillParams {
@@ -37,6 +40,10 @@ export interface RunSkillParams {
 
 export interface RunPromptParams {
   prompt: string
+  /** When true, attach a screenshot of the current page to this turn (📷 button),
+   * so a vision model can see what the text can't (a map, a canvas). Off by
+   * default — the image is NEVER sent automatically. */
+  withScreenshot?: boolean
 }
 
 /** Cap the pane header derived from a free prompt so a long question doesn't
@@ -116,7 +123,7 @@ export const skillsCommands: CommandMap<CommandContext> = {
   // a page that yields no text just becomes a plain question) AND the prior turns,
   // then append the answer.
   'run-prompt': async (ctx, params) => {
-    const { prompt } = (params ?? {}) as Partial<RunPromptParams>
+    const { prompt, withScreenshot } = (params ?? {}) as Partial<RunPromptParams>
     if (typeof prompt !== 'string' || prompt.trim() === '') {
       return { ok: false, error: 'missing "prompt"' }
     }
@@ -127,15 +134,27 @@ export const skillsCommands: CommandMap<CommandContext> = {
     ctx.showSkillPane({ open: true, title, status: 'loading', messages: withUser })
     try {
       // Best-effort page context: no active web page (Settings / empty) is fine,
-      // the prompt is then answered on its own.
-      let context = ''
+      // the prompt is then answered on its own. The URL is always included so the
+      // assistant knows which page it is on (it can't infer it from the text).
+      const url = ctx.activeUrl() ?? ''
+      let text = ''
       try {
-        context = await ctx.extractText({ kind: 'readability' })
+        text = await ctx.extractText({ kind: 'readability' })
       } catch {
-        context = ''
+        text = ''
+      }
+      // Only when the user asked (📷): capture a screenshot so a vision model can
+      // see the page. Best-effort — a failed / empty capture just sends no image.
+      let screenshot: string | undefined
+      if (withScreenshot === true) {
+        try {
+          screenshot = (await ctx.capturePage()) ?? undefined
+        } catch {
+          screenshot = undefined
+        }
       }
       // Send the whole thread (incl. this turn) so the model keeps context.
-      const answer = await ctx.chat(withUser, context)
+      const answer = await ctx.chat(withUser, { url, text, ...(screenshot ? { screenshot } : {}) })
       ctx.showSkillPane({
         open: true,
         title,

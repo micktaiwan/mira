@@ -40,6 +40,7 @@
   margin-right: auto;
 }
 
+.skill-pane-copy,
 .skill-pane-clear,
 .skill-pane-close {
   flex-shrink: 0;
@@ -52,12 +53,14 @@
   border-radius: 6px;
 }
 
+.skill-pane-copy:hover,
 .skill-pane-clear:hover,
 .skill-pane-close:hover {
   background: var(--ev-c-gray-2);
   color: var(--color-text);
 }
 
+.skill-pane-copy:disabled,
 .skill-pane-clear:disabled {
   opacity: 0.4;
   cursor: default;
@@ -216,8 +219,85 @@
   border-color: #6988e6;
 }
 
+/* The bottom control row under the input: user options on the left (model / MCP),
+   send actions on the right (📷 + Send). */
+.skill-pane-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+/* Left cluster: the options the user drives per chat. */
+.skill-pane-opts {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.skill-pane-opt {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--ev-c-text-3);
+  cursor: pointer;
+}
+
+.skill-pane-opt-label {
+  user-select: none;
+}
+
+.skill-pane-model {
+  border: 1px solid var(--ev-c-gray-2);
+  border-radius: 6px;
+  background: var(--color-background-mute);
+  color: var(--color-text);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 4px;
+  cursor: pointer;
+  outline: none;
+}
+
+.skill-pane-model:focus {
+  border-color: #6988e6;
+}
+
+.skill-pane-mcp input {
+  margin: 0;
+  cursor: pointer;
+}
+
+/* Right cluster: 📷 (with screenshot) + Send. */
+.skill-pane-actions {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.skill-pane-shot {
+  border: 1px solid var(--ev-c-gray-2);
+  border-radius: 8px;
+  background: var(--color-background-mute);
+  font-size: 13px;
+  line-height: 1;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.skill-pane-shot:hover:not(:disabled) {
+  border-color: #6988e6;
+}
+
+.skill-pane-shot:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .skill-pane-send {
-  align-self: flex-end;
   border: none;
   border-radius: 8px;
   background: #6988e6;

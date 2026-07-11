@@ -3,8 +3,11 @@ import Sidebar, { type TabInfo } from './Sidebar'
 import StatusBar from './StatusBar'
 import Settings from './Settings'
 import CommandPalette from './CommandPalette'
-import SkillPane from './SkillPane'
+import SkillPane, { type ChatOptions } from './SkillPane'
 import ResizeHandle from './ResizeHandle'
+import ExtensionActions from './features/extensions/ExtensionActions'
+import FindBar from './features/find/FindBar'
+import { applyProfileColor, initialProfileColor } from './features/profile-theme/profile-theme'
 import type { SkillPaneState } from '../../preload/index.d'
 
 // Panel width bounds — must match SIDEBAR_WIDTH / SKILL_PANE_WIDTH in
@@ -77,10 +80,29 @@ function App(): React.JSX.Element {
     status: 'idle',
     messages: []
   })
+  // The chat's options (model / MCP), driven from the bar beside Send. Seeded from
+  // the persisted llm config on mount; a change persists via set-chat-options.
+  const [chatOptions, setChatOptionsState] = useState<ChatOptions>({
+    provider: 'claude-cli',
+    model: '',
+    loadMcp: false
+  })
+  // The find-in-page bar (Cmd+F). It lives in the toolbar row (never over the
+  // page — the WebContentsView would hide it). `findFocusSeq` bumps on every
+  // find-open push so Cmd+F re-focuses the input even when already open.
+  const [findOpen, setFindOpen] = useState(false)
+  const [findFocusSeq, setFindFocusSeq] = useState(0)
   // Resizable panel widths (px). Seeded from settings on mount; a drag updates
   // them live (CSS var + a throttled command so main reflows the web view).
   const [sidebarWidth, setSidebarWidth] = useState(240)
   const [skillPaneWidth, setSkillPaneWidth] = useState(360)
+
+  // Tint the chrome with this window's profile color: seeded from the chrome
+  // URL (?color=…), re-tinted live when it changes in Settings.
+  useEffect(() => {
+    applyProfileColor(initialProfileColor())
+    return window.mira.onProfileThemeChanged(applyProfileColor)
+  }, [])
 
   // Mirror the active tab's URL into the bar, unless the user is editing it.
   const syncAddressBar = (nextTabs: TabInfo[], nextActiveId: string | null): void => {
@@ -142,6 +164,21 @@ function App(): React.JSX.Element {
   }, [])
 
   useEffect(() => {
+    // Main asks for the find bar (Cmd+F / find-open): show it, and bump the seq
+    // so an already-open bar re-focuses its input.
+    return window.mira.onFindOpen(() => {
+      setFindOpen(true)
+      setFindFocusSeq((n) => n + 1)
+    })
+  }, [])
+
+  // Close the find bar: hide it and end the search (clears the page highlights).
+  const closeFindBar = useCallback((): void => {
+    setFindOpen(false)
+    void window.mira.command('find-stop', { action: 'clearSelection' })
+  }, [])
+
+  useEffect(() => {
     // Load any pane already open (survives a chrome reload) and then track pushes.
     const load = async (): Promise<void> => {
       const res = await run('get-skill-pane')
@@ -170,8 +207,9 @@ function App(): React.JSX.Element {
 
   // Run a free prompt typed in the pane as the next chat turn. Optimistically
   // append the user turn and show loading; main pushes the real thread back
-  // (loading with the turn, then the answer, or an error).
-  const runPrompt = useCallback((prompt: string): void => {
+  // (loading with the turn, then the answer, or an error). `withScreenshot` (📷)
+  // asks main to attach a picture of the current page to this turn.
+  const runPrompt = useCallback((prompt: string, withScreenshot = false): void => {
     setSkillPane((prev) => ({
       ...prev,
       open: true,
@@ -179,7 +217,7 @@ function App(): React.JSX.Element {
       title: prev.title || prompt,
       messages: [...prev.messages, { role: 'user', text: prompt }]
     }))
-    void window.mira.command('run-prompt', { prompt })
+    void window.mira.command('run-prompt', { prompt, withScreenshot })
   }, [])
 
   // Clear the conversation (Clear chat button). Optimistically empty it, then tell
@@ -189,6 +227,19 @@ function App(): React.JSX.Element {
     void window.mira.command('clear-chat')
   }, [])
 
+  // Copy the latest answer to the clipboard (Copy button). Main owns the thread
+  // and does the clipboard write, so the chrome just fires the command.
+  const copyChat = useCallback((): void => {
+    void window.mira.command('copy-chat')
+  }, [])
+
+  // Change a chat option (model / MCP). Optimistically reflect it, then persist —
+  // main merges it into the llm config, so the next run-prompt uses the choice.
+  const setChatOptions = useCallback((patch: { model?: string; loadMcp?: boolean }): void => {
+    setChatOptionsState((prev) => ({ ...prev, ...patch }))
+    void window.mira.command('set-chat-options', patch)
+  }, [])
+
   // Load the persisted panel widths once (main is the source of truth).
   useEffect(() => {
     void (async () => {
@@ -196,6 +247,15 @@ function App(): React.JSX.Element {
       if (!res.ok) return
       if (typeof res.sidebarWidth === 'number') setSidebarWidth(res.sidebarWidth)
       if (typeof res.skillPaneWidth === 'number') setSkillPaneWidth(res.skillPaneWidth)
+      // Seed the chat options bar from the persisted llm config.
+      const llm = res.llm as { provider?: string; model?: string; loadMcp?: boolean } | undefined
+      if (llm) {
+        setChatOptionsState({
+          provider: llm.provider ?? 'claude-cli',
+          model: llm.model ?? '',
+          loadMcp: llm.loadMcp === true
+        })
+      }
     })()
   }, [])
 
@@ -245,8 +305,12 @@ function App(): React.JSX.Element {
 
   // When the Settings tab is active, main hides every web view (the settings tab
   // has none), so the chrome renders <Settings/> in the body region that the
-  // native layer would otherwise cover.
-  const settingsActive = tabs.find((t) => t.id === activeId)?.kind === 'settings'
+  // native layer would otherwise cover. The tab url carries the requested
+  // sub-section (mira://settings/<section>, set by open-settings / the
+  // chrome://extensions alias); undefined when none was asked.
+  const settingsTab = tabs.find((t) => t.id === activeId && t.kind === 'settings')
+  const settingsActive = settingsTab !== undefined
+  const settingsSection = settingsTab?.url.split('/')[3]
 
   // The star reflects whether the ACTIVE tab's real url (not the edited bar text)
   // is already a favorite. Empty when there is no active tab → the star disables.
@@ -341,6 +405,10 @@ function App(): React.JSX.Element {
             autoCorrect="off"
           />
         </form>
+        {/* Find in page (Cmd+F). Mounted only while open so its query/tally state
+            starts fresh each time; sits in the toolbar row, beside the address
+            bar (an overlay over the page would be hidden by the native view). */}
+        {findOpen && <FindBar focusSeq={findFocusSeq} onClose={closeFindBar} />}
         <button
           type="button"
           className={`nav-button star-button${currentBookmark ? ' active' : ''}`}
@@ -352,6 +420,9 @@ function App(): React.JSX.Element {
         >
           {currentBookmark ? '★' : '☆'}
         </button>
+        {/* Extension action buttons (Dark Reader & co) — a lib custom element
+            bound to THIS window's profile session (features/extensions). */}
+        <ExtensionActions />
         {/* Always-present toggle for the AI panel: open it anytime to type a prompt
             or see the last result; click again to close. */}
         <button
@@ -391,7 +462,7 @@ function App(): React.JSX.Element {
             render the Settings panel here instead. */}
         {settingsActive && (
           <div className="settings-host">
-            <Settings />
+            <Settings section={settingsSection} />
           </div>
         )}
       </div>
@@ -411,6 +482,9 @@ function App(): React.JSX.Element {
           onClose={closeSkillPane}
           onPrompt={runPrompt}
           onClear={clearChat}
+          onCopy={copyChat}
+          options={chatOptions}
+          onOptions={setChatOptions}
         />
       )}
       {/* Drag handles at each panel's inner edge. Live-resize the CSS var and, per

@@ -18,8 +18,9 @@ export function normalizeInput(raw: string): string {
   const input = raw.trim()
   if (input === '') return ''
 
-  // Already a full URL we understand.
-  if (/^(https?|file):\/\//i.test(input) || /^about:/i.test(input)) {
+  // Already a full URL we understand. chrome-extension:// so navigating to an
+  // extension page (options / dashboard) doesn't turn into a Google search.
+  if (/^(https?|file|chrome-extension):\/\//i.test(input) || /^about:/i.test(input)) {
     return input
   }
 
@@ -35,4 +36,47 @@ export function normalizeInput(raw: string): string {
 
   // Otherwise it's a search query.
   return `${SEARCH_URL}${encodeURIComponent(input)}`
+}
+
+/**
+ * Which section of the internal Settings surface an address-bar input targets,
+ * or null when it is a regular web input. Chrome-style aliases are accepted so
+ * muscle memory keeps working:
+ *
+ * - chrome://extensions (and mira://extensions) → the Extensions section
+ * - chrome://settings or mira://settings → the default (General) section
+ * - chrome://settings/<section> or mira://settings/<section> → that section
+ *
+ * The section name is passed through unvalidated; the Settings UI falls back
+ * to General on an unknown one. Other chrome:// pages are not ours and return
+ * null (they fall through to the regular search/URL handling).
+ */
+export function settingsSectionFor(raw: string): string | null {
+  const input = raw.trim().toLowerCase().replace(/\/+$/, '')
+  const match = /^(?:chrome|mira):\/\/([^/]+)(?:\/([^/]+))?$/.exec(input)
+  if (!match) return null
+  const [, host, sub] = match
+  if (host === 'extensions') return 'extensions'
+  if (host === 'settings') return sub ?? 'general'
+  return null
+}
+
+/**
+ * Whether two URLs point at the same page, for tab dedup ("focus the existing
+ * tab instead of opening a twin"). Tolerates the cosmetic difference a loaded
+ * page acquires over the typed input — the trailing slash Chromium adds on a
+ * bare origin ("https://a.com" vs "https://a.com/") — but keeps query and hash
+ * significant: a different anchor or search IS a different destination.
+ */
+export function sameUrl(a: string, b: string): boolean {
+  if (a === b) return true
+  try {
+    const norm = (raw: string): string => {
+      const u = new URL(raw)
+      return u.origin + u.pathname.replace(/\/$/, '') + u.search + u.hash
+    }
+    return norm(a) === norm(b)
+  } catch {
+    return false
+  }
 }

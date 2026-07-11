@@ -10,6 +10,9 @@ function setup(): {
   const loaded: string[] = []
   let focused = 'default'
   const ctx: CommandContext = {
+    focusApp: () => {},
+    getSpacesState: () => ({ displays: [], window: null }),
+    moveTargetWindowToSpace: () => 'noop',
     getTargetWebContents: () => ({
       loadURL: (url: string) => {
         loaded.push(url)
@@ -21,12 +24,21 @@ function setup(): {
       setZoomLevel: () => {}
     }),
     getTargetProfile: () => ({ id: focused, label: focused }),
+    openFindBar: () => {},
+    findInPage: () => {},
+    findStep: () => false,
+    stopFindInPage: () => {},
     openProfile: (id: string) => {
       focused = id
       return { id, created: true }
     },
     createProfile: (label?: string) => ({ id: 'new', label: label ?? 'Profile 2' }),
     renameProfile: (id: string, label: string) => ({ id, label }),
+    setProfileColor: (id: string, color: string | null) => ({
+      id,
+      label: id,
+      ...(color ? { color } : {})
+    }),
     listProfiles: () => ({ profiles: [{ id: focused, label: focused, open: true }], focused }),
     openSettings: () => {},
     getSettings: () => ({
@@ -119,17 +131,44 @@ function setup(): {
     clearHistory: () => ({ cleared: 0 }),
     showTooltip: () => ({ shown: true }),
     hideTooltip: () => ({ hidden: true }),
-    execJsInActiveTab: (code: string) => Promise.resolve(`ran:${code}`),
+    // Permissions slice: minimal stubs, not exercised by these socket-dispatch tests.
+    listPermissions: () => [],
+    clearPermissions: () => ({ cleared: 0 }),
+    openLocationSettings: () => ({ opened: true }),
+    locationAuthStatus: () => 'authorized' as const,
+    requestLocationAuthorization: () => 'authorized' as const,
+    execJsInTab: (code: string) => Promise.resolve(`ran:${code}`),
     toggleDevToolsInActiveTab: () => true,
     // Skills slice: minimal stubs, not exercised by these socket-dispatch tests.
     activeUrl: () => null,
     extractText: () => Promise.resolve(''),
+    capturePage: () => Promise.resolve(null),
     summarize: (_prompt: string, text: string) => Promise.resolve(text),
     chat: () => Promise.resolve(''),
+    // Extensions slice: minimal stubs (loadExtension async, so the socket's
+    // await-a-promise path is exercisable — see the async dispatch test).
+    listExtensions: () => [],
+    loadExtension: (path: string) =>
+      Promise.resolve({ id: 'ext-1', name: 'Fake', version: '1.0.0', path, enabled: true }),
+    installExtension: (id: string) =>
+      Promise.resolve({
+        id,
+        name: 'Fake',
+        version: '1.0.0',
+        path: `/extensions/${id}`,
+        enabled: true
+      }),
+    updateExtensions: () => Promise.resolve(),
+    disableExtension: (id: string) =>
+      Promise.resolve({ id, name: 'Fake', version: '1.0.0', path: `/ext/${id}`, enabled: false }),
+    enableExtension: (id: string) =>
+      Promise.resolve({ id, name: 'Fake', version: '1.0.0', path: `/ext/${id}`, enabled: true }),
+    uninstallExtension: () => Promise.resolve({ removed: true }),
     // Skill pane slice: minimal stubs.
     showSkillPane: () => {},
     closeSkillPane: () => {},
-    getSkillPane: () => ({ open: false, title: '', status: 'idle' as const, messages: [] })
+    getSkillPane: () => ({ open: false, title: '', status: 'idle' as const, messages: [] }),
+    writeClipboard: () => {}
   }
   return { registry: createCommandRegistry(), ctx, loaded }
 }
@@ -167,6 +206,25 @@ describe('handleRequestLine', () => {
     expect(handleRequestLine('{"command":"fly"}', registry, ctx)).toEqual({
       ok: false,
       error: 'Unknown command: fly'
+    })
+  })
+
+  it('resolves an async command (the socket loop awaits the promise)', async () => {
+    const { registry, ctx } = setup()
+    const res = await handleRequestLine(
+      '{"command":"load-extension","params":{"path":"/ext/dark-reader"}}',
+      registry,
+      ctx
+    )
+    expect(res).toEqual({
+      ok: true,
+      extension: {
+        id: 'ext-1',
+        name: 'Fake',
+        version: '1.0.0',
+        path: '/ext/dark-reader',
+        enabled: true
+      }
     })
   })
 })

@@ -28,6 +28,25 @@ describe('new-tab', () => {
     const result = registry.execute('new-tab', {}, ctx)
     expect(result).toMatchObject({ ok: true, url: '' })
   })
+
+  it('opens in background without switching the active tab', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    const result = registry.execute('new-tab', { url: 'example.com', background: true }, ctx)
+    expect(result).toMatchObject({ ok: true, id: 'tab-2' })
+    // The tab is appended, but tab-1 stays active — Mira is not pulled forward.
+    expect(tabState().activeId).toBe('tab-1')
+    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-1', 'tab-2'])
+  })
+
+  it('rejects a non-boolean background', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('new-tab', { background: 'yes' }, ctx)).toEqual({
+      ok: false,
+      error: '"background" must be a boolean'
+    })
+  })
 })
 
 describe('select-tab', () => {
