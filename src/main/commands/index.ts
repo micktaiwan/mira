@@ -21,6 +21,7 @@ import { devtoolsCommands } from './devtools'
 import { extensionsCommands } from './extensions'
 import { findCommands } from './find'
 import { historyCommands } from './history'
+import { mediaCommands } from './media'
 import { navigationCommands } from './navigation'
 import { paletteCommands } from './palette'
 import { paneCommands } from './pane'
@@ -32,6 +33,7 @@ import { spacesCommands } from './spaces'
 import { statusCommands } from './status'
 import { tabsCommands } from './tabs'
 import { tooltipCommands } from './tooltip'
+import { vaultCommands } from './vault'
 
 // Public types, re-exported so consumers keep importing from './commands'.
 export type { CommandContext } from './context'
@@ -46,6 +48,7 @@ export { toExtensionInfo } from './extensions'
 export type { FindContext, FindStopAction } from './find'
 export type { HistoryContext } from './history'
 export type { HistoryEntry } from '../history-store'
+export type { MediaContext, MediaItem, MediaKind, MediaSource } from './media'
 export type { NavContext } from './navigation'
 export type { PaletteContext, PaletteMode } from './palette'
 export type { PaletteEntry, PaletteGroup, PaletteState } from '../palette'
@@ -63,6 +66,7 @@ export type { DisplaySpaces, SpaceEntry, SpaceLocation } from '../spaces'
 export type { StatusContext, MemoryUsage, TabCounts } from './status'
 export type { TabsContext, TabInfo, TabKind } from './tabs'
 export type { TooltipContext } from './tooltip'
+export type { VaultContext } from './vault'
 
 export type CommandRegistry = CommandRegistryOf<CommandContext>
 
@@ -75,6 +79,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...extensionsCommands,
     ...findCommands,
     ...historyCommands,
+    ...mediaCommands,
     ...navigationCommands,
     ...paletteCommands,
     ...paneCommands,
@@ -85,7 +90,8 @@ export function createCommandRegistry(): CommandRegistry {
     ...spacesCommands,
     ...statusCommands,
     ...tabsCommands,
-    ...tooltipCommands
+    ...tooltipCommands,
+    ...vaultCommands
   }
   return buildRegistry(commands)
 }

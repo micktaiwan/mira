@@ -11,6 +11,9 @@
 // CommandContext built by contextForChrome / contextForFocused.
 
 import { randomUUID } from 'crypto'
+import { existsSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
+import { extname, join } from 'node:path'
 import {
   app,
   BrowserWindow,
@@ -38,6 +41,8 @@ import type {
   TabInfo
 } from './commands'
 import { closedSkillPane, formatMemory } from './commands'
+import { MediaBuffer, captureStats, fileNameFor, mergeMedia } from './media-capture'
+import { MEDIA_COLLECT_SOURCE, parseDomMedia } from './media-collect'
 import { homePageUrl, isMiraHomeUrl, type HomeStats } from './home-doc'
 import { errorPageUrl, isMiraErrorUrl } from './error-doc'
 import { type LlmConfig, type ChatMessage, type PageContext } from './llm'
@@ -54,11 +59,14 @@ import {
   findById,
   nextProfileLabel
 } from './profile-store'
+import { vaultPlan, needsUnlock } from './vault'
+import * as vaultService from './vault-service'
 import {
   type TabState,
   type TabMeta,
   emptyTabState,
   addTab,
+  addTabAtHead,
   addTabAfter,
   addTabInactive,
   selectTab as selectTabPure,
@@ -175,6 +183,20 @@ const CLOSED_TAB_STACK_LIMIT = 25
  * (`state`, from tab-store) plus the native WebContentsView per tab (`views`,
  * keyed by tab id). Only the active tab's view is visible; the panel-collapsed
  * flag shifts where the active view sits. Tabs are per-window (CLAUDE.md). */
+/** A filename not already taken in `dir` nor in `used` (this download batch):
+ * appends " (1)", " (2)", … before the extension until free — Chrome-style. */
+function uniqueFileName(name: string, dir: string, used: Set<string>): string {
+  const taken = (n: string): boolean => used.has(n) || existsSync(join(dir, n))
+  if (!taken(name)) return name
+  const ext = extname(name)
+  const stem = ext ? name.slice(0, -ext.length) : name
+  for (let i = 1; i < 10_000; i++) {
+    const candidate = `${stem} (${i})${ext}`
+    if (!taken(candidate)) return candidate
+  }
+  return name
+}
+
 interface ProfileWindow {
   window: BrowserWindow
   id: string
@@ -205,6 +227,14 @@ interface ProfileWindow {
    * hidden meanwhile so the chrome overlay is visible (a WebContentsView composites
    * ABOVE the chrome DOM — CLAUDE.md "les deux pièges"). layout() reads this. */
   paletteOpen: boolean
+  /** True while the fullscreen media gallery overlay is open. Like the palette it
+   * hides the active web view so the chrome overlay is visible (piège #3);
+   * layout() reads this. */
+  mediaGalleryOpen: boolean
+  /** Per-tab continuous network-media buffer (metadata only — never bodies),
+   * keyed by tab id. Fed by CDP Network.responseReceived from materializeTab; the
+   * media gallery merges it with the live DOM harvest. Dropped on tab teardown. */
+  media: Map<string, MediaBuffer>
   /** The right-side skill pane (an AI summary). Unlike the palette it does not hide
    * the web view — layout() shrinks the view's WIDTH by skillPaneWidth while it is
    * open, so the pane sits beside the page (no piège #3). Closed by default. */
@@ -265,6 +295,9 @@ export interface ProfileManagerDeps {
   initialLlm: LlmConfig
   preloadPath: string
   icon?: string
+  /** The app's userData directory. Vault paths (the per-profile encrypted image and
+   * the live dirs it protects) are computed under it — see vault.ts. */
+  userDataDir: string
   /** The persisted profile list at startup (default profile guaranteed first). */
   initialProfiles: Profile[]
   /** Persist the full profile list whenever it changes (create / rename). */
@@ -358,6 +391,11 @@ export class ProfileManager {
    * Stateless dispatcher over the configured provider — extracted from this class
    * (see llm-runner.ts); reads the live provider from this.appSettings.llm. */
   private readonly llm = new LlmRunner()
+  /** Encrypted profiles unlocked THIS session, id → the password used to unlock
+   * (kept in memory so we can re-lock — mount + copy back — without re-prompting).
+   * A profile in this map has its plaintext data live on disk; absent = locked.
+   * The password is cleared on lock. */
+  private readonly unlockedVaults = new Map<string, string>()
   /** Only the currently open profiles, keyed by stable id. */
   private readonly openById = new Map<string, ProfileWindow>()
   /** Pending debounced flush of sessions.json (one timer for the whole app, as
@@ -433,6 +471,70 @@ export class ProfileManager {
     return controller
   }
 
+  // --- Encrypted profile (vault) ---
+  // The pure plan/paths are in vault.ts; the hdiutil + copy/wipe I/O in
+  // vault-service.ts. encrypt() and lock() WIPE the plaintext (after a verified
+  // copy), so both require the profile's window to be CLOSED first, so Electron has
+  // released the session partition's file handles. Auto-lock on window close is a
+  // deferred follow-up (see track.md).
+
+  /** Turn a profile into a password-protected one: create its vault, move its data
+   * in, wipe the plaintext, mark it encrypted. Leaves it LOCKED (no plaintext on
+   * disk). Throws on the default profile (vaultPlan), an already-encrypted or open
+   * profile. */
+  private async encryptProfileVault(id: string, password: string): Promise<{ id: string }> {
+    const profile = findById(this.profiles, id)
+    if (!profile) throw new Error(`unknown profile: ${id}`)
+    if (profile.encrypted) throw new Error(`already encrypted: ${id}`)
+    if (this.openById.has(id)) throw new Error('close the profile window before encrypting it')
+    const plan = vaultPlan(this.deps.userDataDir, id)
+    await vaultService.encrypt(plan, password)
+    this.profiles = this.profiles.map((p) => (p.id === id ? { ...p, encrypted: true } : p))
+    this.deps.persist(this.profiles)
+    this.deps.onChange?.()
+    return { id }
+  }
+
+  /** Unlock an encrypted profile for this session: mount its vault and copy the data
+   * back to the normal userData locations, and remember the password (in memory) so
+   * we can re-lock without re-prompting. Throws on a wrong password / not-encrypted. */
+  private async unlockProfileVault(id: string, password: string): Promise<{ id: string }> {
+    const profile = findById(this.profiles, id)
+    if (!profile) throw new Error(`unknown profile: ${id}`)
+    if (!profile.encrypted) throw new Error(`not encrypted: ${id}`)
+    if (this.unlockedVaults.has(id)) return { id }
+    const plan = vaultPlan(this.deps.userDataDir, id)
+    await vaultService.unlock(plan, password)
+    this.unlockedVaults.set(id, password)
+    this.deps.onChange?.()
+    return { id }
+  }
+
+  /** Lock an unlocked encrypted profile: copy the live data back into the vault and
+   * wipe the plaintext, using the in-memory password. Requires the window closed
+   * (handles released). No-op-safe (locked:false) if already locked. */
+  private async lockProfileVault(id: string): Promise<{ id: string; locked: boolean }> {
+    const profile = findById(this.profiles, id)
+    if (!profile) throw new Error(`unknown profile: ${id}`)
+    if (!profile.encrypted) throw new Error(`not encrypted: ${id}`)
+    const password = this.unlockedVaults.get(id)
+    if (password === undefined) return { id, locked: false }
+    if (this.openById.has(id)) throw new Error('close the profile window before locking it')
+    const plan = vaultPlan(this.deps.userDataDir, id)
+    await vaultService.lock(plan, password)
+    this.unlockedVaults.delete(id)
+    this.deps.onChange?.()
+    return { id, locked: true }
+  }
+
+  /** The encrypted-profile state: which profiles are encrypted, which are unlocked. */
+  private listVaultsState(): { encrypted: string[]; unlocked: string[] } {
+    return {
+      encrypted: this.profiles.filter((p) => p.encrypted).map((p) => p.id),
+      unlocked: [...this.unlockedVaults.keys()]
+    }
+  }
+
   /** Reopen, at startup, exactly the set of profile windows that were open when
    * Mira last quit (one window per open profile, see PersistedWindow.open). Skips
    * unknown ids (a session for a profile since deleted). Falls back to the default
@@ -453,7 +555,14 @@ export class ProfileManager {
         }
         console.warn(`[profiles] --profile: unknown id ${explicitProfileId}, ignoring`)
       }
-      const toOpen = this.profiles.filter((p) => this.sessions[p.id]?.open === true)
+      // A locked encrypted profile can't be auto-reopened (its plaintext isn't on
+      // disk, and we have no password at startup) — skip it; the user unlocks it by
+      // hand. unlockedVaults is empty at startup, so needsUnlock is true for every
+      // encrypted profile here.
+      const unlocked = new Set(this.unlockedVaults.keys())
+      const toOpen = this.profiles.filter(
+        (p) => this.sessions[p.id]?.open === true && !needsUnlock(p, unlocked)
+      )
       if (toOpen.length === 0) {
         this.openProfile(DEFAULT_PROFILE_ID)
         return
@@ -482,6 +591,11 @@ export class ProfileManager {
     }
     const profile = findById(this.profiles, id)
     if (!profile) throw new Error(`unknown profile: ${id}`)
+    // A locked encrypted profile has no plaintext data on disk — opening its window
+    // would read an empty partition. It must be unlocked (unlock-profile) first.
+    if (needsUnlock(profile, new Set(this.unlockedVaults.keys()))) {
+      throw new Error(`profile is locked: unlock it first (unlock-profile)`)
+    }
     this.create(profile)
     this.deps.onChange?.()
     return { id, created: true }
@@ -668,6 +782,8 @@ export class ProfileManager {
       closeArmedId: null,
       closedTabs: [],
       paletteOpen: false,
+      mediaGalleryOpen: false,
+      media: new Map(),
       skillPane: closedSkillPane(),
       findText: '',
       pushTimer: null,
@@ -858,6 +974,10 @@ export class ProfileManager {
     pw.views.set(tab.id, view)
 
     this.wireView(pw, tab.id, view.webContents)
+    // Start the continuous media capture on this tab's own CDP debugger (stealth
+    // already attached one at web-contents-created). Feeds the per-tab buffer the
+    // media gallery reads. Metadata only — no bodies held.
+    this.startMediaCaptureFor(pw, tab.id, view.webContents)
     // Track the fresh tab for chrome.tabs — the extension system follows our
     // strip (materializeTab is the ONE place a tab webContents is born).
     this.deps.extensions.addTab(view.webContents, pw.window)
@@ -932,15 +1052,16 @@ export class ProfileManager {
     const prevActiveId = pw.state.activeId
     const tab: TabMeta = { id: randomUUID(), title: '', url, favicon: null }
     // A tab opened from a link (afterId set) slots in right under its opener; a
-    // plain new tab (Cmd+T, socket) appends. When the opener is pinned, addTabAfter
-    // lands the child at the head of the regular zone (first in the list).
+    // plain new tab (Cmd+T, socket) lands at the head of the regular zone, so the
+    // newest tab sits at the top of the list. When the opener is pinned, addTabAfter
+    // also lands the child at the head of the regular zone (first in the list).
     // background:true appends WITHOUT switching the active tab — the page loads
     // hidden (layout only shows the active view) and the window stays where it is.
     pw.state = background
       ? addTabInactive(pw.state, tab)
       : afterId
         ? addTabAfter(pw.state, tab, afterId)
-        : addTab(pw.state, tab)
+        : addTabAtHead(pw.state, tab)
     // The active tab may have changed: a pinned tab armed by Cmd+W is disarmed.
     pw.closeArmedId = null
     this.materializeTab(pw, tab)
@@ -989,7 +1110,7 @@ export class ProfileManager {
       return this.selectTabIn(pw, pw.settingsTabId)
     }
     const tab: TabMeta = { id: randomUUID(), title: 'Settings', url, favicon: null }
-    pw.state = addTab(pw.state, tab) // becomes active
+    pw.state = addTabAtHead(pw.state, tab) // becomes active, at the top of the list
     pw.closeArmedId = null
     pw.settingsTabId = tab.id
     // No materializeTab: layout() will hide all web views since the active tab has
@@ -1322,9 +1443,10 @@ export class ProfileManager {
     const panelsHidden = pw.panelCollapsed && !pw.skillPane.open
     const fullScreenTabId = panelsHidden ? (pw.htmlFullScreen?.tabId ?? null) : null
     for (const [id, view] of pw.views) {
-      // While the palette is open, every view is hidden so the chrome overlay is
-      // visible over what would otherwise be the page (see paletteOpen).
-      const active = id === pw.state.activeId && !pw.paletteOpen
+      // While the palette OR the media gallery is open, every view is hidden so
+      // the chrome overlay is visible over what would otherwise be the page (see
+      // paletteOpen / mediaGalleryOpen).
+      const active = id === pw.state.activeId && !pw.paletteOpen && !pw.mediaGalleryOpen
       view.setVisible(active)
       if (active && id === fullScreenTabId) {
         view.setBounds({ x: 0, y: 0, width, height })
@@ -1591,9 +1713,125 @@ export class ProfileManager {
     // with the view still mapped the hook would resolve the tab and closeTabIn
     // it — turning a discard into a close (see the same guard in closeTabIn).
     pw.views.delete(id)
+    // Drop this tab's media buffer — the webContents (and its debugger) die here.
+    pw.media.delete(id)
     this.deps.extensions.removeTab(view.webContents)
     pw.window.contentView.removeChildView(view)
     view.webContents.close()
+  }
+
+  /** Enable CDP Network events on a tab's already-attached debugger and route
+   * every image / audio-video / font response into that tab's MediaBuffer. The
+   * debugger is shared with stealth's shim (see stealth.ts / cdp-eval.ts) —
+   * enabling the Network domain and listening for messages is independent of the
+   * Page domain it drives, so they coexist. Best-effort: capture failing must
+   * never break the page, so errors are logged and swallowed. */
+  private startMediaCaptureFor(pw: ProfileWindow, tabId: string, wc: WebContents): void {
+    const buffer = pw.media.get(tabId) ?? new MediaBuffer()
+    pw.media.set(tabId, buffer)
+    const dbg = wc.debugger
+    try {
+      if (!dbg.isAttached()) dbg.attach('1.3')
+    } catch (error) {
+      console.error('[mira] media capture: debugger attach failed', error)
+      return
+    }
+    dbg.on('message', (_event, method, params) => {
+      if (method !== 'Network.responseReceived') return
+      // Chromium resource types worth capturing: Image, Media (audio/video), Font.
+      const p = params as {
+        type?: string
+        response?: { url?: string; mimeType?: string; encodedDataLength?: number }
+      }
+      const type = p.type
+      if (type !== 'Image' && type !== 'Media' && type !== 'Font') return
+      const res = p.response
+      if (!res?.url) return
+      buffer.add({
+        url: res.url,
+        mime: res.mimeType,
+        resourceType: type,
+        bytes: typeof res.encodedDataLength === 'number' ? res.encodedDataLength : undefined
+      })
+    })
+    dbg.sendCommand('Network.enable').catch((error) => {
+      console.error('[mira] media capture: Network.enable failed', error)
+    })
+  }
+
+  /** Open / close / toggle the fullscreen media gallery overlay in `pw`. Mirrors
+   * the palette: hide the active web view (via layout) so the chrome overlay is
+   * visible, hand focus to the chrome, and push the state so the chrome renders
+   * or dismisses the gallery. */
+  private setMediaGalleryOpenIn(pw: ProfileWindow, open?: boolean): { open: boolean } {
+    const next = open ?? !pw.mediaGalleryOpen
+    pw.mediaGalleryOpen = next
+    this.layout(pw)
+    if (!pw.window.isDestroyed()) {
+      if (next) pw.window.webContents.focus()
+      pw.window.webContents.send('mira:media-gallery', { open: next })
+    }
+    return { open: next }
+  }
+
+  /** Resolve a tab to its live webContents and media buffer for the media
+   * commands. With a `tabId`, looks across ALL windows (ids are UUIDs) so a
+   * socket/MCP caller can target any tab; without one, the target window's active
+   * tab. Mirrors execJsInTab's errors (unknown / asleep / Settings / no page). */
+  private resolveMediaTab(
+    target: ProfileWindow | null,
+    tabId?: string
+  ): { wc: WebContents; buffer: MediaBuffer | undefined } {
+    if (tabId) {
+      for (const pw of this.openById.values()) {
+        if (pw.window.isDestroyed()) continue
+        const view = pw.views.get(tabId)
+        if (view) return { wc: view.webContents, buffer: pw.media.get(tabId) }
+        if (tabId === pw.settingsTabId) throw new Error('not a web page (Settings tab)')
+        if (pw.state.tabs.some((t) => t.id === tabId)) throw new Error(`tab is asleep: ${tabId}`)
+      }
+      throw new Error(`unknown tab: ${tabId}`)
+    }
+    if (!target || target.window.isDestroyed()) throw new Error('no target window')
+    const activeId = target.state.activeId
+    if (!activeId || activeId === target.settingsTabId) throw new Error('no active web page')
+    const view = target.views.get(activeId)
+    if (!view) throw new Error('no active tab')
+    return { wc: view.webContents, buffer: target.media.get(activeId) }
+  }
+
+  /** Save one media url to `dir`. A data: URL is decoded and written directly; an
+   * http(s) url is fetched through the tab's OWN session (so authenticated media
+   * carry the page's cookies) and written. The filename is derived from the url /
+   * mime and de-duplicated against `used` (and any file already on disk). Throws
+   * on a failed fetch so the caller can count it as failed. */
+  private async saveMediaUrl(
+    wc: WebContents,
+    url: string,
+    dir: string,
+    used: Set<string>
+  ): Promise<void> {
+    let bytes: Buffer
+    let mime = ''
+    if (url.startsWith('data:')) {
+      const comma = url.indexOf(',')
+      if (comma < 0) throw new Error('malformed data: URL')
+      const header = url.slice(5, comma)
+      const body = url.slice(comma + 1)
+      const isBase64 = /;base64$/i.test(header)
+      mime = header.replace(/;base64$/i, '') || 'application/octet-stream'
+      bytes = isBase64
+        ? Buffer.from(body, 'base64')
+        : Buffer.from(decodeURIComponent(body), 'utf8')
+    } else {
+      const res = await wc.session.fetch(url)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      mime = res.headers.get('content-type')?.split(';')[0]?.trim() ?? ''
+      bytes = Buffer.from(await res.arrayBuffer())
+    }
+    const name = uniqueFileName(fileNameFor(url, mime), dir, used)
+    used.add(name)
+    await writeFile(join(dir, name), bytes)
   }
 
   /** Tear down a tab's docked DevTools host view (if any): remove it from the
@@ -2194,6 +2432,41 @@ export class ProfileManager {
         const loaded = target.views.size
         return { total, loaded, asleep: total - loaded }
       },
+      collectMedia: async (tabId) => {
+        const { wc, buffer } = this.resolveMediaTab(target, tabId)
+        // DOM harvest (what the page shows now) + the continuous network buffer,
+        // merged with provenance. Run the script through the CDP debugger like
+        // exec-js (executeJavaScript hangs under stealth — see cdp-eval.ts).
+        const raw = await evalInWebContents(wc, MEDIA_COLLECT_SOURCE)
+        const dom = parseDomMedia(raw)
+        const network = buffer ? buffer.list() : []
+        return mergeMedia([...dom, ...network])
+      },
+      downloadMedia: async (urls, tabId) => {
+        const { wc } = this.resolveMediaTab(target, tabId)
+        const dir = app.getPath('downloads')
+        const used = new Set<string>()
+        let saved = 0
+        const failed: string[] = []
+        for (const url of urls) {
+          try {
+            await this.saveMediaUrl(wc, url, dir, used)
+            saved++
+          } catch (error) {
+            console.error(`[mira] download-media failed for ${url}`, error)
+            failed.push(url)
+          }
+        }
+        return { saved, failed }
+      },
+      getMediaStats: () => {
+        if (!target) return { count: 0, bytes: 0 }
+        return captureStats(target.media.values())
+      },
+      setMediaGalleryOpen: (open) => {
+        if (!target || target.window.isDestroyed()) throw new Error('no target window')
+        return this.setMediaGalleryOpenIn(target, open)
+      },
       openFindBar: () => {
         // Guard first: the find bar is useless without a page to search.
         activeWebContents()
@@ -2430,6 +2703,12 @@ export class ProfileManager {
       moveBookmark: (id, parentId, index) => bookmarks().move(id, parentId, index),
       listBookmarks: () => ({ tree: bookmarks().get() }),
       openBookmark: (id) => this.openBookmarkIn(target, id),
+      // Vault (encrypted profile): the commands take an explicit id, so they don't
+      // depend on the target window.
+      encryptProfile: (id, password) => this.encryptProfileVault(id, password),
+      unlockProfile: (id, password) => this.unlockProfileVault(id, password),
+      lockProfile: (id) => this.lockProfileVault(id),
+      listVaults: () => this.listVaultsState(),
       // Extensions act on the TARGET window's profile session — sets are per
       // profile (D2): installing in "Work" leaves "Default" untouched.
       listExtensions: () => {

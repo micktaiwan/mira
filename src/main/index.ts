@@ -313,6 +313,7 @@ app.whenReady().then(() => {
     homeUrl: initialSettings.homeUrl,
     initialLlm: initialSettings.llm,
     preloadPath,
+    userDataDir: app.getPath('userData'),
     ...(process.platform === 'linux' ? { icon } : {}),
     initialProfiles: loadProfiles(),
     persist: persistProfiles,
@@ -432,6 +433,21 @@ app.whenReady().then(() => {
   for (const accelerator of FOCUS_ACCELERATORS) {
     const registered = globalShortcut.register(accelerator, () =>
       runDetached('focus-app', {}, profiles.contextForFocused())
+    )
+    if (!registered) {
+      console.error(
+        `[mira] failed to register global shortcut ${accelerator} (taken by another app?)`
+      )
+    }
+  }
+
+  // Toggle the fullscreen media gallery (collect + download every media on the
+  // active page). Cmd+Shift+M is taken by focus-app, so this adds Alt. Same AZERTY
+  // caveat as above: the physical M sits on QWERTY ';', so register both keycodes.
+  const MEDIA_ACCELERATORS = ['CommandOrControl+Alt+Shift+M', 'CommandOrControl+Alt+Shift+;']
+  for (const accelerator of MEDIA_ACCELERATORS) {
+    const registered = globalShortcut.register(accelerator, () =>
+      runDetached('toggle-media-gallery', {}, profiles.contextForFocused())
     )
     if (!registered) {
       console.error(

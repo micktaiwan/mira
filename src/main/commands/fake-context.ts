@@ -154,6 +154,7 @@ export function makeContext(
     // active search, so find-next / find-previous are no-ops.
     findText: '',
     paletteOpen: false,
+    mediaGalleryOpen: false,
     tabSeq: 1,
     // Bookmarks are a global (app-wide) tree, independent of tab/profile state.
     bookmarks: [] as BookmarkTree,
@@ -236,6 +237,10 @@ export function makeContext(
     sidebarWidth: state.sidebarWidth,
     skillPaneWidth: state.skillPaneWidth
   })
+  // Vault (encrypted-profile) state: which fake profiles are encrypted, and which
+  // are unlocked this "session". The real ones shell out to hdiutil + fs.
+  const encryptedProfiles = new Set<string>()
+  const unlockedProfiles = new Set<string>()
   const ctx: CommandContext = {
     focusApp: () => {
       focusCalls.push(true)
@@ -421,6 +426,15 @@ export function makeContext(
       const total = state.tabs.tabs.length
       return { total, loaded: total, asleep: 0 }
     },
+    // Media slice: no real page/network here, so return empty harvests and record
+    // the gallery toggle. Enough for the command-layer tests.
+    collectMedia: async () => [],
+    downloadMedia: async (urls) => ({ saved: urls.length, failed: [] }),
+    getMediaStats: () => ({ count: 0, bytes: 0 }),
+    setMediaGalleryOpen: (open) => {
+      state.mediaGalleryOpen = open ?? !state.mediaGalleryOpen
+      return { open: state.mediaGalleryOpen }
+    },
     // Find slice: mirror the manager's guard (find needs an active WEB page),
     // record the calls, remember the text so findStep works without resending it.
     openFindBar: () => {
@@ -481,6 +495,16 @@ export function makeContext(
       if (!active || active.id === state.settingsTabId) throw new Error('no active web page')
       state.devToolsOpen = !state.devToolsOpen
       return state.devToolsOpen
+    },
+    inspectCookiesInActiveTab: () => {
+      // Mirror the manager: refuse when there's no active web page, otherwise
+      // ensure DevTools are open (never toggling them off) so the inspect-cookies
+      // command's plumbing is testable. The real reveal drives Chromium's
+      // frontend and isn't modeled here.
+      const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
+      if (!active || active.id === state.settingsTabId) throw new Error('no active web page')
+      state.devToolsOpen = true
+      return Promise.resolve(true)
     },
     activeUrl: () => {
       // Mirror the manager: the active tab's url, or null for the Settings tab.
@@ -649,6 +673,28 @@ export function makeContext(
       state.permissions = []
       return { cleared }
     },
+    // Vault: in-memory stand-ins for the hdiutil-backed real methods. encrypt marks
+    // the profile encrypted+locked; unlock/lock flip the unlocked flag.
+    encryptProfile: async (id: string) => {
+      if (id === 'default') throw new Error('the default profile cannot be encrypted')
+      if (encryptedProfiles.has(id)) throw new Error(`already encrypted: ${id}`)
+      encryptedProfiles.add(id)
+      return { id }
+    },
+    unlockProfile: async (id: string) => {
+      if (!encryptedProfiles.has(id)) throw new Error(`not encrypted: ${id}`)
+      unlockedProfiles.add(id)
+      return { id }
+    },
+    lockProfile: async (id: string) => {
+      if (!encryptedProfiles.has(id)) throw new Error(`not encrypted: ${id}`)
+      const locked = unlockedProfiles.delete(id)
+      return { id, locked }
+    },
+    listVaults: () => ({
+      encrypted: [...encryptedProfiles],
+      unlocked: [...unlockedProfiles]
+    }),
     // Fake: report as if the pane opened (the real one shells out to macOS).
     openLocationSettings: () => ({ opened: true }),
     // Fake macOS location auth: 'authorized' so tests exercise the working path

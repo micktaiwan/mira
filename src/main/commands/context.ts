@@ -13,6 +13,7 @@ import type { DevtoolsContext } from './devtools'
 import type { ExtensionsContext } from './extensions'
 import type { FindContext } from './find'
 import type { HistoryContext } from './history'
+import type { MediaContext } from './media'
 import type { NavContext } from './navigation'
 import type { PaletteContext } from './palette'
 import type { PaneContext } from './pane'
@@ -24,6 +25,7 @@ import type { SpacesContext } from './spaces'
 import type { StatusContext } from './status'
 import type { TabsContext } from './tabs'
 import type { TooltipContext } from './tooltip'
+import type { VaultContext } from './vault'
 
 export type CommandContext = AppContext &
   BookmarkContext &
@@ -32,6 +34,7 @@ export type CommandContext = AppContext &
   ExtensionsContext &
   FindContext &
   HistoryContext &
+  MediaContext &
   NavContext &
   PaletteContext &
   PaneContext &
@@ -42,4 +45,5 @@ export type CommandContext = AppContext &
   SpacesContext &
   StatusContext &
   TabsContext &
-  TooltipContext
+  TooltipContext &
+  VaultContext
