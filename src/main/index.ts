@@ -188,32 +188,12 @@ app.whenReady().then(() => {
     }
   }
 
-  // Favorites are global (one list for the whole app) and persisted to
-  // userData/bookmarks.json. Bad/missing file degrades to no favorites.
-  const bookmarksPath = join(app.getPath('userData'), 'bookmarks.json')
-  const loadBookmarks = (): BookmarkTree => {
-    try {
-      return normalizeBookmarks(JSON.parse(readFileSync(bookmarksPath, 'utf8')))
-    } catch {
-      return []
-    }
-  }
-  const persistBookmarks = (bookmarks: BookmarkTree): void => {
-    try {
-      writeFileSync(bookmarksPath, JSON.stringify(bookmarks, null, 2))
-    } catch (error) {
-      console.error('[mira] failed to persist bookmarks', error)
-    }
-  }
-
-  // Browsing history is global (one list for the whole app, like favorites) and
-  // persisted to userData/history.json. Bad/missing file degrades to empty history.
   // Per-profile storage: a profile's browsing trails (history, permission grants,
-  // and — 3b — favorites) live under userData/profiles/<id>/, so one profile's
-  // history never leaks into another's. This dir is also the unit a future
+  // and favorites) live under userData/profiles/<id>/, so one profile's history /
+  // favorites never leak into another's. This dir is also the unit a future
   // password-protected profile will encrypt into its own vault. No migration: the
-  // old global userData/{history,permissions}.json are simply abandoned (left on
-  // disk, not deleted — that's the user's data).
+  // old global userData/{history,permissions,bookmarks}.json are simply abandoned
+  // (left on disk, not deleted — that's the user's data).
   const profileDir = (id: string): string => join(app.getPath('userData'), 'profiles', id)
   const profileFile = (id: string, name: string): string => join(profileDir(id), name)
   const loadProfileJson = <T>(id: string, name: string, normalize: (raw: unknown) => T): T => {
@@ -239,6 +219,10 @@ app.whenReady().then(() => {
     loadProfileJson(id, 'permissions.json', normalizePermissions)
   const persistProfilePermissions = (id: string, permissions: PermissionGrant[]): void =>
     persistProfileJson(id, 'permissions.json', permissions)
+  const loadProfileBookmarks = (id: string): BookmarkTree =>
+    loadProfileJson(id, 'bookmarks.json', normalizeBookmarks)
+  const persistProfileBookmarks = (id: string, bookmarks: BookmarkTree): void =>
+    persistProfileJson(id, 'bookmarks.json', bookmarks)
 
   // App settings (currently just the home page URL) are persisted to
   // userData/settings.json. Bad/missing file degrades to the built-in defaults.
@@ -334,8 +318,8 @@ app.whenReady().then(() => {
     persist: persistProfiles,
     initialSessions: loadSessions(),
     persistSessions,
-    initialBookmarks: loadBookmarks(),
-    persistBookmarks,
+    loadProfileBookmarks,
+    persistProfileBookmarks,
     loadProfileHistory,
     persistProfileHistory,
     loadProfilePermissions,

@@ -274,12 +274,14 @@ export interface ProfileManagerDeps {
   /** Persist every profile's window state (tabs, active tab, panel) on change,
    * so a restart reopens exactly where the user left off. */
   persistSessions: (sessions: PersistedSessions) => void
-  /** The persisted favorites tree at startup (global, one list for the whole app). */
-  initialBookmarks: BookmarkTree
-  /** Persist the full bookmark tree whenever it changes (add / remove / move). */
-  persistBookmarks: (bookmarks: BookmarkTree) => void
-  /** Called when the favorites tree changes, so the native Bookmarks menu (which
-   * renders the tree) can be rebuilt. Separate from onChange (profiles). */
+  /** Load a profile's persisted favorites tree (per profile — one file per id).
+   * Bad/missing file degrades to no favorites. */
+  loadProfileBookmarks: (id: string) => BookmarkTree
+  /** Persist a profile's full favorites tree whenever it changes. */
+  persistProfileBookmarks: (id: string, bookmarks: BookmarkTree) => void
+  /** Called when the FOCUSED profile's favorites change, so the native Bookmarks
+   * menu (which renders the focused profile's tree) can be rebuilt. Separate from
+   * onChange (profiles). */
   onBookmarksChange?: () => void
   /** Load a profile's persisted browsing history (per profile — one file per id,
    * so history never leaks across profiles). Bad/missing file degrades to empty. */
@@ -326,10 +328,10 @@ export class ProfileManager {
   /** Every profile's last window state (open or not). Mirrors sessions.json;
    * a closed profile keeps its saved tabs until it is reopened. */
   private sessions: PersistedSessions
-  /** The global favorites tree + its mutations, extracted into its own controller
-   * (bookmarks-controller.ts). App-wide, one list for all profiles. Constructed in
-   * the constructor so its onChange can broadcast to the windows + native menu. */
-  private readonly bookmarks: BookmarksController
+  /** Each profile's favorites tree + its mutations (bookmarks-controller.ts). ONE
+   * BookmarksController PER PROFILE id, created lazily by bookmarksFor(): a
+   * profile's favorites live in its own file and never leak into another's. */
+  private readonly bookmarksById = new Map<string, BookmarksController>()
   /** Live app settings (home URL, …). Mirrors settings.json; seeded from
    * deps.homeUrl and updated in place by set-home-url. */
   private appSettings: AppSettings
@@ -379,21 +381,6 @@ export class ProfileManager {
   constructor(private readonly deps: ProfileManagerDeps) {
     this.profiles = deps.initialProfiles
     this.sessions = deps.initialSessions
-    this.bookmarks = new BookmarksController({
-      initial: deps.initialBookmarks,
-      persist: deps.persistBookmarks,
-      // Bookmarks are global: one change refreshes every window's address-bar star
-      // and rebuilds the native Bookmarks menu (both need the window set / app,
-      // which the controller doesn't own — hence this callback).
-      onChange: (tree) => {
-        for (const pw of this.openById.values()) {
-          if (!pw.window.isDestroyed()) {
-            pw.window.webContents.send('mira:bookmarks-changed', { tree })
-          }
-        }
-        this.deps.onBookmarksChange?.()
-      }
-    })
     this.appSettings = {
       homeUrl: deps.homeUrl,
       llm: deps.initialLlm,
@@ -422,6 +409,28 @@ export class ProfileManager {
     })
     this.dataById.set(id, data)
     return data
+  }
+
+  /** The BookmarksController for a profile id, created (and its file loaded) on
+   * first use. One per profile so favorites stay isolated; a change refreshes only
+   * THAT profile's window star, and rebuilds the native menu (it renders the
+   * focused profile's tree — see listBookmarksTree). */
+  private bookmarksFor(id: string): BookmarksController {
+    const existing = this.bookmarksById.get(id)
+    if (existing) return existing
+    const controller = new BookmarksController({
+      initial: this.deps.loadProfileBookmarks(id),
+      persist: (tree) => this.deps.persistProfileBookmarks(id, tree),
+      onChange: (tree) => {
+        const pw = this.openById.get(id)
+        if (pw && !pw.window.isDestroyed()) {
+          pw.window.webContents.send('mira:bookmarks-changed', { tree })
+        }
+        this.deps.onBookmarksChange?.()
+      }
+    })
+    this.bookmarksById.set(id, controller)
+    return controller
   }
 
   /** Reopen, at startup, exactly the set of profile windows that were open when
@@ -1865,16 +1874,18 @@ export class ProfileManager {
     title?: string,
     parentId?: string
   ): { node: BookmarkNode; created: boolean } {
+    // A target is always needed now: favorites are per profile, so we must know
+    // WHICH profile's tree to add to (not just to read the active tab's url).
+    if (!target || target.window.isDestroyed()) throw new Error('no target window')
     let finalUrl = url
     let finalTitle = title
     if (finalUrl === undefined) {
-      if (!target || target.window.isDestroyed()) throw new Error('no target window')
       const active = target.state.tabs.find((t) => t.id === target.state.activeId)
       if (!active) throw new Error('no active tab')
       finalUrl = active.url
       if (finalTitle === undefined) finalTitle = active.title
     }
-    return this.bookmarks.addUrl(finalUrl, finalTitle ?? '', parentId)
+    return this.bookmarksFor(target.id).addUrl(finalUrl, finalTitle ?? '', parentId)
   }
 
   /** Open a favorite's url in a new tab of `target` and focus it (address-bar
@@ -1882,14 +1893,17 @@ export class ProfileManager {
    * target. */
   private openBookmarkIn(target: ProfileWindow | null, id: string): { tabId: string; url: string } {
     if (!target || target.window.isDestroyed()) throw new Error('no target window')
-    const url = this.bookmarks.urlFor(id)
+    const url = this.bookmarksFor(target.id).urlFor(id)
     const tab = this.newTabIn(target, url, true)
     return { tabId: tab.id, url }
   }
 
-  /** The favorites tree, for the native Bookmarks menu (menu.ts, via index.ts). */
+  /** The FOCUSED profile's favorites tree, for the native Bookmarks menu (menu.ts,
+   * via index.ts). The menu is app-global but shows one profile at a time; it is
+   * rebuilt on focus change (onChange), so it always mirrors the front window. */
   listBookmarksTree(): BookmarkTree {
-    return this.bookmarks.get()
+    const id = this.focusedId() ?? this.openById.keys().next().value
+    return id ? this.bookmarksFor(id).get() : []
   }
 
   listProfiles(): {
@@ -1952,6 +1966,11 @@ export class ProfileManager {
     const profileData = (): ProfileData => {
       if (!target) throw new Error('no target window')
       return this.dataFor(target.id)
+    }
+    // Favorites are per profile too — bookmark commands act on the target profile.
+    const bookmarks = (): BookmarksController => {
+      if (!target) throw new Error('no target window')
+      return this.bookmarksFor(target.id)
     }
     return {
       getTargetWebContents: () => {
@@ -2405,11 +2424,11 @@ export class ProfileManager {
       locationAuthStatus: () => locationAuthStatus(),
       requestLocationAuthorization: () => requestLocationAuthorization(),
       addBookmark: (url, title, parentId) => this.addBookmarkIn(target, url, title, parentId),
-      addFolder: (title, parentId) => this.bookmarks.addFolder(title, parentId),
-      removeBookmark: (id) => this.bookmarks.remove(id),
-      renameBookmark: (id, title) => this.bookmarks.rename(id, title),
-      moveBookmark: (id, parentId, index) => this.bookmarks.move(id, parentId, index),
-      listBookmarks: () => ({ tree: this.bookmarks.get() }),
+      addFolder: (title, parentId) => bookmarks().addFolder(title, parentId),
+      removeBookmark: (id) => bookmarks().remove(id),
+      renameBookmark: (id, title) => bookmarks().rename(id, title),
+      moveBookmark: (id, parentId, index) => bookmarks().move(id, parentId, index),
+      listBookmarks: () => ({ tree: bookmarks().get() }),
       openBookmark: (id) => this.openBookmarkIn(target, id),
       // Extensions act on the TARGET window's profile session — sets are per
       // profile (D2): installing in "Work" leaves "Default" untouched.
