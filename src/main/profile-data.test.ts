@@ -124,3 +124,20 @@ describe('ProfileData.flush', () => {
     expect(persistPermissions).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('ProfileData.dispose', () => {
+  it('cancels pending debounces WITHOUT writing (no plaintext recreated after a vault lock)', () => {
+    const { data, persistHistory, persistPermissions } = make()
+    data.recordVisit('https://a.com', 'A')
+    data.recordGrant('https://a.com', 'geolocation')
+    data.dispose()
+    // dispose does not persist...
+    expect(persistHistory).not.toHaveBeenCalled()
+    expect(persistPermissions).not.toHaveBeenCalled()
+    // ...and the cancelled timers never fire, so nothing lands on disk later —
+    // which is what stops a debounce from recreating the just-wiped plaintext.
+    vi.advanceTimersByTime(DEBOUNCE)
+    expect(persistHistory).not.toHaveBeenCalled()
+    expect(persistPermissions).not.toHaveBeenCalled()
+  })
+})

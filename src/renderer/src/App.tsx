@@ -7,6 +7,7 @@ import SkillPane, { type ChatOptions } from './SkillPane'
 import ResizeHandle from './ResizeHandle'
 import ExtensionActions from './features/extensions/ExtensionActions'
 import FindBar from './features/find/FindBar'
+import MediaGallery from './features/media/MediaGallery'
 import { applyProfileColor, initialProfileColor } from './features/profile-theme/profile-theme'
 import type { SkillPaneState } from '../../preload/index.d'
 
@@ -92,6 +93,9 @@ function App(): React.JSX.Element {
   // find-open push so Cmd+F re-focuses the input even when already open.
   const [findOpen, setFindOpen] = useState(false)
   const [findFocusSeq, setFindFocusSeq] = useState(0)
+  // The fullscreen media gallery (Cmd+Alt+Shift+M). Main owns it (it hides the
+  // active web view so the overlay is visible) and pushes the open state here.
+  const [mediaGalleryOpen, setMediaGalleryOpen] = useState(false)
   // Resizable panel widths (px). Seeded from settings on mount; a drag updates
   // them live (CSS var + a throttled command so main reflows the web view).
   const [sidebarWidth, setSidebarWidth] = useState(240)
@@ -170,6 +174,19 @@ function App(): React.JSX.Element {
       setFindOpen(true)
       setFindFocusSeq((n) => n + 1)
     })
+  }, [])
+
+  useEffect(() => {
+    // Main toggles the media gallery (the shortcut / socket) and pushes the new
+    // visibility here; it also hides/shows the web view to match.
+    return window.mira.onMediaGallery((state) => setMediaGalleryOpen(state.open))
+  }, [])
+
+  // Close the gallery: optimistically hide it, then tell main (which restores the
+  // web view). Main owns the state, keeping the view in sync.
+  const closeMediaGallery = useCallback((): void => {
+    setMediaGalleryOpen(false)
+    void window.mira.command('close-media-gallery')
   }, [])
 
   // Close the find bar: hide it and end the search (clears the page highlights).
@@ -474,6 +491,9 @@ function App(): React.JSX.Element {
       {paletteOpen && (
         <CommandPalette onClose={closePalette} mode={paletteMode} initialQuery={paletteQuery} />
       )}
+      {/* The fullscreen media gallery. Main has hidden the web view, so this
+          overlay is visible over the page area. */}
+      {mediaGalleryOpen && <MediaGallery onClose={closeMediaGallery} />}
       {/* The right-side skill pane. Main shrinks the web view by its width while
           open (profiles.ts layout), so it sits beside the page rather than over it. */}
       {skillPane.open && (

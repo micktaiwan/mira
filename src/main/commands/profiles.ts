@@ -13,6 +13,10 @@ export interface ProfileContext {
   /** Open the window for an existing profile id, or focus it if already open.
    * Throws if the id is unknown. */
   openProfile: (id: string) => { id: string; created: boolean }
+  /** Close the open window of a profile without quitting the app or touching the
+   * other profiles. `closed` is false when the id was known but not currently
+   * open (idempotent). Throws if the id is unknown. */
+  closeProfile: (id: string) => { id: string; closed: boolean }
   /** Create a new profile (fresh id + label) and open its window. */
   createProfile: (label?: string) => ProfileInfo
   /** Relabel an existing profile. The id (and its cookies) are untouched.
@@ -30,6 +34,10 @@ export interface ProfileContext {
 }
 
 export interface OpenProfileParams {
+  id: string
+}
+
+export interface CloseProfileParams {
   id: string
 }
 
@@ -57,6 +65,19 @@ export const profileCommands: CommandMap<CommandContext> = {
     try {
       const { id: opened, created } = ctx.openProfile(id.trim())
       return { ok: true, id: opened, created }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  'close-profile': (ctx, params) => {
+    const { id } = (params ?? {}) as Partial<CloseProfileParams>
+    if (typeof id !== 'string' || id.trim() === '') {
+      return { ok: false, error: 'missing "id"' }
+    }
+    try {
+      const { id: closedId, closed } = ctx.closeProfile(id.trim())
+      return { ok: true, id: closedId, closed }
     } catch (error) {
       return fail(error)
     }

@@ -40,6 +40,7 @@ import {
   type HistoryEntry
 } from '../history-store'
 import { type PermissionGrant } from '../permission-store'
+import type { MagnifierState } from '../magnifier'
 
 export interface FakeContext {
   ctx: CommandContext
@@ -74,6 +75,10 @@ export interface FakeContext {
   tooltipShown: Array<{ text: string; anchor: TooltipRect }>
   /** hide-tooltip calls (delegation spy). */
   tooltipHidden: boolean[]
+  /** Each applyMagnifierClip call: the view id and the state applied (magnifier spy). */
+  magnifierApplied: Array<{ id: string; state: MagnifierState }>
+  /** View ids flashed via magnifierFlash (back-to-100% spy). */
+  magnifierFlashes: string[]
   /** Cookies set per profile id via cookieJarForProfile (import spy). */
   cookiesSet: Map<string, CookieSetDetails[]>
   /** Code + target passed to execJsInTab (exec-js spy); tabId null = active tab. */
@@ -98,6 +103,8 @@ export interface FakeContext {
   extensionsFor: (profileId: string) => ExtensionInfo[]
   /** One entry per focusApp call (focus-app spy). */
   focusCalls: boolean[]
+  /** URLs passed to openExternalUrl (open-url / open-file handoff spy). */
+  externalOpens: string[]
   /** Desktop indexes requested via moveTargetWindowToSpace (spaces spy). */
   spaceMoves: number[]
   /** Live view of the fake window's virtual-desktop index (spaces spy). */
@@ -132,7 +139,12 @@ export function makeContext(
   const skillPaneStates: SkillPaneState[] = []
   const clipboardWrites: string[] = []
   const focusCalls: boolean[] = []
+  const externalOpens: string[] = []
   const spaceMoves: number[] = []
+  // Magnifier: per-view zoom/pan state, plus spies for the native effects.
+  const magnifierStates = new Map<string, MagnifierState>()
+  const magnifierApplied: Array<{ id: string; state: MagnifierState }> = []
+  const magnifierFlashes: string[] = []
   // The fake Spaces world: three user desktops on one display (stable fake ids).
   const fakeSpaceIds = [101, 103, 107]
   let windowSpace = 0
@@ -245,6 +257,11 @@ export function makeContext(
     focusApp: () => {
       focusCalls.push(true)
     },
+    // Default-browser handoff: openUrl targets the last-focused profile in the
+    // real manager; the fake just records the resolved url (open-url / open-file).
+    openExternalUrl: (url: string) => {
+      externalOpens.push(url)
+    },
     // Spaces slice: one display with three virtual desktops, window on the first.
     // Mirrors the real guards (no target / unknown index throw, same index noop).
     getSpacesState: () => ({
@@ -299,6 +316,14 @@ export function makeContext(
       profile.open = true
       state.focused = id
       return { id, created }
+    },
+    closeProfile: (id: string) => {
+      const profile = state.profiles.find((p) => p.id === id)
+      if (!profile) throw new Error(`unknown profile: ${id}`)
+      const closed = profile.open
+      profile.open = false
+      if (state.focused === id) state.focused = null
+      return { id, closed }
     },
     createProfile: (label?: string) => {
       const id = `id-${++state.seq}`
@@ -430,6 +455,7 @@ export function makeContext(
     // the gallery toggle. Enough for the command-layer tests.
     collectMedia: async () => [],
     downloadMedia: async (urls) => ({ saved: urls.length, failed: [] }),
+    recordVideo: async () => ({ saved: true, file: 'video-recording.webm' }),
     getMediaStats: () => ({ count: 0, bytes: 0 }),
     setMediaGalleryOpen: (open) => {
       state.mediaGalleryOpen = open ?? !state.mediaGalleryOpen
@@ -463,6 +489,23 @@ export function makeContext(
     showTooltip: (text: string, anchor: TooltipRect) => {
       tooltipShown.push({ text, anchor })
       return { shown: true }
+    },
+    // Magnifier slice: the active web tab is the target (Settings / empty window
+    // are not magnifiable); a fixed surface size stands in for the view bounds.
+    magnifierTarget: () => {
+      const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
+      if (!active || active.id === state.settingsTabId) return null
+      return { id: active.id, width: 1000, height: 800 }
+    },
+    getMagnifierState: (id: string) => magnifierStates.get(id) ?? { scale: 1, originX: 0, originY: 0 },
+    setMagnifierState: (id: string, s: MagnifierState) => {
+      magnifierStates.set(id, s)
+    },
+    applyMagnifierClip: (id: string, s: MagnifierState) => {
+      magnifierApplied.push({ id, state: s })
+    },
+    magnifierFlash: (id: string) => {
+      magnifierFlashes.push(id)
     },
     hideTooltip: () => {
       tooltipHidden.push(true)
@@ -864,6 +907,8 @@ export function makeContext(
     findStops,
     tooltipShown,
     tooltipHidden,
+    magnifierApplied,
+    magnifierFlashes,
     cookiesSet,
     execJs,
     extractCalls,
@@ -876,6 +921,7 @@ export function makeContext(
     devToolsOpen: () => state.devToolsOpen,
     extensionsFor: (profileId: string) => (state.extensions.get(profileId) ?? []).slice(),
     focusCalls,
+    externalOpens,
     spaceMoves,
     windowSpaceIndex: () => windowSpace
   }

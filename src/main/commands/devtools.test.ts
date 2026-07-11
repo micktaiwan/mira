@@ -85,3 +85,37 @@ describe('toggle-devtools', () => {
     })
   })
 })
+
+describe('inspect-cookies', () => {
+  it('opens the active tab devtools and reports it open', async () => {
+    const { ctx, devToolsOpen } = makeContext()
+    expect(devToolsOpen()).toBe(false)
+
+    expect(await registry.execute('inspect-cookies', {}, ctx)).toEqual({
+      ok: true,
+      result: { open: true }
+    })
+    expect(devToolsOpen()).toBe(true)
+  })
+
+  it('never toggles an already-open inspector shut', async () => {
+    const { ctx, devToolsOpen } = makeContext()
+    await registry.execute('toggle-devtools', {}, ctx)
+    expect(devToolsOpen()).toBe(true)
+
+    expect(await registry.execute('inspect-cookies', {}, ctx)).toEqual({
+      ok: true,
+      result: { open: true }
+    })
+    expect(devToolsOpen()).toBe(true)
+  })
+
+  it('fails when the active tab is the Settings tab (no web page)', async () => {
+    const { ctx } = makeContext()
+    await registry.execute('open-settings', {}, ctx)
+    expect(await registry.execute('inspect-cookies', {}, ctx)).toEqual({
+      ok: false,
+      error: 'no active web page'
+    })
+  })
+})

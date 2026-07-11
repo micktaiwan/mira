@@ -13,8 +13,10 @@ import type { DevtoolsContext } from './devtools'
 import type { ExtensionsContext } from './extensions'
 import type { FindContext } from './find'
 import type { HistoryContext } from './history'
+import type { MagnifierContext } from './magnifier'
 import type { MediaContext } from './media'
 import type { NavContext } from './navigation'
+import type { OpenContext } from './open'
 import type { PaletteContext } from './palette'
 import type { PaneContext } from './pane'
 import type { PermissionContext } from './permissions'
@@ -34,8 +36,10 @@ export type CommandContext = AppContext &
   ExtensionsContext &
   FindContext &
   HistoryContext &
+  MagnifierContext &
   MediaContext &
   NavContext &
+  OpenContext &
   PaletteContext &
   PaneContext &
   PermissionContext &

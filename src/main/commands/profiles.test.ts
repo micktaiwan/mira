@@ -63,6 +63,71 @@ describe('open-profile', () => {
   })
 })
 
+describe('close-profile', () => {
+  it('closes an open profile and reports closed:true', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    const work = registry.execute('create-profile', { label: 'Work' }, ctx) as unknown as {
+      id: string
+    }
+    expect(registry.execute('close-profile', { id: work.id }, ctx)).toEqual({
+      ok: true,
+      id: work.id,
+      closed: true
+    })
+    const list = registry.execute('list-profiles', {}, ctx) as unknown as {
+      profiles: Array<ProfileInfo & { open: boolean }>
+    }
+    expect(list.profiles.find((p) => p.id === work.id)!.open).toBe(false)
+  })
+
+  it('reports closed:false when the profile is already closed', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    const work = registry.execute('create-profile', { label: 'Work' }, ctx) as unknown as {
+      id: string
+    }
+    registry.execute('close-profile', { id: work.id }, ctx)
+    expect(registry.execute('close-profile', { id: work.id }, ctx)).toEqual({
+      ok: true,
+      id: work.id,
+      closed: false
+    })
+  })
+
+  it('trims the id', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('close-profile', { id: '  default  ' }, ctx)).toEqual({
+      ok: true,
+      id: 'default',
+      closed: true
+    })
+  })
+
+  it('fails on an unknown id', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('close-profile', { id: 'ghost' }, ctx)).toEqual({
+      ok: false,
+      error: 'unknown profile: ghost'
+    })
+  })
+
+  it('rejects a missing or empty id', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('close-profile', {}, ctx)).toEqual({
+      ok: false,
+      error: 'missing "id"'
+    })
+    expect(registry.execute('close-profile', { id: '  ' }, ctx)).toEqual({
+      ok: false,
+      error: 'missing "id"'
+    })
+  })
+})
+
 describe('create-profile', () => {
   it('creates a profile with an auto label and opens it', () => {
     const { ctx, opened } = makeContext()

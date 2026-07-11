@@ -28,6 +28,17 @@ interface Status {
   cookies: number | null
   /** URL those cookies belong to, for the tooltip. */
   cookieUrl: string | null
+  /** How many media the continuous network capture holds for this window, or
+   * null when unavailable. */
+  mediaCount: number | null
+  /** The capture buffer's RAM footprint, formatted (e.g. "48.0 KB") — what the
+   * always-on capture costs. */
+  mediaText: string
+  /** Video recordings in flight (captureStream capture runs in main, so this
+   * shows even after the gallery is closed). */
+  recordings: number
+  /** Epoch ms the earliest active recording started, for the elapsed clock. */
+  recordingSince: number | null
 }
 
 const EMPTY: Status = {
@@ -36,7 +47,19 @@ const EMPTY: Status = {
   tabsText: '',
   tabs: null,
   cookies: null,
-  cookieUrl: null
+  cookieUrl: null,
+  mediaCount: null,
+  mediaText: '',
+  recordings: 0,
+  recordingSince: null
+}
+
+/** m:ss for an elapsed-ms span. */
+function elapsedText(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000))
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${m}:${String(s).padStart(2, '0')}`
 }
 
 /** Host of a URL for the cookie tooltip, e.g. "github.com"; falls back to the
@@ -68,6 +91,8 @@ export default function StatusBar(): React.JSX.Element {
   const [now, setNow] = useState(() => new Date())
   const [status, setStatus] = useState<Status>(EMPTY)
   const [hoverUrl, setHoverUrl] = useState('')
+  // Epoch ms ticked every second WHILE a recording runs, for the elapsed clock.
+  const [recNow, setRecNow] = useState(0)
   const showTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // Main pushes the link the cursor rests on in the active page (empty on leave),
@@ -91,9 +116,10 @@ export default function StatusBar(): React.JSX.Element {
     let alive = true
     let debounce: ReturnType<typeof setTimeout> | null = null
     const poll = async (): Promise<void> => {
-      const [res, cookieRes] = (await Promise.all([
+      const [res, cookieRes, mediaRes] = (await Promise.all([
         window.mira.command('get-status'),
-        window.mira.command('count-active-cookies')
+        window.mira.command('count-active-cookies'),
+        window.mira.command('get-media-stats')
       ])) as [
         {
           ok: boolean
@@ -102,7 +128,14 @@ export default function StatusBar(): React.JSX.Element {
           tabsText?: string
           tabs?: { total: number; loaded: number; asleep: number }
         },
-        { ok: boolean; url?: string | null; count?: number }
+        { ok: boolean; url?: string | null; count?: number },
+        {
+          ok: boolean
+          count?: number
+          text?: string
+          recordings?: number
+          recordingSince?: number | null
+        }
       ]
       if (!alive || !res.ok) return
       setStatus({
@@ -111,7 +144,11 @@ export default function StatusBar(): React.JSX.Element {
         tabsText: res.tabsText ?? '',
         tabs: res.tabs ?? null,
         cookies: cookieRes.ok ? (cookieRes.count ?? null) : null,
-        cookieUrl: cookieRes.ok ? (cookieRes.url ?? null) : null
+        cookieUrl: cookieRes.ok ? (cookieRes.url ?? null) : null,
+        mediaCount: mediaRes.ok ? (mediaRes.count ?? null) : null,
+        mediaText: mediaRes.ok ? (mediaRes.text ?? '') : '',
+        recordings: mediaRes.ok ? (mediaRes.recordings ?? 0) : 0,
+        recordingSince: mediaRes.ok ? (mediaRes.recordingSince ?? null) : null
       })
     }
     // get-status walks every process (getAppMetrics), so coalesce bursts of tab
@@ -165,7 +202,21 @@ export default function StatusBar(): React.JSX.Element {
     void window.mira.command('hide-tooltip')
   }
 
-  const { tabs, processes, cookies, cookieUrl } = status
+  const { tabs, processes, cookies, cookieUrl, mediaCount, mediaText, recordings, recordingSince } =
+    status
+
+  // Tick the elapsed clock every second while recording (the memory poll only
+  // runs every 5s, too coarse for a live timer).
+  useEffect(() => {
+    if (recordings === 0) return
+    const id = setInterval(() => setRecNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [recordings])
+
+  const recElapsed =
+    recordings > 0 && recordingSince && recNow > recordingSince
+      ? elapsedText(recNow - recordingSince)
+      : '0:00'
   const tabsDetail = tabs ? `${tabs.loaded} loaded, ${tabs.asleep} asleep` : ''
   const cookieDetail =
     cookies != null && cookieUrl
@@ -177,15 +228,53 @@ export default function StatusBar(): React.JSX.Element {
 
   return (
     <div className="status-bar">
-      {hoverUrl && (
-        <span className="status-item status-hover-url">{hoverUrl}</span>
-      )}
+      {hoverUrl && <span className="status-item status-hover-url">{hoverUrl}</span>}
       <div className="status-right">
+        {recordings > 0 && (
+          <span
+            className="status-item status-recording status-clickable"
+            onMouseEnter={(e) =>
+              show(
+                e.currentTarget,
+                `Recording ${recordings} video${recordings > 1 ? 's' : ''} in the background — saves to Downloads when done. Click to open the gallery.`
+              )
+            }
+            onMouseLeave={hide}
+            onClick={() => {
+              hide()
+              void window.mira.command('open-media-gallery')
+            }}
+          >
+            {`🔴 ${recElapsed}`}
+          </span>
+        )}
+        {mediaCount != null && mediaCount > 0 && (
+          <span
+            className="status-item status-media status-clickable"
+            onMouseEnter={(e) =>
+              show(
+                e.currentTarget,
+                `${mediaCount} media captured · ~${mediaText} buffered (metadata only) — click to open gallery`
+              )
+            }
+            onMouseLeave={hide}
+            onClick={() => {
+              hide()
+              void window.mira.command('open-media-gallery')
+            }}
+          >
+            {`🎞️ ${mediaCount}`}
+          </span>
+        )}
         {cookies != null && (
           <span
-            className="status-item status-cookies"
-            onMouseEnter={(e) => show(e.currentTarget, cookieDetail)}
+            className="status-item status-cookies status-clickable"
+            onMouseEnter={(e) => show(e.currentTarget, `${cookieDetail} — click to inspect`)}
             onMouseLeave={hide}
+            onClick={() => {
+              hide()
+              void window.mira.command('inspect-cookies')
+            }}
           >
             {`🍪 ${cookies}`}
           </span>

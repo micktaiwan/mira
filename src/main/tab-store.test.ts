@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   emptyTabState,
   addTab,
+  addTabAtHead,
   addTabInactive,
   addTabAfter,
   selectTab,
@@ -25,6 +26,33 @@ describe('addTab', () => {
     s = addTab(s, tab('b'))
     expect(s.tabs.map((t) => t.id)).toEqual(['a', 'b'])
     expect(s.activeId).toBe('b')
+  })
+})
+
+describe('addTabAtHead', () => {
+  const pinned = (id: string): TabMeta => ({ ...tab(id), pinned: true })
+
+  it('inserts the new tab at the top and focuses it (newest first)', () => {
+    let s = addTab(addTab(emptyTabState(), tab('a')), tab('b'))
+    s = addTabAtHead(s, tab('c'))
+    expect(s.tabs.map((t) => t.id)).toEqual(['c', 'a', 'b'])
+    expect(s.activeId).toBe('c')
+  })
+
+  it('lands at the head of the regular zone, under the pinned block', () => {
+    let s = emptyTabState()
+    s = addTab(s, pinned('p1'))
+    s = addTab(s, pinned('p2'))
+    s = addTab(s, tab('a'))
+    s = addTabAtHead(s, tab('x'))
+    expect(s.tabs.map((t) => t.id)).toEqual(['p1', 'p2', 'x', 'a'])
+    expect(s.activeId).toBe('x')
+  })
+
+  it('becomes the first tab on an empty strip', () => {
+    const s = addTabAtHead(emptyTabState(), tab('a'))
+    expect(s.tabs.map((t) => t.id)).toEqual(['a'])
+    expect(s.activeId).toBe('a')
   })
 })
 

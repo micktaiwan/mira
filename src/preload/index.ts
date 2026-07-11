@@ -117,6 +117,13 @@ const mira = {
     const listener = (_event: unknown, state: unknown): void => callback(state)
     ipcRenderer.on('mira:skill-pane', listener)
     return () => ipcRenderer.removeListener('mira:skill-pane', listener)
+  },
+  // Main drives the fullscreen media gallery's visibility (it owns the state so
+  // the hidden/shown web view stays in sync). Returns an unsubscribe function.
+  onMediaGallery: (callback: (state: { open: boolean }) => void): (() => void) => {
+    const listener = (_event: unknown, state: { open: boolean }): void => callback(state)
+    ipcRenderer.on('mira:media-gallery', listener)
+    return () => ipcRenderer.removeListener('mira:media-gallery', listener)
   }
 }
 

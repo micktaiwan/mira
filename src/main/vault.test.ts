@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest'
 import {
   assertEncryptable,
   partitionDirName,
+  noncePartitionDir,
+  isProfilePartitionDir,
   vaultPlan,
   isValidVaultPassword,
   needsUnlock
@@ -23,6 +25,30 @@ describe('assertEncryptable', () => {
 describe('partitionDirName', () => {
   it('drops the persist: scheme from the partition string', () => {
     expect(partitionDirName('abc-123')).toBe('mira-abc-123')
+  })
+})
+
+describe('noncePartitionDir', () => {
+  it('appends the nonce to the canonical partition dir name', () => {
+    expect(noncePartitionDir('abc-123', 'ff00')).toBe('mira-abc-123-ff00')
+  })
+  it('yields a distinct dir per nonce (fresh Electron session each unlock)', () => {
+    expect(noncePartitionDir('abc-123', 'a')).not.toBe(noncePartitionDir('abc-123', 'b'))
+  })
+})
+
+describe('isProfilePartitionDir', () => {
+  it('matches the canonical dir', () => {
+    expect(isProfilePartitionDir('mira-abc-123', 'abc-123')).toBe(true)
+  })
+  it('matches any per-unlock nonce dir', () => {
+    expect(isProfilePartitionDir('mira-abc-123-ff00', 'abc-123')).toBe(true)
+  })
+  it('rejects another profile / unrelated dir', () => {
+    expect(isProfilePartitionDir('mira-other', 'abc-123')).toBe(false)
+    expect(isProfilePartitionDir('mira-chrome', 'abc-123')).toBe(false)
+    // A different id that merely shares a prefix must NOT match.
+    expect(isProfilePartitionDir('mira-abc-1234', 'abc-123')).toBe(false)
   })
 })
 
@@ -50,6 +76,18 @@ describe('vaultPlan', () => {
         name: 'partition'
       }
     ])
+  })
+
+  it('overrides the live partition dir while keeping the in-vault name stable', () => {
+    const nonced = vaultPlan('/data', 'abc-123', 'mira-abc-123-ff00')
+    // The live path uses the nonce dir; the folder name INSIDE the vault stays
+    // 'partition', so the vault layout is identical across unlocks.
+    expect(nonced.dirs[1]).toEqual({
+      live: '/data/Partitions/mira-abc-123-ff00',
+      name: 'partition'
+    })
+    // The trails dir is unaffected by the partition override.
+    expect(nonced.dirs[0]).toEqual({ live: '/data/profiles/abc-123', name: 'profiles' })
   })
 
   it('throws for the default profile', () => {

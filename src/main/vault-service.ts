@@ -10,7 +10,7 @@
 import { spawn } from 'child_process'
 import { cpSync, rmSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs'
 import { join, dirname, relative } from 'path'
-import type { VaultPlan } from './vault'
+import { isProfilePartitionDir, type VaultPlan } from './vault'
 
 /** Sparse cap: the image is hollow and only consumes real disk for what is stored,
  * so this is a ceiling, not a reservation (same as Files' VaultService). */
@@ -142,6 +142,22 @@ export async function encrypt(plan: VaultPlan, password: string): Promise<void> 
  * Losing that unclean session is acceptable — it is "incognito that kept cookies". */
 export function discardPlaintext(plan: VaultPlan): void {
   for (const dir of plan.dirs) rmSync(dir.live, { recursive: true, force: true })
+}
+
+/** Wipe ALL leftover plaintext of an encrypted profile: its browsing-trails dir and
+ * EVERY partition dir belonging to it — the canonical one AND any per-unlock nonce
+ * dir (`mira-<id>-<nonce>`). Used at startup reconcile: a crash while unlocked leaves
+ * a nonce dir whose nonce (RAM-only) is gone after restart, so we match by name.
+ * Unlike discardPlaintext(plan), this does not need to know the current nonce. */
+export function discardProfilePlaintext(userDataDir: string, profileId: string): void {
+  rmSync(join(userDataDir, 'profiles', profileId), { recursive: true, force: true })
+  const partitionsRoot = join(userDataDir, 'Partitions')
+  if (!existsSync(partitionsRoot)) return
+  for (const entry of readdirSync(partitionsRoot, { withFileTypes: true })) {
+    if (entry.isDirectory() && isProfilePartitionDir(entry.name, profileId)) {
+      rmSync(join(partitionsRoot, entry.name), { recursive: true, force: true })
+    }
+  }
 }
 
 /** Unlock: mount the vault and copy its dirs back out to their live userData

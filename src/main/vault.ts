@@ -44,23 +44,60 @@ export function assertEncryptable(profileId: string): void {
 
 /** The on-disk folder name of a profile's Electron partition, under
  * userData/Partitions/. partitionForId yields the `persist:mira-<id>` partition
- * STRING; Chromium drops the `persist:` scheme for the directory name. */
+ * STRING; Chromium drops the `persist:` scheme for the directory name. This is the
+ * CANONICAL name (used at encrypt time); unlocked sessions use a per-unlock nonce
+ * variant — see noncePartitionDir. */
 export function partitionDirName(profileId: string): string {
   const partition = partitionForId(profileId)
   // Non-default always has a partition; the fallback keeps this total for tests.
   return partition ? partition.replace(/^persist:/, '') : `mira-${profileId}`
 }
 
+/** The on-disk partition folder name for ONE unlock session: the canonical name
+ * plus a random nonce. WHY: Electron caches a partition's Session object (cookies,
+ * storage) in memory for the whole app run and never reloads it when the files are
+ * swapped underneath. If unlock restored the vault into the canonical `mira-<id>`
+ * dir and reused `persist:mira-<id>`, a second unlock in the same run would get the
+ * STALE cached session (logged out) — the exact cookie-loss bug. A fresh, never-seen
+ * partition name per unlock forces Electron to build a new session that reads the
+ * just-restored files. The dir is disposable: it is wiped at lock and reconcile. */
+export function noncePartitionDir(profileId: string, nonce: string): string {
+  return `${partitionDirName(profileId)}-${nonce}`
+}
+
+/** Whether an entry under userData/Partitions/ belongs to `profileId` — its
+ * canonical dir OR any per-unlock nonce dir (canonical + `-<nonce>`). Used by
+ * reconcile to wipe every leftover plaintext partition of an encrypted profile at
+ * startup, including nonce dirs orphaned by a crash (nonces live only in RAM, so
+ * after a restart the dir name is the only trace). Pure so it is unit-tested. */
+export function isProfilePartitionDir(dirName: string, profileId: string): boolean {
+  const canonical = partitionDirName(profileId)
+  return dirName === canonical || dirName.startsWith(`${canonical}-`)
+}
+
 /** The vault plan for a profile: where its encrypted image lives and which live
- * directories it protects (browsing trails + session partition). Pure. */
-export function vaultPlan(userDataDir: string, profileId: string): VaultPlan {
+ * directories it protects (browsing trails + session partition). Pure.
+ *
+ * `partitionDir` overrides the on-disk partition folder name. Omitted → the
+ * CANONICAL name (used at encrypt, where the pre-encryption data sits). Unlock/lock
+ * pass a per-unlock nonce dir (see noncePartitionDir) so Electron gets a fresh
+ * session that actually reads the restored cookies. The name INSIDE the vault stays
+ * 'partition' regardless, so the vault layout is stable across unlocks. */
+export function vaultPlan(
+  userDataDir: string,
+  profileId: string,
+  partitionDir?: string
+): VaultPlan {
   assertEncryptable(profileId)
   return {
     bundle: join(userDataDir, 'vaults', `${profileId}.sparsebundle`),
     volumeName: `mira-${profileId}`,
     dirs: [
       { live: join(userDataDir, 'profiles', profileId), name: 'profiles' },
-      { live: join(userDataDir, 'Partitions', partitionDirName(profileId)), name: 'partition' }
+      {
+        live: join(userDataDir, 'Partitions', partitionDir ?? partitionDirName(profileId)),
+        name: 'partition'
+      }
     ]
   }
 }

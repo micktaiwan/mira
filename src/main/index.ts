@@ -86,10 +86,16 @@ const STATUS_BAR_HEIGHT = 24
  * its profile via the query string (id for identity, label for the badge, and
  * the session partition so <browser-action-list> binds to the right profile's
  * extensions — empty for the default profile), so no round-trips. */
-function loadRenderer(window: BrowserWindow, profile: Profile): void {
+function loadRenderer(
+  window: BrowserWindow,
+  profile: Profile,
+  effectivePartition: string | undefined
+): void {
   // The default profile lives on the default session, which has no partition
-  // name — pass the alias the resolver in extensions.ts maps back to it.
-  const partition = partitionForId(profile.id) ?? DEFAULT_SESSION_ALIAS
+  // name — pass the alias the resolver in extensions.ts maps back to it. For an
+  // unlocked encrypted profile `effectivePartition` is its per-unlock nonce
+  // partition, so <browser-action-list> binds to the SAME session the tabs use.
+  const partition = effectivePartition ?? partitionForId(profile.id) ?? DEFAULT_SESSION_ALIAS
   const search =
     `profile=${encodeURIComponent(profile.id)}&label=${encodeURIComponent(profile.label)}&partition=${encodeURIComponent(partition)}` +
     (profile.color ? `&color=${encodeURIComponent(profile.color)}` : '')

@@ -11,6 +11,7 @@ function setup(): {
   let focused = 'default'
   const ctx: CommandContext = {
     focusApp: () => {},
+    openExternalUrl: () => {},
     getSpacesState: () => ({ displays: [], window: null }),
     moveTargetWindowToSpace: () => 'noop',
     getTargetWebContents: () => ({
@@ -32,6 +33,7 @@ function setup(): {
       focused = id
       return { id, created: true }
     },
+    closeProfile: (id: string) => ({ id, closed: true }),
     createProfile: (label?: string) => ({ id: 'new', label: label ?? 'Profile 2' }),
     renameProfile: (id: string, label: string) => ({ id, label }),
     setProfileColor: (id: string, color: string | null) => ({
@@ -74,6 +76,7 @@ function setup(): {
     getTabCounts: () => ({ total: 0, loaded: 0, asleep: 0 }),
     collectMedia: async () => [],
     downloadMedia: async () => ({ saved: 0, failed: [] }),
+    recordVideo: async () => ({ saved: true, file: 'video-recording.webm' }),
     getMediaStats: () => ({ count: 0, bytes: 0 }),
     setMediaGalleryOpen: (open) => ({ open: open ?? true }),
     // Tab slice: minimal stubs, not exercised by these socket-dispatch tests.
@@ -135,6 +138,12 @@ function setup(): {
     clearHistory: () => ({ cleared: 0 }),
     showTooltip: () => ({ shown: true }),
     hideTooltip: () => ({ hidden: true }),
+    // Magnifier slice: minimal stubs, not exercised by these socket-dispatch tests.
+    magnifierTarget: () => null,
+    getMagnifierState: () => ({ scale: 1, originX: 0, originY: 0 }),
+    setMagnifierState: () => {},
+    applyMagnifierClip: () => {},
+    magnifierFlash: () => {},
     // Permissions slice: minimal stubs, not exercised by these socket-dispatch tests.
     listPermissions: () => [],
     clearPermissions: () => ({ cleared: 0 }),

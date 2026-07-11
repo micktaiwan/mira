@@ -38,6 +38,19 @@ export function addTab(state: TabState, tab: TabMeta): TabState {
   return { tabs: [...state.tabs, tab], activeId: tab.id }
 }
 
+/** Insert a tab at the head of the regular zone (right under the pinned block)
+ * and focus it. This is the "plain new tab" behavior (Cmd+T, socket new-tab):
+ * newest tabs sit at the top of the list, oldest at the bottom. The tab is always
+ * regular (unpinned), so it lands at index `boundary` — just after the contiguous
+ * pinned block — never inside it. On an empty strip that boundary is 0, so it
+ * becomes the first (and active) tab. */
+export function addTabAtHead(state: TabState, tab: TabMeta): TabState {
+  const boundary = state.tabs.filter((t) => t.pinned === true).length
+  const tabs = [...state.tabs]
+  tabs.splice(boundary, 0, tab)
+  return { tabs, activeId: tab.id }
+}
+
 /** Append a tab WITHOUT focusing it: it joins the end of the strip and the active
  * tab is left untouched. This is the "open in background" path (new-tab with
  * background:true) — useful for a socket/MCP caller that spins up a tab to drive

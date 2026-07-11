@@ -36,6 +36,18 @@ Conséquences concrètes :
        Dépannage rapide en shell si vraiment besoin de `nc` : garder stdin ouvert le temps de la réponse — `{ printf '%s\n' '{…}'; sleep 1; } | nc -U /tmp/mira.sock`. Mais préférer le client Python.
      - **`exec-js` prend un `tabId`** (UUID via `list-tabs`) : toujours le passer pour viser un onglet précis. Un onglet endormi renvoie `{"ok":false,"error":"tab is asleep"}` (le réveiller via `select-tab`). Pour du code async, `exec-js` peut ne pas attendre la promesse dans certains builds — contourner par « lance l'async, stocke dans `window.__x`, relis en sync » sur un 2ᵉ appel.
      - **Pour ouvrir un onglet de test, TOUJOURS `new-tab` avec `background:true`.** Un `new-tab` normal met l'onglet actif ET ramène Mira au premier plan — or quand tu testes, Mickael est probablement en train de faire autre chose et voir Mira surgir devant le dérange. Le mode background charge la page cachée sans voler le focus ni faire passer la fenêtre devant ; tu récupères le `tabId` dans la réponse et tu la pilotes via `exec-js`.
+     - **Profil de test dédié à Claude.** Un profil isolé (session/cookies à part) existe pour les tests : label **`Claude Test`**, id **`00000000-0000-0000-0000-000000000000`**. L'ouvrir/focus sur une Mira qui tourne : `open-profile {"id":"00000000-0000-0000-0000-000000000000"}`. Tester dedans plutôt que dans les profils réels de Mickael (Pro/Perso), pour ne pas polluer son historique/onglets.
+
+## Lancer Mira sur un profil précis à froid (`--profile` / `MIRA_PROFILE`)
+
+Au démarrage, Mira rouvre par défaut les profils qui étaient ouverts au dernier quit. Pour **démarrer à froid sur un seul profil** (typiquement le profil de test), sans rouvrir les autres :
+
+- Flag CLI : `--profile <id>` ou `--profile=<id>`.
+- Ou variable d'env : `MIRA_PROFILE=<id>` (le flag l'emporte si les deux sont posés).
+
+Un id inconnu n'est pas fatal : Mira loggue un warning et retombe sur la restauration normale (dernier set ouvert). Parsing pur et testé dans `parseProfileArg` (`src/main/profile-store.ts`), branché au boot dans `src/main/index.ts` via `openSavedProfiles(explicitProfileId)`.
+
+Le mécanisme est implémenté et couvert par des tests unitaires ; **je n'ai pas encore vérifié en vrai** l'invocation shell exacte pour injecter le flag/env dans l'app packagée (`open -a Mira --args --profile <id>` devrait passer par `--args`, l'héritage de `MIRA_PROFILE` via `open` reste à confirmer). À valider au premier usage.
    - **MCP** : un serveur mince qui wrappe la socket. Il n'ajoute pas de logique, il expose les commandes existantes.
 4. **Une commande = un nom + un schéma de params.** Ainsi elle est appelable à l'identique depuis IPC, socket ou MCP, sans réécriture.
 

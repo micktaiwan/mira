@@ -21,8 +21,10 @@ import { devtoolsCommands } from './devtools'
 import { extensionsCommands } from './extensions'
 import { findCommands } from './find'
 import { historyCommands } from './history'
+import { magnifierCommands } from './magnifier'
 import { mediaCommands } from './media'
 import { navigationCommands } from './navigation'
+import { openCommands } from './open'
 import { paletteCommands } from './palette'
 import { paneCommands } from './pane'
 import { permissionCommands } from './permissions'
@@ -48,8 +50,10 @@ export { toExtensionInfo } from './extensions'
 export type { FindContext, FindStopAction } from './find'
 export type { HistoryContext } from './history'
 export type { HistoryEntry } from '../history-store'
+export type { MagnifierContext } from './magnifier'
 export type { MediaContext, MediaItem, MediaKind, MediaSource } from './media'
 export type { NavContext } from './navigation'
+export type { OpenContext } from './open'
 export type { PaletteContext, PaletteMode } from './palette'
 export type { PaletteEntry, PaletteGroup, PaletteState } from '../palette'
 export type { PaneContext, SkillPaneState } from './pane'
@@ -79,8 +83,10 @@ export function createCommandRegistry(): CommandRegistry {
     ...extensionsCommands,
     ...findCommands,
     ...historyCommands,
+    ...magnifierCommands,
     ...mediaCommands,
     ...navigationCommands,
+    ...openCommands,
     ...paletteCommands,
     ...paneCommands,
     ...permissionCommands,

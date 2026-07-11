@@ -50,7 +50,30 @@ commands that can take an explicit target id should be preferred:
 |---|---|---|
 | `navigate` | `url`, `newTab?` | load a (normalized) url; `newTab:true` opens a new tab |
 | `back` / `forward` / `reload` | — | session-history step / reload |
-| `zoom-in` / `zoom-out` / `zoom-reset` | — | active tab zoom |
+| `zoom-in` / `zoom-out` / `zoom-reset` | — | active tab Chromium zoom (reflows the page) |
+
+### Default-browser handoff (last-focused profile, NOT the caller's active tab)
+
+Mirrors what macOS does when Mira is the default browser / `.html` handler: opens in a **new tab of the last-focused profile window** (creating the default profile if none is open), unlike `navigate` which loads into the active tab. In the packaged app these fire from the OS `open-url` / `open-file` events; the socket commands exist so the same path is drivable and testable (the OS never routes those events to `npm run dev`).
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `open-url` | `url` | open a url in the last-focused profile; result `{url}` |
+| `open-file` | `path` | open a local file (absolute path → `file://`) in the last-focused profile; result `{url}` |
+
+### Magnifier (optical loupe, active tab of the target window)
+
+Persistent cursor-anchored optical zoom — a composited CSS transform on the page
+root, so the page does NOT reflow (unlike `zoom-in`). Normally driven by Cmd+scroll
+(zoom) / scroll (pan); these commands expose the same actions. While magnified,
+clicks are swallowed (they'd land wrong), so it is a "look only" mode.
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `magnifier-zoom` | `deltaY`, `cursorX`, `cursorY` | zoom by a wheel delta, anchored on the cursor (surface CSS px); returns `{scale, magnified}` |
+| `magnifier-pan` | `deltaX`, `deltaY` | pan the loupe (surface px); returns `{magnified}` |
+| `magnifier-reset` | — | back to 100% (flashes a frame if it was zoomed) |
+| `magnifier-state` | — | current `{scale, originX, originY, magnified}` |
 
 ### Find in page (active tab of the target window)
 
@@ -84,6 +107,19 @@ commands that can take an explicit target id should be preferred:
 |---|---|---|
 | `exec-js` | `code`, `tabId?` | run JS in a tab's page world, return its JSON-serializable value. With `tabId` (from `list-tabs`), targets **any tab in any window**; without, the active tab. Errors: `unknown tab: <id>`, `tab is asleep: <id>`, `not a web page (Settings tab)` |
 | `toggle-devtools` | — | open/close the inspector on the active tab |
+| `inspect-cookies` | — | open the inspector on the active tab (if needed, never closes it) and reveal the Cookies view of the Application panel; result `{ open }`. Errors: `no active web page` |
+
+### Media (collect & download page media)
+
+The media gallery (shortcut `Cmd+Alt+Shift+M`) collects every media on the page from **two sources**, merged with provenance: the live **DOM** (images, video/audio + sources, inline SVG, CSS backgrounds, canvas exported to PNG) and a **continuous per-tab network buffer** (every image / audio-video / font response that transited the wire, metadata only — no bodies held). Each item's `sources` lists `dom`, `network`, or both.
+
+| Command | Params | Effect / result |
+|---|---|---|
+| `collect-media` | `tabId?` | harvest the tab's media, merged + deduped. Result `{media: MediaItem[], count}`. `MediaItem = {url, kind, mime?, width?, height?, bytes?, alt?, sources[], tainted?}`; `kind ∈ image|video|audio|svg|canvas|font|other`. Errors: `unknown tab`, `tab is asleep`, `no active web page` |
+| `download-media` | `url` \| `urls[]`, `tabId?` | download to the Downloads folder via the tab's session (authenticated media keep the page's cookies); `data:` URLs (canvas/SVG) written directly. Result `{saved, failed[]}` |
+| `get-media-stats` | — | the target window's capture footprint: `{count, bytes, text}` (`text` = formatted RAM of the metadata buffer) |
+| `toggle-media-gallery` | `open?` | show/hide the fullscreen gallery overlay (hides the web view like the palette); result `{open}` |
+| `open-media-gallery` / `close-media-gallery` | — | force the overlay open / closed |
 
 ### Skills & AI pane
 
@@ -123,6 +159,7 @@ commands that can take an explicit target id should be preferred:
 |---|---|---|
 | `list-profiles` | — | profiles + which are open + focused id |
 | `open-profile` | `id` | open (or focus) a profile window |
+| `close-profile` | `id` | close a profile's window without quitting the app (`closed:false` if it was not open) |
 | `create-profile` | `label?` | new profile |
 | `rename-profile` | `id`, `label` | rename |
 | `set-profile-color` | `id`, `color` | `#rrggbb` hex, or null/'' to clear |

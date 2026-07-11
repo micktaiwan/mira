@@ -42,7 +42,12 @@ import type {
 } from './commands'
 import { closedSkillPane, formatMemory } from './commands'
 import { MediaBuffer, captureStats, fileNameFor, mergeMedia } from './media-capture'
-import { MEDIA_COLLECT_SOURCE, parseDomMedia } from './media-collect'
+import {
+  MEDIA_COLLECT_SOURCE,
+  MEDIA_RECORD_STATUS_SOURCE,
+  mediaRecordStartSource,
+  parseDomMedia
+} from './media-collect'
 import { homePageUrl, isMiraHomeUrl, type HomeStats } from './home-doc'
 import { errorPageUrl, isMiraErrorUrl } from './error-doc'
 import { type LlmConfig, type ChatMessage, type PageContext } from './llm'
@@ -59,7 +64,7 @@ import {
   findById,
   nextProfileLabel
 } from './profile-store'
-import { vaultPlan, needsUnlock } from './vault'
+import { vaultPlan, needsUnlock, noncePartitionDir } from './vault'
 import * as vaultService from './vault-service'
 import {
   type TabState,
@@ -100,7 +105,8 @@ import {
   type MagnifierState,
   NO_MAGNIFIER,
   isMagnified,
-  toViewportClip,
+  applyMagnifierJs,
+  CLEAR_MAGNIFIER_JS,
   MAG_BINDING,
   MAGNIFIER_SHIM,
   MAGNIFIER_FLASH,
@@ -193,6 +199,11 @@ const CLOSED_TAB_STACK_LIMIT = 25
  * (`state`, from tab-store) plus the native WebContentsView per tab (`views`,
  * keyed by tab id). Only the active tab's view is visible; the panel-collapsed
  * flag shifts where the active view sits. Tabs are per-window (CLAUDE.md). */
+/** Await `ms` milliseconds. Used to pace the recording-status poll loop. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 /** A filename not already taken in `dir` nor in `used` (this download batch):
  * appends " (1)", " (2)", … before the extension until free — Chrome-style. */
 function uniqueFileName(name: string, dir: string, used: Set<string>): string {
@@ -340,7 +351,7 @@ export interface ProfileManagerDeps {
   persistSettings: (settings: AppSettings) => void
   /** Load the chrome (React) into a freshly created window for `profile`. Kept
    * as a callback so the electron-vite dev/prod URL logic stays in index.ts. */
-  loadRenderer: (window: BrowserWindow, profile: Profile) => void
+  loadRenderer: (window: BrowserWindow, profile: Profile, partition: string | undefined) => void
   /** App-wide memory footprint (all Electron processes). Owned by index.ts,
    * which has `app`; exposed on the context so `get-status` stays pilotable. */
   getMemoryUsage: () => MemoryUsage
@@ -406,8 +417,20 @@ export class ProfileManager {
    * A profile in this map has its plaintext data live on disk; absent = locked.
    * The password is cleared on lock. */
   private readonly unlockedVaults = new Map<string, string>()
+  /** Encrypted profiles unlocked THIS session, id → their per-unlock partition
+   * STRING (`persist:mira-<id>-<nonce>`). A fresh nonce each unlock gives Electron a
+   * never-seen session that reads the just-restored cookies, dodging its
+   * app-lifetime session cache (which would otherwise serve a stale/empty session on
+   * a second unlock — the cookie-loss bug). Absent = locked (falls back to the
+   * canonical partition). Set on unlock, cleared on lock. See noncePartitionDir. */
+  private readonly unlockedPartition = new Map<string, string>()
   /** Only the currently open profiles, keyed by stable id. */
   private readonly openById = new Map<string, ProfileWindow>()
+  /** Video recordings in flight, keyed by tab id, with when each started. A
+   * recording runs in main (independent of the gallery UI), so this lets the
+   * status bar show it and keep it alive after the gallery closes — the user is
+   * not blocked for the clip's whole length. */
+  private readonly activeRecordings = new Map<string, { startedAt: number }>()
   /** Pending debounced flush of sessions.json (one timer for the whole app, as
    * there is a single file). null when no write is pending. */
   private saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -522,9 +545,16 @@ export class ProfileManager {
     if (!profile) throw new Error(`unknown profile: ${id}`)
     if (!profile.encrypted) throw new Error(`not encrypted: ${id}`)
     if (this.unlockedVaults.has(id)) return { id }
-    const plan = vaultPlan(this.deps.userDataDir, id)
+    // Restore into a FRESH partition dir (canonical + random nonce) so Electron
+    // builds a brand-new session that reads these cookies, instead of serving a
+    // stale cached session from an earlier unlock this run (the cookie-loss bug).
+    const partitionDir = noncePartitionDir(id, randomUUID())
+    const plan = vaultPlan(this.deps.userDataDir, id, partitionDir)
     await vaultService.unlock(plan, password)
     this.unlockedVaults.set(id, password)
+    this.unlockedPartition.set(id, `persist:${partitionDir}`)
+    // Drop any cached history/bookmarks readers so they re-read the restored files.
+    this.evictProfileDataCaches(id)
     this.deps.onChange?.()
     return { id }
   }
@@ -539,11 +569,37 @@ export class ProfileManager {
     const password = this.unlockedVaults.get(id)
     if (password === undefined) return { id, locked: false }
     if (this.openById.has(id)) throw new Error('close the profile window before locking it')
-    const plan = vaultPlan(this.deps.userDataDir, id)
+    // Land every last change on disk BEFORE the copy: ProfileData's debounced
+    // history/permissions writes, and the Electron session's cookies + DOM storage.
+    // Without this the vault would capture a slightly stale snapshot.
+    this.dataById.get(id)?.flush()
+    const ses = this.sessionFor(id)
+    await ses.cookies.flushStore().catch(() => {})
+    ses.flushStorageData()
+    // The partition dir written this unlock (falls back to canonical if somehow
+    // unset), so lock copies the SAME dir the live session used.
+    const partition = this.unlockedPartition.get(id)
+    const partitionDir = partition ? partition.replace(/^persist:/, '') : undefined
+    const plan = vaultPlan(this.deps.userDataDir, id, partitionDir)
     await vaultService.lock(plan, password)
     this.unlockedVaults.delete(id)
+    this.unlockedPartition.delete(id)
+    // Drop cached readers and cancel their timers, so no debounce recreates the
+    // plaintext we just wiped, and the next unlock re-reads from the vault.
+    this.evictProfileDataCaches(id)
     this.deps.onChange?.()
     return { id, locked: true }
+  }
+
+  /** Drop a profile's cached history/permissions and bookmarks readers, cancelling
+   * any pending debounced write first (dispose, NOT flush — the caller has already
+   * persisted what it wanted to keep). Used on vault lock/unlock so these in-memory
+   * readers never outlive a vault swap: a stale reader would either serve old data
+   * or recreate wiped plaintext on its next debounce. */
+  private evictProfileDataCaches(id: string): void {
+    this.dataById.get(id)?.dispose()
+    this.dataById.delete(id)
+    this.bookmarksById.delete(id)
   }
 
   /** The encrypted-profile state: which profiles are encrypted, which are unlocked. */
@@ -563,7 +619,9 @@ export class ProfileManager {
     for (const p of this.profiles) {
       if (!p.encrypted) continue
       try {
-        vaultService.discardPlaintext(vaultPlan(this.deps.userDataDir, p.id))
+        // Glob-based: also removes per-unlock nonce partition dirs orphaned by a
+        // crash (their nonce lived only in RAM, so we match by name).
+        vaultService.discardProfilePlaintext(this.deps.userDataDir, p.id)
       } catch (error) {
         console.error(`[mira] vault reconcile of profile ${p.id} failed`, error)
       }
@@ -654,16 +712,21 @@ export class ProfileManager {
     return { id, closed: true }
   }
 
-  /** Open an external URL (a link handed to Mira as the system default browser) in
-   * a new tab. Targets the focused window, else any open one; if Mira was launched
-   * by the click and has no window yet, opens the default profile first. The tab
-   * takes page focus (not the address bar) — the user asked for this page, not to
-   * type one. */
+  /** Open an external URL (a link/file handed to Mira as the system default
+   * browser) in a new tab. Targets the focused window, else the LAST focused
+   * profile window, else any open one; if Mira was launched by the click and has
+   * no window yet, opens the default profile first. The tab takes page focus (not
+   * the address bar) — the user asked for this page, not to type one. */
   openUrl(url: string): void {
     const trimmed = url.trim()
     if (!trimmed) return
+    // A link/file opened from ANOTHER app (a terminal `open foo.html`, a chat
+    // client) leaves Mira unfocused, so getFocusedWindow() is null. Fall back to
+    // the last focused profile window (menuFocusId, kept in sync on every 'focus'),
+    // then to any open one.
     let target: ProfileWindow | null =
       this.findByWindow(BrowserWindow.getFocusedWindow()) ??
+      (this.menuFocusId ? (this.openById.get(this.menuFocusId) ?? null) : null) ??
       this.openById.values().next().value ??
       null
     if (!target || target.window.isDestroyed()) {
@@ -917,7 +980,7 @@ export class ProfileManager {
     // webContents in materializeTab — whichever holds focus catches the key.
     this.wireTabShortcuts(profileWindow, window.webContents)
 
-    this.deps.loadRenderer(window, profile)
+    this.deps.loadRenderer(window, profile, this.effectivePartition(profile.id))
 
     // Extensions: register this profile's session with the extension system NOW
     // (synchronous — the instance wires its preload into the session, so it must
@@ -947,8 +1010,18 @@ export class ProfileManager {
    * fromPartition(String(undefined)) would silently create an in-memory
    * partition (see extensions-plan.md §4.1). */
   private sessionFor(id: string): Session {
-    const partition = partitionForId(id)
+    const partition = this.effectivePartition(id)
     return partition ? session.fromPartition(partition) : session.defaultSession
+  }
+
+  /** The partition STRING to use for a profile's session RIGHT NOW. For an unlocked
+   * encrypted profile that is its per-unlock nonce partition (so every session/
+   * cookie/extension lookup lands on the fresh session that holds the restored
+   * data); otherwise the canonical partition (undefined for the default profile).
+   * Every partition resolution for a profile must go through here — using the raw
+   * partitionForId would bind to the stale canonical session and lose cookies. */
+  private effectivePartition(id: string): string | undefined {
+    return this.unlockedPartition.get(id) ?? partitionForId(id)
   }
 
   /** Create the extension system for this profile's session (idempotent) with
@@ -1020,7 +1093,7 @@ export class ProfileManager {
     // layout() then hides every view while it is active, so the chrome's Settings
     // panel (rendered in the body) shows through.
     if (tab.id === pw.settingsTabId) return
-    const partition = partitionForId(pw.id)
+    const partition = this.effectivePartition(pw.id)
     // Install this session's permission handlers (grant-all + log) before the page
     // loads, so a first geolocation request is answered rather than denied by the
     // default check. Once per partition (guarded inside).
@@ -1073,7 +1146,10 @@ export class ProfileManager {
             height: 640,
             // Same flag as the tab views: extension iframes (password managers…)
             // nested in a popup page need frame preloads too.
-            webPreferences: { ...(partition ? { partition } : {}), nodeIntegrationInSubFrames: true }
+            webPreferences: {
+              ...(partition ? { partition } : {}),
+              nodeIntegrationInSubFrames: true
+            }
           }
         }
       }
@@ -1887,9 +1963,7 @@ export class ProfileManager {
       const body = url.slice(comma + 1)
       const isBase64 = /;base64$/i.test(header)
       mime = header.replace(/;base64$/i, '') || 'application/octet-stream'
-      bytes = isBase64
-        ? Buffer.from(body, 'base64')
-        : Buffer.from(decodeURIComponent(body), 'utf8')
+      bytes = isBase64 ? Buffer.from(body, 'base64') : Buffer.from(decodeURIComponent(body), 'utf8')
     } else if (url.startsWith('blob:')) {
       // A blob: URL only resolves inside the page that created it, so fetch it
       // THERE (via the tab's page world) and hand back base64. Works for real
@@ -1920,6 +1994,110 @@ export class ProfileManager {
     const name = uniqueFileName(fileNameFor(url, mime), dir, used)
     used.add(name)
     await writeFile(join(dir, name), bytes)
+  }
+
+  /** Record a PLAYING video into a file by capturing its decoded stream in the
+   * page (captureStream + MediaRecorder). This is the only way to grab streamed
+   * video (MSE/HLS/blob, e.g. X) that has no downloadable file URL: the segments
+   * are fetched by Chromium's native media engine, invisible to page fetch and to
+   * our resourceType-filtered network buffer — but the decoded frames ARE
+   * reachable. Runs for roughly the clip's duration.
+   *
+   * The recording lives entirely in the page (on window.__miraRec) because
+   * evalInWebContents time-boxes each call to a few seconds: we START it in one
+   * quick call, POLL its status, then read the base64 result back in chunks — the
+   * "kick off async, stash on window, read in sync" pattern (see CLAUDE.md). */
+  private async recordVideoInTab(
+    wc: WebContents,
+    url: string,
+    dir: string,
+    used: Set<string>
+  ): Promise<{ saved: boolean; file?: string; error?: string }> {
+    // The gallery hides the web view while open; a hidden view can be throttled,
+    // which would pause the playback we need to capture. Best-effort: keep this
+    // tab decoding at full rate for the duration of the recording. Restored after.
+    let throttleRestored = false
+    try {
+      wc.setBackgroundThrottling(false)
+    } catch {
+      throttleRestored = true // method absent — nothing to restore
+    }
+    const restoreThrottle = (): void => {
+      if (throttleRestored) return
+      throttleRestored = true
+      try {
+        wc.setBackgroundThrottling(true)
+      } catch {
+        // best-effort
+      }
+    }
+    const start = (await evalInWebContents(wc, mediaRecordStartSource(url))) as string
+    if (start !== 'started') {
+      restoreThrottle()
+      const reason =
+        start === 'no-video'
+          ? 'no video element on the page'
+          : start === 'no-capture'
+            ? 'this video cannot be captured (DRM-protected?)'
+            : start === 'busy'
+              ? 'a recording is already in progress on this tab'
+              : 'could not start the recorder'
+      return { saved: false, error: reason }
+    }
+    try {
+      // Poll until the page reports done/error/stall. The hard cap adapts to the
+      // clip's duration (read from the status) so a long video is not cut short,
+      // with a 15 min absolute ceiling as a backstop.
+      let status: {
+        status?: string
+        error?: string
+        size?: number
+        len?: number
+        mime?: string
+        dur?: number
+      } = {}
+      for (let i = 0; i < 900; i++) {
+        await sleep(1000)
+        const raw = (await evalInWebContents(wc, MEDIA_RECORD_STATUS_SOURCE)) as string
+        try {
+          status = JSON.parse(raw)
+        } catch {
+          status = { status: 'missing' }
+        }
+        if (status.status === 'done' || status.status === 'error' || status.status === 'missing')
+          break
+        if (typeof status.dur === 'number' && status.dur > 0 && i > status.dur + 25) break
+      }
+      if (status.status !== 'done') {
+        return {
+          saved: false,
+          error: status.error || `recording did not complete (${status.status})`
+        }
+      }
+      if (!status.len) return { saved: false, error: 'empty recording' }
+      // Read the base64 payload back in chunks small enough to clear the eval
+      // timeout, concatenating in main.
+      const CHUNK = 3_000_000
+      let b64 = ''
+      for (let offset = 0; offset < status.len; offset += CHUNK) {
+        const part = (await evalInWebContents(
+          wc,
+          `window.__miraRec && window.__miraRec.b64 ? window.__miraRec.b64.substr(${offset}, ${CHUNK}) : ''`
+        )) as string
+        b64 += typeof part === 'string' ? part : ''
+      }
+      const ext = status.mime && status.mime.includes('mp4') ? 'mp4' : 'webm'
+      const name = uniqueFileName(`video-recording.${ext}`, dir, used)
+      used.add(name)
+      await writeFile(join(dir, name), Buffer.from(b64, 'base64'))
+      return { saved: true, file: name }
+    } finally {
+      restoreThrottle()
+      // Free the (potentially large) base64 held on the page, on every path.
+      await evalInWebContents(wc, 'try { delete window.__miraRec } catch (e) {} ; "ok"').catch(
+        () => {}
+      )
+    }
   }
 
   /** Tear down a tab's docked DevTools host view (if any): remove it from the
@@ -2145,10 +2323,15 @@ export class ProfileManager {
       if (msg.t !== 'wheel') return
       const chrome = pw.window.webContents
       if (msg.meta) {
+        // Anchor the zoom on the REAL cursor position (view surface CSS px), read
+        // from main — NOT the page's clientX, which shifts once the page carries
+        // the magnifier transform.
+        const cursor = this.cursorInView(pw, tabId)
+        if (!cursor) return
         this.deps.runCommand?.(chrome, 'magnifier-zoom', {
           deltaY: msg.dy ?? 0,
-          cursorX: msg.x ?? 0,
-          cursorY: msg.y ?? 0
+          cursorX: cursor.x,
+          cursorY: cursor.y
         })
       } else {
         this.deps.runCommand?.(chrome, 'magnifier-pan', {
@@ -2166,33 +2349,17 @@ export class ProfileManager {
     })
   }
 
-  /** Apply tab `tabId`'s current magnifier state to its view natively: set (or
-   * clear) the CDP device-metrics viewport clip and refresh the shim flags.
-   * Needs deviceScaleFactor:0 — with 1 the viewport scale is ignored (verified). */
+  /** Apply tab `tabId`'s current magnifier state to its view: set (or clear) the
+   * page-root CSS transform that realizes the zoom, and refresh the shim flags.
+   * A composited transform is exact at every scale (the CDP viewport clip, tried
+   * first, broke above ~2× — see magnifier.ts). */
   private applyMagnifier(pw: ProfileWindow, tabId: string): void {
     const view = pw.views.get(tabId)
     if (!view) return
     const wc = view.webContents
-    const b = view.getBounds()
     const state = this.magnifierStates.get(tabId) ?? NO_MAGNIFIER
-    const dbg = wc.debugger
-    try {
-      if (isMagnified(state)) {
-        dbg
-          .sendCommand('Emulation.setDeviceMetricsOverride', {
-            width: Math.round(b.width),
-            height: Math.round(b.height),
-            deviceScaleFactor: 0,
-            mobile: false,
-            viewport: toViewportClip(state, b.width, b.height)
-          })
-          .catch(() => {})
-      } else {
-        dbg.sendCommand('Emulation.clearDeviceMetricsOverride').catch(() => {})
-      }
-    } catch {
-      /* debugger detached mid-teardown */
-    }
+    const js = isMagnified(state) ? applyMagnifierJs(state) : CLEAR_MAGNIFIER_JS
+    evalInWebContents(wc, js).catch(() => {})
     this.updateShim(tabId, wc)
   }
 
@@ -2206,6 +2373,19 @@ export class ProfileManager {
     if (this.shimFlags.get(tabId) === js) return
     this.shimFlags.set(tabId, js)
     evalInWebContents(wc, js).catch(() => {})
+  }
+
+  /** The cursor's position inside a tab's view, in surface CSS px (the space the
+   * magnifier clip lives in), or null if the view is gone. Screen points are CSS
+   * px on macOS, so this is: global cursor − window content origin − view offset.
+   * Read live from main because the page's own clientX drifts once a clip is on. */
+  private cursorInView(pw: ProfileWindow, tabId: string): { x: number; y: number } | null {
+    const view = pw.views.get(tabId)
+    if (!view || pw.window.isDestroyed()) return null
+    const cursor = screen.getCursorScreenPoint()
+    const content = pw.window.getContentBounds()
+    const bounds = view.getBounds()
+    return { x: cursor.x - content.x - bounds.x, y: cursor.y - content.y - bounds.y }
   }
 
   /** Pop up the native page right-click menu for `wc`. The item set is decided by
@@ -2493,7 +2673,12 @@ export class ProfileManager {
         // on macOS; stealing app focus is the documented way.
         app.focus({ steal: true })
       },
+      // Default-browser handoff: openUrl does its OWN targeting (last-focused
+      // profile), independent of this context's target window — the command may
+      // arrive over the socket while a different window is "focused".
+      openExternalUrl: (url) => this.openUrl(url),
       openProfile: (id) => this.openProfile(id),
+      closeProfile: (id) => this.closeProfile(id),
       createProfile: (label) => this.createProfile(label),
       renameProfile: (id, label) => this.renameProfile(id, label),
       setProfileColor: (id, color) => this.setProfileColor(id, color),
@@ -2529,8 +2714,7 @@ export class ProfileManager {
         // see profile-store.ts). It exists whether or not the window is open, so
         // an import can target a profile that isn't currently showing.
         if (!findById(this.profiles, id)) throw new Error(`unknown profile: ${id}`)
-        const partition = partitionForId(id)
-        const sess = partition ? session.fromPartition(partition) : session.defaultSession
+        const sess = this.sessionFor(id)
         return sess.cookies
       },
       countActiveSiteCookies: async () => {
@@ -2554,8 +2738,7 @@ export class ProfileManager {
         const id = profileId ?? target?.id
         if (!id) throw new Error('no target profile')
         if (!findById(this.profiles, id)) throw new Error(`unknown profile: ${id}`)
-        const partition = partitionForId(id)
-        const sess = partition ? session.fromPartition(partition) : session.defaultSession
+        const sess = this.sessionFor(id)
         await sess.clearCache()
         await sess.clearStorageData()
         return { id }
@@ -2566,8 +2749,7 @@ export class ProfileManager {
         let url = targetUrl
         let sess
         if (url) {
-          const partition = partitionForId(target?.id ?? DEFAULT_PROFILE_ID)
-          sess = partition ? session.fromPartition(partition) : session.defaultSession
+          sess = this.sessionFor(target?.id ?? DEFAULT_PROFILE_ID)
         } else {
           if (!target || target.window.isDestroyed()) return null
           const activeId = target.state.activeId
@@ -2679,9 +2861,22 @@ export class ProfileManager {
         }
         return { saved, failed }
       },
+      recordVideo: async (tabId, url) => {
+        const { wc } = this.resolveMediaTab(target, tabId)
+        // Register so the status bar shows the recording and it survives the
+        // gallery closing (the capture itself runs in the page + here, not in the
+        // gallery UI). Key by tab so a per-tab recording is tracked distinctly.
+        const key = tabId ?? target?.state.activeId ?? 'active'
+        this.activeRecordings.set(key, { startedAt: Date.now() })
+        try {
+          return await this.recordVideoInTab(wc, url ?? '', app.getPath('downloads'), new Set())
+        } finally {
+          this.activeRecordings.delete(key)
+        }
+      },
       getMediaStats: () => {
-        if (!target) return { count: 0, bytes: 0 }
-        return captureStats(target.media.values())
+        const base = target ? captureStats(target.media.values()) : { count: 0, bytes: 0 }
+        return { ...base, recordings: [...this.activeRecordings.values()] }
       },
       setMediaGalleryOpen: (open) => {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')

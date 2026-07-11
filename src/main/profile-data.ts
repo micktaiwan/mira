@@ -151,4 +151,20 @@ export class ProfileData {
     }
     this.deps.persistPermissions(this.permissions)
   }
+
+  /** Cancel both pending debounced flushes WITHOUT writing. Used when an encrypted
+   * profile locks: its plaintext files have just been copied into the vault and
+   * wiped, so a lingering debounce timer must NOT fire and recreate them on disk
+   * (that would leak decrypted trails past the lock). The instance is dropped right
+   * after; the next unlock builds a fresh one from the restored files. */
+  dispose(): void {
+    if (this.historyTimer) {
+      clearTimeout(this.historyTimer)
+      this.historyTimer = null
+    }
+    if (this.permissionsTimer) {
+      clearTimeout(this.permissionsTimer)
+      this.permissionsTimer = null
+    }
+  }
 }

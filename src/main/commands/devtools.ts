@@ -32,6 +32,11 @@ export interface DevtoolsContext {
    *   2. Docked DevTools draw inside the WebContentsView bounds (below the
    *      toolbar) and overlap the chrome; detached opens a clean separate window. */
   toggleDevToolsInActiveTab: () => boolean
+  /** Open the active tab's DevTools (if not already open) and reveal the Cookies
+   * view inside the Application panel. Never closes an already-open inspector —
+   * unlike the toggle, a second call just re-reveals cookies. Resolves to whether
+   * DevTools are open afterwards. Throws when there is no active web page. */
+  inspectCookiesInActiveTab: () => Promise<boolean>
 }
 
 export interface ExecJsParams {
@@ -60,6 +65,15 @@ export const devtoolsCommands: CommandMap<CommandContext> = {
   'toggle-devtools': async (ctx) => {
     try {
       const open = ctx.toggleDevToolsInActiveTab()
+      return { ok: true, result: { open } }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  'inspect-cookies': async (ctx) => {
+    try {
+      const open = await ctx.inspectCookiesInActiveTab()
       return { ok: true, result: { open } }
     } catch (error) {
       return fail(error)

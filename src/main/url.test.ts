@@ -1,3 +1,4 @@
+import os from 'node:os'
 import { describe, it, expect } from 'vitest'
 import { normalizeInput, sameUrl, settingsSectionFor } from './url'
 
@@ -48,6 +49,14 @@ describe('normalizeInput', () => {
   it('defaults a bare domain to https', () => {
     expect(normalizeInput('example.com')).toBe('https://example.com')
     expect(normalizeInput('example.com/path')).toBe('https://example.com/path')
+  })
+
+  it('turns local filesystem paths into file:// URLs', () => {
+    expect(normalizeInput('/Users/foo/bar.html')).toBe('file:///Users/foo/bar.html')
+    expect(normalizeInput('~/projects/example/index.html')).toBe(
+      `file://${os.homedir()}/projects/example/index.html`
+    )
+    expect(normalizeInput('~')).toBe(`file://${os.homedir()}`)
   })
 
   it('defaults localhost and 127.0.0.1 to http', () => {

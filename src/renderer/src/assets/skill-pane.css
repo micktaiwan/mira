@@ -78,6 +78,30 @@
   gap: 10px;
 }
 
+/* A thin, discreet scrollbar for the conversation — the default macOS/Chromium
+   one reads as a heavy grey slab against the dark pane. Track stays invisible;
+   the thumb is a faint rounded pill that darkens on hover. */
+.skill-pane-thread::-webkit-scrollbar {
+  width: 8px;
+}
+
+.skill-pane-thread::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.skill-pane-thread::-webkit-scrollbar-thumb {
+  background: var(--ev-c-gray-2);
+  border-radius: 8px;
+  /* Inset the pill so it doesn't touch the pane edge. */
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.skill-pane-thread::-webkit-scrollbar-thumb:hover {
+  background: var(--ev-c-gray-1);
+  background-clip: padding-box;
+}
+
 .skill-pane-status {
   font-size: 14px;
   color: var(--ev-c-text-3);

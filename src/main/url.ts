@@ -2,7 +2,26 @@
 // the testable logic behind the `navigate` command (see the "tout testable"
 // principle in CLAUDE.md).
 
+import os from 'node:os'
+import { pathToFileURL } from 'node:url'
+
 const SEARCH_URL = 'https://www.google.com/search?q='
+
+// A local filesystem path typed in the address bar: an absolute path ("/Users/…")
+// or a home-relative one ("~", "~/…"). These must become file:// URLs, otherwise
+// "~/foo/index.html" matches the bare-domain rule below (a dot, no spaces) and
+// wrongly turns into "https://~/foo/index.html".
+function localFileUrl(input: string): string | null {
+  let path: string
+  if (input === '~' || input.startsWith('~/')) {
+    path = os.homedir() + input.slice(1)
+  } else if (input.startsWith('/')) {
+    path = input
+  } else {
+    return null
+  }
+  return pathToFileURL(path).href
+}
 
 /**
  * Turn whatever the user typed in the address bar into a real URL to load.
@@ -23,6 +42,10 @@ export function normalizeInput(raw: string): string {
   if (/^(https?|file|chrome-extension):\/\//i.test(input) || /^about:/i.test(input)) {
     return input
   }
+
+  // A local filesystem path ("/Users/…", "~/…") → a file:// URL.
+  const fileUrl = localFileUrl(input)
+  if (fileUrl !== null) return fileUrl
 
   // localhost / 127.0.0.1, optionally with a port and path → default to http.
   if (/^(localhost|127\.0\.0\.1)(:\d+)?(\/.*)?$/i.test(input)) {

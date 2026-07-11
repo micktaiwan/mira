@@ -94,6 +94,9 @@ export interface MiraAPI {
   /** Subscribe to the right-side skill pane's state (a skill's AI result). Returns
    * unsubscribe. */
   onSkillPane: (callback: (state: SkillPaneState) => void) => () => void
+  /** Subscribe to the fullscreen media gallery overlay being toggled (main owns
+   * the state and hides the web view while open). Returns unsubscribe. */
+  onMediaGallery: (callback: (state: { open: boolean }) => void) => () => void
 }
 
 declare global {

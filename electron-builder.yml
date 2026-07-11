@@ -23,6 +23,22 @@ extraResources:
     to: mira_spaces.node
 asarUnpack:
   - resources/**
+# Declare Mira a handler for local HTML files so `open foo.html` (and a
+# double-click in Finder) routes the file to Mira via the 'open-file' event
+# (see src/main/index.ts). electron-builder expands this into CFBundleDocumentTypes
+# in Info.plist. rank 'Default' offers Mira as a candidate handler; the user must
+# still pick it once (Finder → Open With → Mira → Always) — declaring it does not
+# seize the association from Safari/Chrome. macOS only honors this for the
+# packaged bundle, never for `npm run dev`.
+fileAssociations:
+  - ext: html
+    name: HTML Document
+    role: Viewer
+    rank: Default
+  - ext: htm
+    name: HTML Document
+    role: Viewer
+    rank: Default
 win:
   executableName: mira
 nsis:

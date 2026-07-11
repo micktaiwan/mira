@@ -1,0 +1,344 @@
+/* Media gallery overlay (features/media/MediaGallery.tsx). A fullscreen chrome
+   surface between the toolbar and the status bar; main hides the active web view
+   while it is open, so this sits over what would otherwise be the page. Kept in
+   its own file per the "CSS par surface" rule (CLAUDE.md). */
+
+.media-gallery {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: var(--toolbar-height);
+  bottom: var(--statusbar-height);
+  z-index: 80;
+  display: flex;
+  flex-direction: column;
+  background: #f6f7f9;
+  color: #1a1c20;
+  overflow: hidden;
+}
+
+.media-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+  background: #eceef1;
+  flex-wrap: wrap;
+}
+
+.media-title {
+  font-weight: 600;
+  font-size: 13px;
+  opacity: 0.8;
+}
+
+.media-filters {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+}
+
+.media-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 14px;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+
+.media-filter.active {
+  opacity: 1;
+  background: #fff;
+  border-color: rgba(105, 136, 230, 0.6);
+}
+
+.media-filter-icon {
+  font-size: 13px;
+}
+
+.media-filter-count {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.6;
+  font-size: 11px;
+}
+
+.media-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.media-btn {
+  padding: 4px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  background: #fff;
+  color: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.media-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.media-btn-primary {
+  background: #6988e6;
+  border-color: #6988e6;
+  color: #fff;
+}
+
+.media-empty {
+  padding: 40px;
+  text-align: center;
+  opacity: 0.6;
+  font-size: 14px;
+}
+
+.media-error {
+  color: #c0392b;
+}
+
+.media-grid {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  padding: 14px;
+  align-content: start;
+}
+
+.media-card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.media-thumb-wrap {
+  position: relative;
+  aspect-ratio: 4 / 3;
+  background: repeating-conic-gradient(#e8eaed 0% 25%, #f4f5f7 0% 50%) 50% / 18px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.media-thumb {
+  max-width: 100%;
+  max-height: 100%;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.media-thumb-icon {
+  font-size: 40px;
+  opacity: 0.55;
+}
+
+.media-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.media-badge-dom {
+  background: rgba(80, 110, 200, 0.85);
+}
+.media-badge-net {
+  background: rgba(190, 120, 40, 0.85);
+}
+.media-badge-dom-net {
+  background: rgba(60, 150, 90, 0.9);
+}
+
+.media-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  font-size: 11px;
+}
+
+.media-dims {
+  opacity: 0.65;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.media-download {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  background: #fff;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.media-download:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Download feedback states. `done` stays readable while disabled-looking; `error`
+   is a clear red so a silent failure (streamed/blob media) is visible. */
+.media-download-done {
+  color: #2e9e5b;
+  border-color: rgba(46, 158, 91, 0.5);
+  opacity: 1;
+}
+
+.media-download-error {
+  color: #c0392b;
+  border-color: rgba(192, 57, 43, 0.5);
+  opacity: 1;
+}
+
+/* Record button states (distinct class from download so both can style). */
+.media-rec-done {
+  color: #2e9e5b;
+  border-color: rgba(46, 158, 91, 0.5);
+  opacity: 1;
+}
+
+.media-rec-error {
+  color: #c0392b;
+  border-color: rgba(192, 57, 43, 0.5);
+  opacity: 1;
+}
+
+/* Primary record affordance on a streamed video (its only way to be saved). */
+.media-rec-primary {
+  background: #c0392b;
+  border-color: #c0392b;
+  color: #fff;
+}
+
+/* The recording button widens to fit "● 0:12". */
+.media-rec.media-download {
+  width: auto;
+  min-width: 24px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.media-rec-time {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The live red dot pulses so "recording" reads as active, not frozen. */
+.media-rec-dot {
+  color: #e5484d;
+  animation: media-rec-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes media-rec-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* Real-time recording banner under the toolbar. */
+.media-recording-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  font-size: 12px;
+  background: rgba(229, 72, 77, 0.12);
+  border-bottom: 1px solid rgba(229, 72, 77, 0.3);
+  color: #a5281d;
+}
+
+.media-recording-banner .media-rec-dot {
+  font-size: 12px;
+}
+
+.media-rec-elapsed {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+/* Status-bar recording indicator (rendered by StatusBar; styled here as it is
+   part of the media feature). */
+.status-recording {
+  color: #e5484d;
+  font-variant-numeric: tabular-nums;
+}
+
+/* "Download all" result summary in the toolbar. */
+.media-summary {
+  font-size: 11px;
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+  align-self: center;
+}
+
+/* Dark theme — the chrome follows the OS scheme. */
+@media (prefers-color-scheme: dark) {
+  .media-gallery {
+    background: #1c1e22;
+    color: #e6e8ec;
+  }
+  .media-toolbar {
+    background: #24262b;
+    border-bottom-color: rgba(255, 255, 255, 0.08);
+  }
+  .media-filter {
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+  .media-filter.active {
+    background: #2f3340;
+  }
+  .media-btn {
+    background: #2a2d33;
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+  .media-card {
+    background: #24262b;
+    border-color: rgba(255, 255, 255, 0.09);
+  }
+  .media-thumb-wrap {
+    background: repeating-conic-gradient(#2a2d33 0% 25%, #212327 0% 50%) 50% / 18px 18px;
+  }
+  .media-download {
+    background: #2a2d33;
+    border-color: rgba(255, 255, 255, 0.14);
+  }
+}
