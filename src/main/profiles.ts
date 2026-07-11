@@ -281,14 +281,15 @@ export interface ProfileManagerDeps {
   /** Called when the favorites tree changes, so the native Bookmarks menu (which
    * renders the tree) can be rebuilt. Separate from onChange (profiles). */
   onBookmarksChange?: () => void
-  /** The persisted browsing history at startup (global, one list for the app). */
-  initialHistory: HistoryEntry[]
-  /** Persist the full history list whenever it changes (debounced by the manager). */
-  persistHistory: (history: HistoryEntry[]) => void
-  /** The persisted web-permission grant log at startup (global, one list). */
-  initialPermissions: PermissionGrant[]
-  /** Persist the full grant log whenever it changes (debounced by the manager). */
-  persistPermissions: (permissions: PermissionGrant[]) => void
+  /** Load a profile's persisted browsing history (per profile — one file per id,
+   * so history never leaks across profiles). Bad/missing file degrades to empty. */
+  loadProfileHistory: (id: string) => HistoryEntry[]
+  /** Persist a profile's full history list (debounced per profile by ProfileData). */
+  persistProfileHistory: (id: string, history: HistoryEntry[]) => void
+  /** Load a profile's persisted web-permission grant log (per profile). */
+  loadProfilePermissions: (id: string) => PermissionGrant[]
+  /** Persist a profile's full grant log (debounced per profile by ProfileData). */
+  persistProfilePermissions: (id: string, permissions: PermissionGrant[]) => void
   /** Persist the app settings whenever they change (e.g. the home URL). The live
    * copy is held in the manager and seeded from `homeUrl` above. */
   persistSettings: (settings: AppSettings) => void
@@ -335,12 +336,11 @@ export class ProfileManager {
   /** Debounce for persisting settings during a panel resize drag: many width
    * updates per second update the layout live, but only settle to disk once idle. */
   private settingsSaveTimer: ReturnType<typeof setTimeout> | null = null
-  /** This profile's browsing trails — history + web-permission grants — with their
-   * debounced writes, extracted into profile-data.ts. ONE instance today (shared by
-   * all profiles, identical to the old global behavior); the shape is ready to go
-   * one-per-profile next (see track.md). Built in the constructor so its
-   * permissions-changed broadcast can reach the windows. */
-  private readonly data: ProfileData
+  /** Each profile's browsing trails — history + web-permission grants — with their
+   * debounced writes (profile-data.ts). ONE ProfileData PER PROFILE id, created
+   * lazily by dataFor(): a profile's history/permissions live in its own files and
+   * never leak into another's. */
+  private readonly dataById = new Map<string, ProfileData>()
   /** Session partitions whose permission handlers are already installed, so we
    * set them once per profile session and not on every tab. Keyed by partition
    * (the default session uses '' as its key). */
@@ -400,19 +400,28 @@ export class ProfileManager {
       sidebarWidth: deps.sidebarWidth,
       skillPaneWidth: deps.skillPaneWidth
     }
-    this.data = new ProfileData({
-      initialHistory: deps.initialHistory,
-      persistHistory: deps.persistHistory,
-      initialPermissions: deps.initialPermissions,
-      persistPermissions: deps.persistPermissions,
-      // Ping every window so an open Settings tab refetches the grant list.
+  }
+
+  /** The ProfileData for a profile id, created (and its files loaded) on first use.
+   * One per profile so history/permissions stay isolated; the permissions-changed
+   * broadcast is scoped to THAT profile's window (one window per profile). */
+  private dataFor(id: string): ProfileData {
+    const existing = this.dataById.get(id)
+    if (existing) return existing
+    const data = new ProfileData({
+      initialHistory: this.deps.loadProfileHistory(id),
+      persistHistory: (history) => this.deps.persistProfileHistory(id, history),
+      initialPermissions: this.deps.loadProfilePermissions(id),
+      persistPermissions: (permissions) => this.deps.persistProfilePermissions(id, permissions),
+      // Ping this profile's window so an open Settings tab refetches the grant list.
       onPermissionsChanged: () => {
-        for (const pw of this.openById.values()) {
-          if (!pw.window.isDestroyed()) pw.window.webContents.send('mira:permissions-changed')
-        }
+        const pw = this.openById.get(id)
+        if (pw && !pw.window.isDestroyed()) pw.window.webContents.send('mira:permissions-changed')
       },
       debounceMs: ProfileManager.SAVE_DEBOUNCE_MS
     })
+    this.dataById.set(id, data)
+    return data
   }
 
   /** Reopen, at startup, exactly the set of profile windows that were open when
@@ -826,7 +835,7 @@ export class ProfileManager {
     // Install this session's permission handlers (grant-all + log) before the page
     // loads, so a first geolocation request is answered rather than denied by the
     // default check. Once per partition (guarded inside).
-    this.ensurePermissionHandlers(partition)
+    this.ensurePermissionHandlers(partition, pw.id)
     const view = new WebContentsView({
       // nodeIntegrationInSubFrames: without it Electron runs preload scripts in
       // the MAIN frame only, and the extension service-worker bridge (the frame
@@ -1063,7 +1072,8 @@ export class ProfileManager {
       this.saveTimer = null
     }
     this.deps.persistSessions(this.sessions)
-    this.data.flush()
+    // Flush every profile whose trails were touched this run (lazily created).
+    for (const data of this.dataById.values()) data.flush()
   }
 
   /** Install the web-permission handlers on a profile's session, once per
@@ -1073,20 +1083,22 @@ export class ProfileManager {
    * permissions.ts), and record every grant per origin so Settings can list it.
    * Both handlers exist because most web APIs consult the synchronous CHECK first
    * and only raise a REQUEST if it denies (electron.d.ts). */
-  private ensurePermissionHandlers(partition: string | undefined): void {
+  private ensurePermissionHandlers(partition: string | undefined, profileId: string): void {
     const key = partition ?? ''
     if (this.permissionSessions.has(key)) return
     this.permissionSessions.add(key)
+    // partition ↔ profile id is 1:1 (each profile owns its session), so a grant on
+    // this session is recorded into THAT profile's log.
     const ses = partition ? session.fromPartition(partition) : session.defaultSession
     ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
       const granted = shouldGrantPermission(permission)
-      if (granted) this.data.recordGrant(requestingOrigin, permission)
+      if (granted) this.dataFor(profileId).recordGrant(requestingOrigin, permission)
       this.maybeHandleLocation(permission)
       return granted
     })
     ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
       const granted = shouldGrantPermission(permission)
-      if (granted) this.data.recordGrant(originOf(details.requestingUrl), permission)
+      if (granted) this.dataFor(profileId).recordGrant(originOf(details.requestingUrl), permission)
       this.maybeHandleLocation(permission)
       callback(granted)
     })
@@ -1187,7 +1199,7 @@ export class ProfileManager {
       // global browsing history. recordVisit dedups by url and skips non-web urls.
       if ('url' in p || 'title' in p) {
         const t = pw.state.tabs.find((x) => x.id === tabId)
-        if (t) this.data.recordVisit(t.url, t.title)
+        if (t) this.dataFor(pw.id).recordVisit(t.url, t.title)
       }
     }
     // The home page is a blank tab: keep its stored url (and the address bar) empty
@@ -1935,6 +1947,12 @@ export class ProfileManager {
       if (!view) throw new Error('no active web page')
       return view.webContents
     }
+    // History and permissions are per profile now, so these commands act on the
+    // TARGET window's profile — not a global list.
+    const profileData = (): ProfileData => {
+      if (!target) throw new Error('no target window')
+      return this.dataFor(target.id)
+    }
     return {
       getTargetWebContents: () => {
         if (!target || target.window.isDestroyed()) {
@@ -2378,11 +2396,11 @@ export class ProfileManager {
         if (!target) throw new Error('no target window')
         return this.reopenClosedTabIn(target)
       },
-      listHistory: (limit) => this.data.listHistory(limit),
-      searchHistory: (query, limit) => this.data.searchHistory(query, limit),
-      clearHistory: () => this.data.clearHistory(),
-      listPermissions: () => this.data.listPermissions(),
-      clearPermissions: () => this.data.clearPermissions(),
+      listHistory: (limit) => profileData().listHistory(limit),
+      searchHistory: (query, limit) => profileData().searchHistory(query, limit),
+      clearHistory: () => profileData().clearHistory(),
+      listPermissions: () => profileData().listPermissions(),
+      clearPermissions: () => profileData().clearPermissions(),
       openLocationSettings: () => this.openLocationSettings(),
       locationAuthStatus: () => locationAuthStatus(),
       requestLocationAuthorization: () => requestLocationAuthorization(),

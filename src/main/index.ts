@@ -3,7 +3,7 @@
 import { initLogging } from './log'
 import { app, BrowserWindow, globalShortcut, ipcMain, session } from 'electron'
 import { join } from 'path'
-import { readFileSync, writeFileSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { createCommandRegistry, type CommandContext } from './commands'
@@ -17,7 +17,13 @@ import {
   type DisabledExtensions,
   type SideloadedExtensions
 } from './extension-store'
-import { normalizeProfiles, defaultProfiles, partitionForId, type Profile } from './profile-store'
+import {
+  normalizeProfiles,
+  defaultProfiles,
+  partitionForId,
+  parseProfileArg,
+  type Profile
+} from './profile-store'
 import { normalizeSessions, type PersistedSessions } from './session-store'
 import { normalizeBookmarks, type BookmarkTree } from './bookmark-store'
 import { normalizeHistory, type HistoryEntry } from './history-store'
@@ -202,40 +208,37 @@ app.whenReady().then(() => {
 
   // Browsing history is global (one list for the whole app, like favorites) and
   // persisted to userData/history.json. Bad/missing file degrades to empty history.
-  const historyPath = join(app.getPath('userData'), 'history.json')
-  const loadHistory = (): HistoryEntry[] => {
+  // Per-profile storage: a profile's browsing trails (history, permission grants,
+  // and — 3b — favorites) live under userData/profiles/<id>/, so one profile's
+  // history never leaks into another's. This dir is also the unit a future
+  // password-protected profile will encrypt into its own vault. No migration: the
+  // old global userData/{history,permissions}.json are simply abandoned (left on
+  // disk, not deleted — that's the user's data).
+  const profileDir = (id: string): string => join(app.getPath('userData'), 'profiles', id)
+  const profileFile = (id: string, name: string): string => join(profileDir(id), name)
+  const loadProfileJson = <T>(id: string, name: string, normalize: (raw: unknown) => T): T => {
     try {
-      return normalizeHistory(JSON.parse(readFileSync(historyPath, 'utf8')))
+      return normalize(JSON.parse(readFileSync(profileFile(id, name), 'utf8')))
     } catch {
-      return []
+      return normalize(undefined)
     }
   }
-  const persistHistory = (history: HistoryEntry[]): void => {
+  const persistProfileJson = (id: string, name: string, value: unknown): void => {
     try {
-      writeFileSync(historyPath, JSON.stringify(history, null, 2))
+      mkdirSync(profileDir(id), { recursive: true })
+      writeFileSync(profileFile(id, name), JSON.stringify(value, null, 2))
     } catch (error) {
-      console.error('[mira] failed to persist history', error)
+      console.error(`[mira] failed to persist ${name} for profile ${id}`, error)
     }
   }
-
-  // Web-permission grants are global (Mira grants all by default and logs what was
-  // granted per site, shown in Settings) and persisted to userData/permissions.json.
-  // Bad/missing file degrades to an empty log.
-  const permissionsPath = join(app.getPath('userData'), 'permissions.json')
-  const loadPermissions = (): PermissionGrant[] => {
-    try {
-      return normalizePermissions(JSON.parse(readFileSync(permissionsPath, 'utf8')))
-    } catch {
-      return []
-    }
-  }
-  const persistPermissions = (permissions: PermissionGrant[]): void => {
-    try {
-      writeFileSync(permissionsPath, JSON.stringify(permissions, null, 2))
-    } catch (error) {
-      console.error('[mira] failed to persist permissions', error)
-    }
-  }
+  const loadProfileHistory = (id: string): HistoryEntry[] =>
+    loadProfileJson(id, 'history.json', normalizeHistory)
+  const persistProfileHistory = (id: string, history: HistoryEntry[]): void =>
+    persistProfileJson(id, 'history.json', history)
+  const loadProfilePermissions = (id: string): PermissionGrant[] =>
+    loadProfileJson(id, 'permissions.json', normalizePermissions)
+  const persistProfilePermissions = (id: string, permissions: PermissionGrant[]): void =>
+    persistProfileJson(id, 'permissions.json', permissions)
 
   // App settings (currently just the home page URL) are persisted to
   // userData/settings.json. Bad/missing file degrades to the built-in defaults.
@@ -333,10 +336,10 @@ app.whenReady().then(() => {
     persistSessions,
     initialBookmarks: loadBookmarks(),
     persistBookmarks,
-    initialHistory: loadHistory(),
-    persistHistory,
-    initialPermissions: loadPermissions(),
-    persistPermissions,
+    loadProfileHistory,
+    persistProfileHistory,
+    loadProfilePermissions,
+    persistProfilePermissions,
     persistSettings,
     loadRenderer,
     // Mira is multi-process: sum the resident set of every Electron process
@@ -464,7 +467,9 @@ app.whenReady().then(() => {
 
   // Reopen exactly the profile windows that were open when Mira last quit (one
   // per open profile), or the default profile on a first launch / fresh install.
-  profiles.openSavedProfiles()
+  // A `--profile <id>` flag / MIRA_PROFILE env var forces booting into that one
+  // profile alone (a dedicated test profile), bypassing the last-open restore.
+  profiles.openSavedProfiles(parseProfileArg(process.argv, process.env))
 
   // The manager now exists and has a window: route default-browser link handoffs
   // to it, and flush any links that arrived during a cold launch (see above).
@@ -491,3 +496,15 @@ app.on('will-quit', () => {
   globalShortcut.unregisterAll()
   cleanupSocket(SOCKET_PATH)
 })
+
+// Ctrl-C in the dev terminal (or a `kill`) sends SIGINT/SIGTERM to the main
+// process, but Electron's app lifecycle events (before-quit / will-quit) do NOT
+// fire on an OS signal — so a raw signal kills Mira without flushing debounced
+// session/history writes or cleaning up the socket. Route both signals through
+// app.quit() to run the graceful shutdown path (which logs and cleans up).
+const quitOnSignal = (signal: NodeJS.Signals): void => {
+  console.log(`[mira] received ${signal}, quitting`)
+  app.quit()
+}
+process.on('SIGINT', quitOnSignal)
+process.on('SIGTERM', quitOnSignal)
