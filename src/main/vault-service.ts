@@ -136,6 +136,14 @@ export async function encrypt(plan: VaultPlan, password: string): Promise<void> 
   }
 }
 
+/** Wipe a profile's live plaintext dirs WITHOUT touching the vault. Used at startup
+ * to discard a stale unlocked session left by an unclean shutdown (crash / quit
+ * while unlocked): the vault, last cleanly locked, stays the source of truth.
+ * Losing that unclean session is acceptable — it is "incognito that kept cookies". */
+export function discardPlaintext(plan: VaultPlan): void {
+  for (const dir of plan.dirs) rmSync(dir.live, { recursive: true, force: true })
+}
+
 /** Unlock: mount the vault and copy its dirs back out to their live userData
  * locations (no symlink — Mira reads them normally), then unmount. The plaintext
  * now exists on disk until the next lock. Throws on a wrong password. */

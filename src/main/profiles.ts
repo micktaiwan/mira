@@ -97,6 +97,16 @@ import { decideWindowOpen } from './window-open'
 import { installHoverReporter, reduceHover, hoverText, EMPTY_HOVER, type HoverEvent } from './hover'
 import { evalInWebContents } from './cdp-eval'
 import {
+  type MagnifierState,
+  NO_MAGNIFIER,
+  isMagnified,
+  toViewportClip,
+  MAG_BINDING,
+  MAGNIFIER_SHIM,
+  MAGNIFIER_FLASH,
+  setShimFlags
+} from './magnifier'
+import {
   enterFullScreen,
   panelChanged,
   exitFullScreen,
@@ -415,6 +425,15 @@ export class ProfileManager {
    * teleporting a window the user just asked for would read as "nothing
    * happened". Its saved spaceIndex is refreshed by the next focus/close. */
   private restoringStartup = false
+  /** Persistent optical magnifier zoom/pan, per content-tab id (absent = 100%).
+   * Not in tab-store: it is native view state (a CDP clip), rebuilt from scratch
+   * on navigation, never persisted. See magnifier.ts. */
+  private readonly magnifierStates = new Map<string, MagnifierState>()
+  /** True while the Cmd key is physically held (from before-input-event). Gates
+   * the shim's wheel capture so the FIRST Cmd+scroll (from 100%) is caught. */
+  private cmdHeld = false
+  /** Last shim flags pushed per tab id, to avoid re-evaluating JS every wheel. */
+  private readonly shimFlags = new Map<string, string>()
 
   constructor(private readonly deps: ProfileManagerDeps) {
     this.profiles = deps.initialProfiles
@@ -535,6 +554,22 @@ export class ProfileManager {
     }
   }
 
+  /** At startup, discard any leftover plaintext of encrypted profiles. An unclean
+   * shutdown (crash, or quit while unlocked) can leave a profile's data decrypted on
+   * disk; nothing is unlocked yet, so any such plaintext is stale — wipe it and let
+   * the vault (last clean lock) be the truth. Losing that unclean session is fine
+   * (CONFIRMED). Best-effort per profile. */
+  private reconcileVaults(): void {
+    for (const p of this.profiles) {
+      if (!p.encrypted) continue
+      try {
+        vaultService.discardPlaintext(vaultPlan(this.deps.userDataDir, p.id))
+      } catch (error) {
+        console.error(`[mira] vault reconcile of profile ${p.id} failed`, error)
+      }
+    }
+  }
+
   /** Reopen, at startup, exactly the set of profile windows that were open when
    * Mira last quit (one window per open profile, see PersistedWindow.open). Skips
    * unknown ids (a session for a profile since deleted). Falls back to the default
@@ -543,6 +578,8 @@ export class ProfileManager {
    * the user left, whereas a later explicit open must land on the desktop the
    * user is looking at (see restoringStartup / create()). */
   openSavedProfiles(explicitProfileId?: string | null): void {
+    // Discard any stale plaintext from an unclean shutdown before opening anything.
+    this.reconcileVaults()
     this.restoringStartup = true
     try {
       // A forced profile (--profile / MIRA_PROFILE, parsed in index.ts) opens THAT
@@ -599,6 +636,22 @@ export class ProfileManager {
     this.create(profile)
     this.deps.onChange?.()
     return { id, created: true }
+  }
+
+  /** Close the open window of a profile, exactly like a user close: the window's
+   * 'close'/'closed' handlers snapshot its geometry, mark the profile not-open
+   * (so it won't reopen next launch), and auto-lock it if it was an unlocked
+   * vault. The other profiles' windows are untouched, and on macOS the app keeps
+   * running with no window (window-all-closed does not quit). `closed` is false
+   * when the id is known but not currently open. Throws on an unknown id. */
+  closeProfile(id: string): { id: string; closed: boolean } {
+    if (!findById(this.profiles, id)) throw new Error(`unknown profile: ${id}`)
+    const open = this.openById.get(id)
+    if (!open || open.window.isDestroyed()) return { id, closed: false }
+    // window.close() drives the same path as clicking the red button / Cmd+Shift+W:
+    // the 'closed' handler (see create) does the not-open bookkeeping and auto-lock.
+    open.window.close()
+    return { id, closed: true }
   }
 
   /** Open an external URL (a link handed to Mira as the system default browser) in
@@ -844,6 +897,17 @@ export class ProfileManager {
       destroyTooltip(profileWindow)
       this.openById.delete(profile.id)
       this.deps.onChange?.()
+      // Auto-lock an encrypted profile when the user closes its window: the window
+      // is gone now (handles released), so it's safe to copy the live data back into
+      // the vault and wipe the plaintext. Skipped during app quit — locking is async
+      // and can't reliably finish before exit; a quit-while-unlocked session's
+      // leftover plaintext is discarded at next startup (reconcileVaults), which is
+      // acceptable (losing an unclean session is fine — CONFIRMED). Fire-and-forget.
+      if (!this.quitting && this.unlockedVaults.has(profile.id)) {
+        this.lockProfileVault(profile.id).catch((error) =>
+          console.error(`[mira] auto-lock of profile ${profile.id} failed`, error)
+        )
+      }
     })
 
     // Tab-strip navigation (Cmd+Up/Down) must beat the focused web page: on macOS
@@ -983,6 +1047,9 @@ export class ProfileManager {
     this.deps.extensions.addTab(view.webContents, pw.window)
     // See create(): Cmd+Up/Down must fire even when this page holds focus.
     this.wireTabShortcuts(pw, view.webContents)
+    // Optical magnifier: inject the input shim, register its binding, and detect
+    // Cmd hold — all on this tab's already-attached CDP debugger (stealth).
+    this.wireMagnifier(pw, tab.id, view.webContents)
     // Right-click on the page → a NATIVE menu (a CSS popover would sit behind the
     // WebContentsView, CLAUDE.md "les deux pièges" #3). Its item set is decided by
     // the pure buildPageMenu; the popup below is the thin native part.
@@ -1823,6 +1890,27 @@ export class ProfileManager {
       bytes = isBase64
         ? Buffer.from(body, 'base64')
         : Buffer.from(decodeURIComponent(body), 'utf8')
+    } else if (url.startsWith('blob:')) {
+      // A blob: URL only resolves inside the page that created it, so fetch it
+      // THERE (via the tab's page world) and hand back base64. Works for real
+      // Blob objects; a MediaSource blob (HLS/MSE streaming, e.g. X/YouTube
+      // video) is not a file and fetch() rejects — surfaced as a clean failure.
+      const code = `(async () => {
+        const r = await fetch(${JSON.stringify(url)})
+        const b = await r.blob()
+        const buf = new Uint8Array(await b.arrayBuffer())
+        let s = ''
+        for (let i = 0; i < buf.length; i++) s += String.fromCharCode(buf[i])
+        return JSON.stringify({ mime: b.type, data: btoa(s) })
+      })()`
+      const raw = await evalInWebContents(wc, code)
+      const parsed = JSON.parse(typeof raw === 'string' ? raw : '{}') as {
+        mime?: string
+        data?: string
+      }
+      if (!parsed.data) throw new Error('blob not fetchable (streamed media)')
+      mime = parsed.mime ?? ''
+      bytes = Buffer.from(parsed.data, 'base64')
     } else {
       const res = await wc.session.fetch(url)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -2009,6 +2097,115 @@ export class ProfileManager {
         event.preventDefault()
       }
     })
+  }
+
+  /** Wire the optical magnifier onto a tab's webContents, reusing the CDP
+   * debugger stealth already attached. Three hooks:
+   *  1. Inject the input shim + register its forwarding binding (re-asserted on
+   *     each navigation, which also resets the zoom — a new page starts at 100%).
+   *  2. Route the shim's forwarded wheel to magnifier-zoom (Cmd held) or -pan.
+   *  3. Detect Cmd hold (before-input-event) to arm the shim's wheel capture, so
+   *     the FIRST Cmd+scroll from 100% is caught. All routing goes through the
+   *     window's chrome webContents so the command context resolves the window
+   *     (BrowserWindow.fromWebContents on a child view can be null). */
+  private wireMagnifier(pw: ProfileWindow, tabId: string, wc: WebContents): void {
+    const dbg = wc.debugger
+    const inject = (): void => {
+      try {
+        if (!dbg.isAttached()) dbg.attach('1.3')
+        // bindingCalled is a Runtime-domain event; enable it before adding the
+        // binding, then addBinding exposes window.__miraMagnifier to the shim.
+        dbg.sendCommand('Runtime.enable').catch(() => {})
+        dbg.sendCommand('Runtime.addBinding', { name: MAG_BINDING }).catch(() => {})
+        dbg
+          .sendCommand('Page.addScriptToEvaluateOnNewDocument', { source: MAGNIFIER_SHIM })
+          .catch(() => {})
+        evalInWebContents(wc, MAGNIFIER_SHIM).catch(() => {})
+      } catch {
+        /* debugger not ready yet; did-finish-load re-asserts */
+      }
+    }
+    inject()
+    wc.on('did-finish-load', () => {
+      // A fresh document drops the JS context (binding + shim) and any clip, and
+      // conceptually resets the zoom: clear state, re-inject, re-apply (= clear).
+      this.magnifierStates.delete(tabId)
+      this.shimFlags.delete(tabId)
+      inject()
+      this.applyMagnifier(pw, tabId)
+    })
+    dbg.on('message', (_e, method, params) => {
+      if (method !== 'Runtime.bindingCalled' || params.name !== MAG_BINDING) return
+      let msg: { t?: string; dy?: number; dx?: number; meta?: boolean; x?: number; y?: number }
+      try {
+        msg = JSON.parse(params.payload)
+      } catch {
+        return
+      }
+      if (msg.t !== 'wheel') return
+      const chrome = pw.window.webContents
+      if (msg.meta) {
+        this.deps.runCommand?.(chrome, 'magnifier-zoom', {
+          deltaY: msg.dy ?? 0,
+          cursorX: msg.x ?? 0,
+          cursorY: msg.y ?? 0
+        })
+      } else {
+        this.deps.runCommand?.(chrome, 'magnifier-pan', {
+          deltaX: msg.dx ?? 0,
+          deltaY: msg.dy ?? 0
+        })
+      }
+    })
+    wc.on('before-input-event', (_event, input) => {
+      if (input.key !== 'Meta') return
+      const held = input.type === 'keyDown'
+      if (this.cmdHeld === held) return
+      this.cmdHeld = held
+      this.updateShim(tabId, wc)
+    })
+  }
+
+  /** Apply tab `tabId`'s current magnifier state to its view natively: set (or
+   * clear) the CDP device-metrics viewport clip and refresh the shim flags.
+   * Needs deviceScaleFactor:0 — with 1 the viewport scale is ignored (verified). */
+  private applyMagnifier(pw: ProfileWindow, tabId: string): void {
+    const view = pw.views.get(tabId)
+    if (!view) return
+    const wc = view.webContents
+    const b = view.getBounds()
+    const state = this.magnifierStates.get(tabId) ?? NO_MAGNIFIER
+    const dbg = wc.debugger
+    try {
+      if (isMagnified(state)) {
+        dbg
+          .sendCommand('Emulation.setDeviceMetricsOverride', {
+            width: Math.round(b.width),
+            height: Math.round(b.height),
+            deviceScaleFactor: 0,
+            mobile: false,
+            viewport: toViewportClip(state, b.width, b.height)
+          })
+          .catch(() => {})
+      } else {
+        dbg.sendCommand('Emulation.clearDeviceMetricsOverride').catch(() => {})
+      }
+    } catch {
+      /* debugger detached mid-teardown */
+    }
+    this.updateShim(tabId, wc)
+  }
+
+  /** Push the shim's two capture flags for a tab, skipping the JS eval when they
+   * have not changed. captureWheel is on while Cmd is held OR magnified (so the
+   * first Cmd+scroll is caught and pan keeps working after release); swallowClicks
+   * only while magnified (Cmd+click still opens links when not zoomed). */
+  private updateShim(tabId: string, wc: WebContents): void {
+    const magnified = isMagnified(this.magnifierStates.get(tabId) ?? NO_MAGNIFIER)
+    const js = setShimFlags(this.cmdHeld || magnified, magnified)
+    if (this.shimFlags.get(tabId) === js) return
+    this.shimFlags.set(tabId, js)
+    evalInWebContents(wc, js).catch(() => {})
   }
 
   /** Pop up the native page right-click menu for `wc`. The item set is decided by
@@ -2258,6 +2455,29 @@ export class ProfileManager {
           label: profile.label,
           ...(profile.color ? { color: profile.color } : {})
         }
+      },
+      // Magnifier slice — the native edge of the persistent optical zoom. The
+      // active web tab is the target; the pure math lives in magnifier.ts.
+      magnifierTarget: () => {
+        if (!target || target.window.isDestroyed()) return null
+        const activeId = target.state.activeId
+        if (!activeId || activeId === target.settingsTabId) return null
+        const view = target.views.get(activeId)
+        if (!view) return null
+        const b = view.getBounds()
+        return { id: activeId, width: b.width, height: b.height }
+      },
+      getMagnifierState: (id: string) => this.magnifierStates.get(id) ?? NO_MAGNIFIER,
+      setMagnifierState: (id: string, s: MagnifierState) => {
+        if (isMagnified(s)) this.magnifierStates.set(id, s)
+        else this.magnifierStates.delete(id)
+      },
+      applyMagnifierClip: (id: string) => {
+        if (target) this.applyMagnifier(target, id)
+      },
+      magnifierFlash: (id: string) => {
+        const view = target?.views.get(id)
+        if (view) evalInWebContents(view.webContents, MAGNIFIER_FLASH).catch(() => {})
       },
       focusApp: () => {
         // Fired by the global shortcut while another app is frontmost, so the
