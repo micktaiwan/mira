@@ -17,11 +17,7 @@
 /** macOS location authorization as the native addon reports it, plus 'unavailable'
  * for "no addon / not macOS", which callers treat as "can't tell, do nothing". */
 export type LocationAuthStatus =
-  | 'authorized'
-  | 'denied'
-  | 'restricted'
-  | 'not-determined'
-  | 'unavailable'
+  'authorized' | 'denied' | 'restricted' | 'not-determined' | 'unavailable'
 
 /** What Mira should do about location for a given permission request. */
 export type LocationAction = 'prompt' | 'open-settings' | 'noop'

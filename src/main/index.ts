@@ -9,6 +9,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { createCommandRegistry, type CommandContext } from './commands'
 import { startCommandSocket, cleanupSocket } from './socket'
+import { forwardToRunningInstance } from './single-instance'
 import { ProfileManager, DEFAULT_PROFILE_ID } from './profiles'
 import { CHROME_PARTITION, DEFAULT_SESSION_ALIAS } from './chrome-session'
 import { ExtensionsService } from './extensions'
@@ -130,7 +131,23 @@ app.setAboutPanelOptions(
   })
 )
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // Single-instance-over-socket for the default-browser handoff. macOS only routes
+  // `open foo.html` / a double-click / a clicked link to the PACKAGED bundle, never
+  // to `npm run dev`. So while Mira runs in dev (same /tmp/mira.sock), a plain `open`
+  // would spawn a SECOND Mira. If a url is queued (we were launched by an open) and a
+  // Mira already answers on the socket, forward it there and quit before creating any
+  // window — the page opens in the running instance, no second Mira. A manual launch
+  // (no queued url) is unaffected and boots normally as the primary.
+  if (pendingUrls.length > 0) {
+    const forwarded = await forwardToRunningInstance(SOCKET_PATH, pendingUrls)
+    if (forwarded) {
+      pendingUrls.length = 0
+      app.quit()
+      return
+    }
+  }
+
   // App user model id (Windows taskbar grouping; harmless on macOS).
   electronApp.setAppUserModelId('com.mira.app')
 

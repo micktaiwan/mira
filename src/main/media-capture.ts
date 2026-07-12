@@ -40,6 +40,9 @@ export interface MediaItem {
    * chrome (a blob:/MediaSource src is page-scoped): a data: URL of a frame
    * grabbed in the page, or the <video poster> URL. Absent for still media. */
   poster?: string
+  /** For a streamed video: the precise permalink URL to hand to yt-dlp for a real
+   * file download (a blob:/MSE src is not downloadable). Absent for still media. */
+  pageUrl?: string
   /** Which sources reported this url; union across both when merged. */
   sources: MediaSource[]
   /** A canvas whose pixels could not be exported (cross-origin taint). It has no
@@ -164,6 +167,7 @@ export function mergeMedia(items: MediaItem[]): MediaItem[] {
     existing.alt ??= it.alt
     existing.bytes ??= it.bytes
     existing.poster ??= it.poster
+    existing.pageUrl ??= it.pageUrl
     if (it.tainted) existing.tainted = true
   }
   return out

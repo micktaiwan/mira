@@ -66,7 +66,8 @@ export const navigationCommands: CommandMap<CommandContext> = {
     // on newTab (it swallows the duplicate open); without newTab, re-typing the
     // current URL keeps its plain "load in place" semantics.
     const existing = tabs.find(
-      (t) => t.kind === 'web' && sameUrl(t.url, normalized) && (newTab === true || t.id !== activeId)
+      (t) =>
+        t.kind === 'web' && sameUrl(t.url, normalized) && (newTab === true || t.id !== activeId)
     )
     if (existing) {
       try {

@@ -105,6 +105,8 @@ export interface FakeContext {
   focusCalls: boolean[]
   /** URLs passed to openExternalUrl (open-url / open-file handoff spy). */
   externalOpens: string[]
+  /** profileId passed alongside each openExternalUrl call (undefined when none). */
+  externalOpenTargets: (string | undefined)[]
   /** Desktop indexes requested via moveTargetWindowToSpace (spaces spy). */
   spaceMoves: number[]
   /** Live view of the fake window's virtual-desktop index (spaces spy). */
@@ -140,6 +142,7 @@ export function makeContext(
   const clipboardWrites: string[] = []
   const focusCalls: boolean[] = []
   const externalOpens: string[] = []
+  const externalOpenTargets: (string | undefined)[] = []
   const spaceMoves: number[] = []
   // Magnifier: per-view zoom/pan state, plus spies for the native effects.
   const magnifierStates = new Map<string, MagnifierState>()
@@ -259,8 +262,9 @@ export function makeContext(
     },
     // Default-browser handoff: openUrl targets the last-focused profile in the
     // real manager; the fake just records the resolved url (open-url / open-file).
-    openExternalUrl: (url: string) => {
+    openExternalUrl: (url: string, profileId?: string) => {
       externalOpens.push(url)
+      externalOpenTargets.push(profileId)
     },
     // Spaces slice: one display with three virtual desktops, window on the first.
     // Mirrors the real guards (no target / unknown index throw, same index noop).
@@ -455,7 +459,7 @@ export function makeContext(
     // the gallery toggle. Enough for the command-layer tests.
     collectMedia: async () => [],
     downloadMedia: async (urls) => ({ saved: urls.length, failed: [] }),
-    recordVideo: async () => ({ saved: true, file: 'video-recording.webm' }),
+    downloadVideoUrl: async () => ({ saved: true, file: 'clip.mp4' }),
     getMediaStats: () => ({ count: 0, bytes: 0 }),
     setMediaGalleryOpen: (open) => {
       state.mediaGalleryOpen = open ?? !state.mediaGalleryOpen
@@ -497,7 +501,8 @@ export function makeContext(
       if (!active || active.id === state.settingsTabId) return null
       return { id: active.id, width: 1000, height: 800 }
     },
-    getMagnifierState: (id: string) => magnifierStates.get(id) ?? { scale: 1, originX: 0, originY: 0 },
+    getMagnifierState: (id: string) =>
+      magnifierStates.get(id) ?? { scale: 1, originX: 0, originY: 0 },
     setMagnifierState: (id: string, s: MagnifierState) => {
       magnifierStates.set(id, s)
     },
@@ -922,6 +927,7 @@ export function makeContext(
     extensionsFor: (profileId: string) => (state.extensions.get(profileId) ?? []).slice(),
     focusCalls,
     externalOpens,
+    externalOpenTargets,
     spaceMoves,
     windowSpaceIndex: () => windowSpace
   }

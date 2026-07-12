@@ -60,7 +60,10 @@ describe('CHROME_SHIM_SOURCE', () => {
 
 describe('interpretSwProbe', () => {
   it('reads a healthy provider (ok + count)', () => {
-    expect(interpretSwProbe(JSON.stringify({ sw: 'ok', count: 2 }))).toEqual({ kind: 'ok', count: 2 })
+    expect(interpretSwProbe(JSON.stringify({ sw: 'ok', count: 2 }))).toEqual({
+      kind: 'ok',
+      count: 2
+    })
   })
 
   it('reads the no-api case', () => {
@@ -72,24 +75,31 @@ describe('interpretSwProbe', () => {
       JSON.stringify({
         sw: 'error',
         name: 'InvalidStateError',
-        message: 'Failed to get ServiceWorkerRegistration objects: The document is in an invalid state.'
+        message:
+          'Failed to get ServiceWorkerRegistration objects: The document is in an invalid state.'
       })
     )
     expect(v.kind).toBe('invalid-state')
   })
 
   it('flags invalid-state from the message even when the name is missing', () => {
-    const v = interpretSwProbe(JSON.stringify({ sw: 'error', name: '', message: 'the document is in an INVALID STATE' }))
+    const v = interpretSwProbe(
+      JSON.stringify({ sw: 'error', name: '', message: 'the document is in an INVALID STATE' })
+    )
     expect(v.kind).toBe('invalid-state')
   })
 
   it('classifies an unrelated SW error as other-error, not invalid-state', () => {
-    const v = interpretSwProbe(JSON.stringify({ sw: 'error', name: 'SecurityError', message: 'insecure' }))
+    const v = interpretSwProbe(
+      JSON.stringify({ sw: 'error', name: 'SecurityError', message: 'insecure' })
+    )
     expect(v).toMatchObject({ kind: 'other-error' })
   })
 
   it('treats a synchronous throw as an error verdict', () => {
-    expect(interpretSwProbe(JSON.stringify({ sw: 'throw', message: 'boom' })).kind).toBe('other-error')
+    expect(interpretSwProbe(JSON.stringify({ sw: 'throw', message: 'boom' })).kind).toBe(
+      'other-error'
+    )
   })
 
   it('is defensive: non-string and non-JSON inputs are unparseable, never throwing', () => {
@@ -106,14 +116,21 @@ describe('swProbeLogLine', () => {
   })
 
   it('logs the invalid-state failure with the url and a WhatsApp hint', () => {
-    const line = swProbeLogLine('https://web.whatsapp.com/', { kind: 'invalid-state', detail: 'InvalidStateError' })
+    const line = swProbeLogLine('https://web.whatsapp.com/', {
+      kind: 'invalid-state',
+      detail: 'InvalidStateError'
+    })
     expect(line).toContain('https://web.whatsapp.com/')
     expect(line).toContain('UNAVAILABLE')
     expect(line).toMatch(/whatsapp/i)
   })
 
   it('logs other-error and unparseable verdicts too', () => {
-    expect(swProbeLogLine('https://x.com', { kind: 'other-error', detail: 'SecurityError' })).toContain('failed')
-    expect(swProbeLogLine('https://x.com', { kind: 'unparseable', detail: 'junk' })).toContain('unreadable')
+    expect(
+      swProbeLogLine('https://x.com', { kind: 'other-error', detail: 'SecurityError' })
+    ).toContain('failed')
+    expect(swProbeLogLine('https://x.com', { kind: 'unparseable', detail: 'junk' })).toContain(
+      'unreadable'
+    )
   })
 })

@@ -44,6 +44,34 @@ describe('open-url', () => {
       error: 'missing "url"'
     })
   })
+
+  it('forwards an explicit profileId to the opener and echoes it', () => {
+    const { ctx, externalOpens, externalOpenTargets } = makeContext()
+    const registry = createCommandRegistry()
+    expect(
+      registry.execute('open-url', { url: 'https://example.com', profileId: 'perso' }, ctx)
+    ).toEqual({ ok: true, url: 'https://example.com', profileId: 'perso' })
+    expect(externalOpens).toEqual(['https://example.com'])
+    expect(externalOpenTargets).toEqual(['perso'])
+  })
+
+  it('passes no target when profileId is absent', () => {
+    const { ctx, externalOpenTargets } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('open-url', { url: 'https://example.com' }, ctx)
+    expect(externalOpenTargets).toEqual([undefined])
+  })
+
+  it('rejects a blank or non-string profileId', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('open-url', { url: 'https://example.com', profileId: 7 }, ctx)).toEqual(
+      { ok: false, error: 'invalid "profileId"' }
+    )
+    expect(
+      registry.execute('open-url', { url: 'https://example.com', profileId: '  ' }, ctx)
+    ).toEqual({ ok: false, error: 'invalid "profileId"' })
+  })
 })
 
 describe('open-file', () => {
@@ -66,5 +94,15 @@ describe('open-file', () => {
       error: 'missing "path"'
     })
     expect(externalOpens).toEqual([])
+  })
+
+  it('opens a local file into an explicit profile', () => {
+    const { ctx, externalOpens, externalOpenTargets } = makeContext()
+    const registry = createCommandRegistry()
+    expect(
+      registry.execute('open-file', { path: '/Users/me/page.html', profileId: 'perso' }, ctx)
+    ).toEqual({ ok: true, url: 'file:///Users/me/page.html', profileId: 'perso' })
+    expect(externalOpens).toEqual(['file:///Users/me/page.html'])
+    expect(externalOpenTargets).toEqual(['perso'])
   })
 })

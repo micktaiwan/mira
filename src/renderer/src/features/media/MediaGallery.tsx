@@ -25,6 +25,8 @@ interface MediaItem {
   tainted?: boolean
   /** A thumbnail data/URL for a video whose own (blob:) src can't render here. */
   poster?: string
+  /** For a streamed video: the precise permalink handed to yt-dlp to download it. */
+  pageUrl?: string
 }
 
 type Kind = MediaItem['kind']
@@ -67,16 +69,26 @@ function isStream(item: MediaItem): boolean {
   return item.url.startsWith('blob:')
 }
 
-/** Whether the plain ↓ download applies: a real file URL, not a taint or stream. */
+/** Whether the "Download all" batch applies: a real file URL, not a taint or a
+ * stream (streamed videos go one at a time through yt-dlp, not the fetch batch). */
 function canDownload(item: MediaItem): boolean {
   return Boolean(item.url) && !item.tainted && !isStream(item)
 }
 
-/** m:ss for an elapsed-seconds count. */
-function fmtElapsed(sec: number): string {
-  const m = Math.floor(sec / 60)
-  const s = Math.floor(sec % 60)
-  return `${m}:${String(s).padStart(2, '0')}`
+/** Whether a per-item download button applies at all: anything with a permalink
+ * (yt-dlp), or a real file URL. A tainted canvas, or a stream with no permalink,
+ * cannot be saved. */
+function canSave(item: MediaItem): boolean {
+  if (item.tainted) return false
+  if (item.pageUrl) return true
+  if (isStream(item)) return false
+  return Boolean(item.url)
+}
+
+/** Stable per-item key for the download-state map. A url-less video (no src yet)
+ * keys on its permalink so its button state does not collide with other items. */
+function keyOf(item: MediaItem): string {
+  return item.url || item.pageUrl || ''
 }
 
 /** The thumbnail for one item, by kind. Images/SVG/canvas render directly; video
@@ -111,21 +123,14 @@ export default function MediaGallery({ onClose }: { onClose: () => void }): Reac
   // the kinds actually present once loaded so no button starts dead.
   const [active, setActive] = useState<Set<Kind>>(new Set())
   // Per-url download feedback: pending while the command runs, then done / error.
-  // Keyed by url so both the per-item button and "Download all" reflect it.
+  // Keyed by url so both the per-item button and "Download all" reflect it. A
+  // streamed video's yt-dlp download uses this too (pending → done/error).
   const [dl, setDl] = useState<Record<string, 'pending' | 'done' | 'error'>>({})
-  // Per-url video-recording state (captureStream capture runs for the clip's
-  // duration, so it gets its own longer-lived spinner).
-  const [rec, setRec] = useState<Record<string, 'recording' | 'done' | 'error'>>({})
-  // Real failure message per url (main returns it; surfaced in the button title).
-  const [recErr, setRecErr] = useState<Record<string, string>>({})
-  // When each recording started (epoch ms), to show a live elapsed timer.
-  const [recStart, setRecStart] = useState<Record<string, number>>({})
+  // Per-url failure message (main returns it for a stream download; surfaced in
+  // the button title).
+  const [dlErr, setDlErr] = useState<Record<string, string>>({})
   // One-line summary after a "Download all" run (e.g. "12 saved, 3 failed").
   const [summary, setSummary] = useState<string | null>(null)
-  // Wall-clock (epoch ms) refreshed once a second while a recording is in flight,
-  // so elapsed timers advance. Read in render instead of Date.now() (which is
-  // impure at render time); the interval and event handlers set it.
-  const [now, setNow] = useState(0)
 
   // Harvest the active tab's media into state. Only touches state AFTER the
   // await. Defined inside the mount effect (like App.tsx's loaders) so the
@@ -166,18 +171,6 @@ export default function MediaGallery({ onClose }: { onClose: () => void }): Reac
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  // How many recordings are in flight, and the earliest start (for the banner's
-  // elapsed clock). Recomputed each render (cheap; the tick drives re-renders).
-  const recording = Object.entries(rec).filter(([, s]) => s === 'recording')
-  const recordingCount = recording.length
-
-  // Tick every second while a recording runs, so elapsed timers advance.
-  useEffect(() => {
-    if (recordingCount === 0) return
-    const id = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(id)
-  }, [recordingCount])
-
   // Count per kind, for the toggle badges.
   const counts = useMemo(() => {
     const m = new Map<Kind, number>()
@@ -196,30 +189,27 @@ export default function MediaGallery({ onClose }: { onClose: () => void }): Reac
     })
   }
 
-  const downloadOne = (url: string): void => {
-    setDl((prev) => ({ ...prev, [url]: 'pending' }))
-    void run('download-media', { url }).then((res) => {
-      const ok = res.ok === true && ((res.saved as number) ?? 0) > 0
-      setDl((prev) => ({ ...prev, [url]: ok ? 'done' : 'error' }))
-    })
-  }
-
-  // Record a streamed video (captureStream). Runs for ~the clip's duration, so
-  // the button shows a live elapsed timer until main returns.
-  const recordOne = (url: string): void => {
-    // Click handler — legitimately allowed to read the clock (the purity rule
-    // cannot tell a handler from render, so silence it just here).
-    // eslint-disable-next-line react-hooks/purity
-    const started = Date.now()
-    setRecStart((prev) => ({ ...prev, [url]: started }))
-    setNow(started)
-    setRec((prev) => ({ ...prev, [url]: 'recording' }))
-    setRecErr((prev) => ({ ...prev, [url]: '' }))
-    void run('record-video', { url }).then((res) => {
-      const ok = res.ok === true
-      setRec((prev) => ({ ...prev, [url]: ok ? 'done' : 'error' }))
-      if (!ok)
-        setRecErr((prev) => ({ ...prev, [url]: (res.error as string) ?? 'recording failed' }))
+  // Download one item. When it has a permalink (any video we can hand to yt-dlp),
+  // go through download-video-url (a real background file download); otherwise a
+  // real file URL goes through download-media (fetched directly). Keyed by keyOf
+  // so a url-less video tracks its own button state.
+  const downloadOne = (item: MediaItem): void => {
+    const key = keyOf(item)
+    const viaYtdlp = Boolean(item.pageUrl)
+    if (!viaYtdlp && (isStream(item) || !item.url)) {
+      setDl((prev) => ({ ...prev, [key]: 'error' }))
+      setDlErr((prev) => ({ ...prev, [key]: 'no downloadable source for this video' }))
+      return
+    }
+    setDl((prev) => ({ ...prev, [key]: 'pending' }))
+    setDlErr((prev) => ({ ...prev, [key]: '' }))
+    const call = viaYtdlp
+      ? run('download-video-url', { url: item.pageUrl })
+      : run('download-media', { url: item.url })
+    void call.then((res) => {
+      const ok = viaYtdlp ? res.ok === true : res.ok === true && ((res.saved as number) ?? 0) > 0
+      setDl((prev) => ({ ...prev, [key]: ok ? 'done' : 'error' }))
+      if (!ok) setDlErr((prev) => ({ ...prev, [key]: (res.error as string) ?? 'download failed' }))
     })
   }
 
@@ -284,24 +274,6 @@ export default function MediaGallery({ onClose }: { onClose: () => void }): Reac
         </div>
       </div>
 
-      {/* Recording is real-time: this banner makes clear the gallery must stay
-          open and the video plays through, answering "is it still recording?". */}
-      {recordingCount > 0 && (
-        <div className="media-recording-banner">
-          <span className="media-rec-dot" aria-hidden="true">
-            ●
-          </span>
-          Recording {recordingCount} video{recordingCount > 1 ? 's' : ''} in the background — you
-          can close this and keep browsing; it saves to Downloads when done
-          {recording.length === 1 && recStart[recording[0][0]] && now > 0 && (
-            <span className="media-rec-elapsed">
-              {' '}
-              {fmtElapsed((now - recStart[recording[0][0]]) / 1000)}
-            </span>
-          )}
-        </div>
-      )}
-
       {loading && <div className="media-empty">Collecting media…</div>}
       {error && <div className="media-empty media-error">{error}</div>}
       {!loading && !error && media.length === 0 && (
@@ -327,84 +299,48 @@ export default function MediaGallery({ onClose }: { onClose: () => void }): Reac
                   {item.width && item.height ? `${item.width}×${item.height}` : item.kind}
                   {sizeText(item.bytes) && ` · ${sizeText(item.bytes)}`}
                 </span>
-                {/* Record: the way to grab a video. Primary for a stream (no file
-                    URL); also offered on plain videos, beside their ↓. */}
-                {item.kind === 'video' &&
-                  (() => {
-                    const state = rec[item.url]
-                    const elapsed =
-                      state === 'recording' && recStart[item.url] && now > 0
-                        ? fmtElapsed((now - recStart[item.url]) / 1000)
-                        : ''
-                    const title =
-                      state === 'recording'
-                        ? 'Recording in the background — saves to Downloads when done'
-                        : state === 'done'
-                          ? 'Recorded to Downloads'
-                          : state === 'error'
-                            ? `Recording failed: ${recErr[item.url] || 'unknown'}`
-                            : 'Record this video (captures the playing stream — takes its full length)'
-                    return (
-                      <button
-                        type="button"
-                        className={`media-download media-rec${state ? ` media-rec-${state}` : ''}${
-                          isStream(item) ? ' media-rec-primary' : ''
-                        }`}
-                        disabled={!item.url || state === 'recording'}
-                        title={title}
-                        onClick={() => recordOne(item.url)}
-                      >
-                        {state === 'recording' ? (
-                          <>
-                            <span className="media-rec-dot" aria-hidden="true">
-                              ●
-                            </span>
-                            {elapsed && <span className="media-rec-time">{elapsed}</span>}
-                          </>
-                        ) : state === 'done' ? (
-                          '✓'
-                        ) : state === 'error' ? (
-                          '✗'
-                        ) : (
-                          '⏺'
-                        )}
-                      </button>
-                    )
-                  })()}
-                {/* Plain download: only for a real file URL. A streamed video has
-                    none (use Record); a tainted canvas can't be exported. */}
-                {!isStream(item) &&
-                  (() => {
-                    const state = dl[item.url]
-                    const blocked = !item.url || item.tainted
-                    const glyph = blocked
-                      ? '⊘'
-                      : state === 'pending'
-                        ? '⏳'
-                        : state === 'done'
-                          ? '✓'
-                          : state === 'error'
-                            ? '✗'
-                            : '↓'
-                    const title = item.tainted
-                      ? 'Cross-origin canvas — cannot export'
+                {/* One download button per item. A real file is fetched by URL; a
+                    streamed video (blob:) is downloaded via yt-dlp on its permalink
+                    (highlighted, as it's the only way to save it). A tainted canvas
+                    or a stream with no resolved permalink can't be saved. */}
+                {(() => {
+                  const state = dl[keyOf(item)]
+                  const viaYtdlp = Boolean(item.pageUrl)
+                  const saveable = canSave(item)
+                  const glyph = !saveable
+                    ? '⊘'
+                    : state === 'pending'
+                      ? '⏳'
+                      : state === 'done'
+                        ? '✓'
+                        : state === 'error'
+                          ? '✗'
+                          : '↓'
+                  const title = item.tainted
+                    ? 'Cross-origin canvas — cannot export'
+                    : !saveable
+                      ? 'Streamed video — no permalink found to download it'
                       : state === 'error'
-                        ? 'Download failed (protected media)'
+                        ? `Download failed: ${dlErr[keyOf(item)] || 'unknown'}`
                         : state === 'done'
                           ? 'Downloaded to Downloads'
-                          : 'Download'
-                    return (
-                      <button
-                        type="button"
-                        className={`media-download${state ? ` media-download-${state}` : ''}`}
-                        disabled={blocked || state === 'pending'}
-                        title={title}
-                        onClick={() => downloadOne(item.url)}
-                      >
-                        {glyph}
-                      </button>
-                    )
-                  })()}
+                          : viaYtdlp
+                            ? 'Download this video with yt-dlp (real file, runs in the background)'
+                            : 'Download'
+                  return (
+                    <button
+                      type="button"
+                      className={`media-download${viaYtdlp && saveable ? ' media-download-stream' : ''}${
+                        state ? ` media-download-${state}` : ''
+                      }`}
+                      disabled={!saveable || state === 'pending'}
+                      title={title}
+                      onClick={() => downloadOne(item)}
+                    >
+                      {glyph}
+                    </button>
+                  )
+                })()}
               </div>
             </div>
           ))}

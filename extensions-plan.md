@@ -15,13 +15,13 @@ sessions en parallèle, les lignes périment en heures).
 « Compat large » est atteignable **pour une grande partie des extensions**, avec un plafond
 qui vient d'Electron lui-même, pas de Mira :
 
-| Catégorie | Verdict | Pourquoi |
-|---|---|---|
-| Extensions UI/contenu (Dark Reader, clippers, userscripts…) | ✅ réaliste | APIs couvertes par Electron + `electron-chrome-extensions` |
-| Ad blocking | ❌ **renoncé** (D3) | La seule voie par extension était uBlock MV2 (`chrome.webRequest`, couvert par Electron en MV2 seulement) ; les bloqueurs MV3 exigent `declarativeNetRequest`, absent d'Electron. Option future SANS extension : bloqueur intégré côté Mira (ex. `@ghostery/adblocker-electron` sur `session.webRequest`), possible précisément parce qu'on renonce au webRequest des extensions (§3.1) |
-| Bloqueurs MV3 (uBO Lite…) | ❌ aujourd'hui | pas de DNR, et `chrome.webRequest` est indisponible dans les service workers MV3 (electron#52265, ouvert) |
-| Extensions exigeant `chrome.identity` (OAuth), `sidePanel`, `tabGroups`, `commands` | ❌ | non implémentées par Electron ni par la lib |
-| Password managers (1Password…) | 🔶 à tester | MV3 SW tournent sur Electron 41 ; le remplissage dépend d'APIs à valider en vrai — et les popups OAuth `window.open` dépendent de D5 (§7) |
+| Catégorie                                                                           | Verdict             | Pourquoi                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------------------------------------------------------------------------- | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Extensions UI/contenu (Dark Reader, clippers, userscripts…)                         | ✅ réaliste         | APIs couvertes par Electron + `electron-chrome-extensions`                                                                                                                                                                                                                                                                                                                              |
+| Ad blocking                                                                         | ❌ **renoncé** (D3) | La seule voie par extension était uBlock MV2 (`chrome.webRequest`, couvert par Electron en MV2 seulement) ; les bloqueurs MV3 exigent `declarativeNetRequest`, absent d'Electron. Option future SANS extension : bloqueur intégré côté Mira (ex. `@ghostery/adblocker-electron` sur `session.webRequest`), possible précisément parce qu'on renonce au webRequest des extensions (§3.1) |
+| Bloqueurs MV3 (uBO Lite…)                                                           | ❌ aujourd'hui      | pas de DNR, et `chrome.webRequest` est indisponible dans les service workers MV3 (electron#52265, ouvert)                                                                                                                                                                                                                                                                               |
+| Extensions exigeant `chrome.identity` (OAuth), `sidePanel`, `tabGroups`, `commands` | ❌                  | non implémentées par Electron ni par la lib                                                                                                                                                                                                                                                                                                                                             |
+| Password managers (1Password…)                                                      | 🔶 à tester         | MV3 SW tournent sur Electron 41 ; le remplissage dépend d'APIs à valider en vrai — et les popups OAuth `window.open` dépendent de D5 (§7)                                                                                                                                                                                                                                               |
 
 Sources : doc officielle [electronjs.org/docs/latest/api/extensions](https://www.electronjs.org/docs/latest/api/extensions)
 (liste exacte des APIs supportées, DNR absent) ;
@@ -36,11 +36,11 @@ that Chrome provides. ») ; [electron-browser-shell#172](https://github.com/samu
 Monorepo [samuelmaddock/electron-browser-shell](https://github.com/samuelmaddock/electron-browser-shell)
 (la référence de facto, uBlock Origin et Dark Reader en vitrine du README) :
 
-| Paquet | Version | Licence | Rôle |
-|---|---|---|---|
-| `electron-chrome-extensions` | 4.9.0 | **GPL-3.0 ou Patron (payante)** — champ `license` **obligatoire** au constructeur, vérifié à l'exécution (`checkLicense()` throw) | Implémente `chrome.tabs/windows/action/cookies/contextMenus/notifications/webNavigation/runtime/storage` par-dessus NOS onglets, via callbacks |
-| `electron-chrome-web-store` | 0.13.0 | MIT | Install direct depuis chromewebstore.google.com : télécharge/déballe les `.crx` (CRX2/3), auto-update toutes les 5 h, allowlist/denylist, `beforeInstall` |
-| `electron-chrome-context-menu` | 1.1.0 | MIT | Menu clic-droit parité Chrome ; accepte les items d'extensions via `extensionMenuItems` |
+| Paquet                         | Version | Licence                                                                                                                           | Rôle                                                                                                                                                      |
+| ------------------------------ | ------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `electron-chrome-extensions`   | 4.9.0   | **GPL-3.0 ou Patron (payante)** — champ `license` **obligatoire** au constructeur, vérifié à l'exécution (`checkLicense()` throw) | Implémente `chrome.tabs/windows/action/cookies/contextMenus/notifications/webNavigation/runtime/storage` par-dessus NOS onglets, via callbacks            |
+| `electron-chrome-web-store`    | 0.13.0  | MIT                                                                                                                               | Install direct depuis chromewebstore.google.com : télécharge/déballe les `.crx` (CRX2/3), auto-update toutes les 5 h, allowlist/denylist, `beforeInstall` |
+| `electron-chrome-context-menu` | 1.1.0   | MIT                                                                                                                               | Menu clic-droit parité Chrome ; accepte les items d'extensions via `extensionMenuItems`                                                                   |
 
 Le chargement lui-même reste du Electron natif : `session.extensions.loadExtension`
 (la forme `ses.loadExtension` est **dépréciée**), sessions **persistantes** uniquement,
@@ -101,12 +101,20 @@ doublon d'instance (throw de la lib) impossible par construction.
 
 ```ts
 new ElectronChromeExtensions({
-  license: 'GPL-3.0',            // décision D1, voir §7
+  license: 'GPL-3.0', // décision D1, voir §7
   session,
-  createTab:    async (details) => { /* newTabIn du bon ProfileWindow → [webContents, window] */ },
-  selectTab:    (wc, win)  => { /* selectTabIn */ },
-  removeTab:    (wc, win)  => { /* closeTabIn */ },
-  createWindow: async (details) => { /* refusé au début : une fenêtre = un profil (décision posée) */ },
+  createTab: async (details) => {
+    /* newTabIn du bon ProfileWindow → [webContents, window] */
+  },
+  selectTab: (wc, win) => {
+    /* selectTabIn */
+  },
+  removeTab: (wc, win) => {
+    /* closeTabIn */
+  },
+  createWindow: async (details) => {
+    /* refusé au début : une fenêtre = un profil (décision posée) */
+  }
 })
 ```
 
@@ -115,12 +123,12 @@ donc `discarded` y serait constant — logique morte.)
 
 Câblage aux points de passage existants de `profiles.ts` (tous des choke points uniques) :
 
-| Événement Mira | Où (fonction) | Appel lib |
-|---|---|---|
-| webContents d'onglet créé | `materializeTab` (SEUL point de création de `WebContentsView` dans tout `src/`) | `extensions.addTab(wc, win)` |
-| onglet activé | **partout où `state.activeId` change** : `newTabIn` (un nouvel onglet devient actif via `addTab` du tab-store — c'est le chemin le plus fréquent, Cmd+T / open-bookmark / navigate-sur-vide), `selectTabIn`, voisin activé dans `closeTabIn`, `restoreSession`, `discardActiveTabIn` | `extensions.selectTab(wc)` |
-| onglet fermé | `closeTabIn` | `extensions.removeTab(wc)` |
-| onglet endormi (discard) | `discardView` | `extensions.removeTab(wc)` |
+| Événement Mira            | Où (fonction)                                                                                                                                                                                                                                                                        | Appel lib                    |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------- |
+| webContents d'onglet créé | `materializeTab` (SEUL point de création de `WebContentsView` dans tout `src/`)                                                                                                                                                                                                      | `extensions.addTab(wc, win)` |
+| onglet activé             | **partout où `state.activeId` change** : `newTabIn` (un nouvel onglet devient actif via `addTab` du tab-store — c'est le chemin le plus fréquent, Cmd+T / open-bookmark / navigate-sur-vide), `selectTabIn`, voisin activé dans `closeTabIn`, `restoreSession`, `discardActiveTabIn` | `extensions.selectTab(wc)`   |
+| onglet fermé              | `closeTabIn`                                                                                                                                                                                                                                                                         | `extensions.removeTab(wc)`   |
+| onglet endormi (discard)  | `discardView`                                                                                                                                                                                                                                                                        | `extensions.removeTab(wc)`   |
 
 Plutôt que 5 call-sites, viser **un hook unique « activation changée »** appelé partout où
 `activeId` bouge (y compris les futurs cas type onglet Settings sans webContents — ne rien
@@ -233,7 +241,7 @@ explicite en E5 : quit avec un onglet extension actif, relaunch.
   Consigner ici ce qui marche/casse — c'est le vrai test de la promesse « compat large »
   depuis que D3 a sorti uBlock du périmètre.
 - **E3 — Actions toolbar + popups.** `injectBrowserAction` (preload), `<browser-action-list
-  partition=…>` (feature component, §4.4), `handleCRXProtocol`, CSP `crx:` dans `index.html`.
+partition=…>` (feature component, §4.4), `handleCRXProtocol`, CSP `crx:` dans `index.html`.
   Validation : popup uBlock/Dark Reader ancré au bouton, **dans une fenêtre de profil non-défaut**
   (le bug de binding de session est silencieux — c'est LE cas à tester).
 - **E4 — Menu contextuel.** `webContents.on('context-menu')` sur les vues d'onglets →
@@ -320,12 +328,12 @@ Kondo = **deux morceaux couplés** : une **extension** (injecte dans LinkedIn) +
    loggue `Error: Extension bridge timeout | PopupConnectError` (répété ~toutes les 30 s).
 3. **La permission `declarativeNetRequestWithHostAccess` provoque un échec de binding natif FATAL.**
    Le log Chromium sort `ERROR native_extension_bindings_system.cc:767] Failed to create API on
-   Chrome object` dans un **process dédié qui ne loggue QUE ça** (contexte mort à la création des
+Chrome object` dans un **process dédié qui ne loggue QUE ça** (contexte mort à la création des
    bindings, avant tout JS). **PREUVE** : après avoir retiré `declarativeNetRequestWithHostAccess`
-   + le bloc `declarative_net_request` du `manifest.json` et redémarré, cette erreur **DISPARAÎT**
-   du log, et `list-extensions` renvoie `gaps: []` (l'edit a bien chargé). Electron ne compile pas
-   `declarativeNetRequest` → déclarer la permission suffit à faire planter la création du namespace.
-   C'est **la même erreur** qui a précédé le SIGSEGV de l'onboarding Otto (track.md).
+   - le bloc `declarative_net_request` du `manifest.json` et redémarré, cette erreur **DISPARAÎT**
+     du log, et `list-extensions` renvoie `gaps: []` (l'edit a bien chargé). Electron ne compile pas
+     `declarativeNetRequest` → déclarer la permission suffit à faire planter la création du namespace.
+     C'est **la même erreur** qui a précédé le SIGSEGV de l'onboarding Otto (track.md).
 4. **MAIS retirer DNR ne suffit PAS : la boucle persiste.** Sans la permission DNR, le SW Kondo ne
    produit **aucune ligne de log** et `Extension bridge timeout` continue. Le blocage restant =
    le **pont content-script ↔ service worker** (`chrome.runtime.connect`) qui ne s'établit pas.
@@ -461,8 +469,7 @@ en vrai** (il faut un restart de `npm run dev`).
    12:56:00 → `Extension bridge timeout` à 12:56:02, alors que le SW était mort ; (b) `ps` : AUCUN
    process Mira avec `--extension-process` (le SW n'a pas été réveillé par le connect) ; (c) la
    registration SW de Kondo existe bien dans la LevelDB `Service Worker/Database` (l'enregistrement
-   n'est pas le problème, le démarrage l'est). **Workaround officiel** (issue #41613, commentaire
-   2644018998) : `session.serviceWorkers.startWorkerForScope(extension.url)` après le load.
+   n'est pas le problème, le démarrage l'est). **Workaround officiel** (issue #41613, commentaire 2644018998) : `session.serviceWorkers.startWorkerForScope(extension.url)` après le load.
 
 #### Corrections d'observations antérieures
 
@@ -526,7 +533,7 @@ dialog « Browser extension stopped ». Puis retirer sw-debug + vmodule.
   settled) ; stealth ne le voyait pas car il fait `.catch(()=>{})` sur ses `executeJavaScript` de
   réassert (le vrai boulot passe par CDP `addScriptToEvaluateOnNewDocument`). **Fix** : nouveau
   `src/main/cdp-eval.ts` — `evalInWebContents(wc, code)` route par `wc.debugger.sendCommand(
-  'Runtime.evaluate', {returnByValue, awaitPromise, userGesture, replMode})` quand un debugger est
+'Runtime.evaluate', {returnByValue, awaitPromise, userGesture, replMode})` quand un debugger est
   attaché, sinon fallback `executeJavaScript` ; logique pure `interpretRuntimeEvaluate` (7 tests).
   `execJsInTab` (profiles.ts, 2 call-sites) l'appelle. Sûr même si l'hypothèse est partielle :
   Runtime.evaluate marche aussi quand executeJavaScript marche. **À VALIDER** au restart : `exec-js`
@@ -534,7 +541,7 @@ dialog « Browser extension stopped ». Puis retirer sw-debug + vmodule.
   de skill (`profiles.ts` ~2365, `executeJavaScript(extractionScript…)`) — à migrer sur
   `evalInWebContents` si run-skill pend.
 - **`Electron sandboxed_renderer.bundle.js script failed to run` + `TypeError: object null is not
-  iterable`** : **PAS notre bug, upstream, bénin.** Apparaît uniquement une fois des extensions
+iterable`** : **PAS notre bug, upstream, bénin.** Apparaît uniquement une fois des extensions
   chargées (0 occurrence dans le run 23:56 avant install Kondo), sur des pages QUI ONT LEUR PROPRE
   service worker (trykondo/sw.js, DocuSign, Framer, Google Messages, Amazon). Cause : dès qu'une
   extension est active, `electron-chrome-extensions` enregistre un preload `type:'service-worker'`
@@ -622,6 +629,7 @@ serviceWorker) **SW extension**. Le SW (`de` dans `background-vYAqPXIO.js`) rép
 `(await navigator.serviceWorker.ready).active.postMessage({source:'kondo-iframe'}, [...ports])`.
 
 **Ce qui MARCHE (prouvé en live, chaque brique en isolation) :**
+
 - Content script injecté (marqueur `#kondo-ext` v1.12.1 présent).
 - `ext.html` charge maintenant en onglet ET en iframe (plus de `ERR_BLOCKED_BY_CLIENT`).
 - Dans un **onglet top-level** `chrome-extension://…/ext.html` : `navigator.serviceWorker.controller`
@@ -646,14 +654,15 @@ scopé à tort sur l'origine top-level trykondo, ou SW désactivé en contexte �
 **Étape décisive en cours** : logger `[mira-sw-msg]` ajouté dans le SW via le preload alarms
 (`ALARMS_POLYFILL_MAIN_WORLD`, `extension-capabilities.ts`) pour voir si le message
 `source:'kondo-iframe'` **atteint le SW** dans le cas imbriqué. Verdict attendu :
+
 - message N'ATTEINT PAS le SW ⇒ le port/message ne traverse pas la frontière iframe imbriquée
   (transfert de MessagePort, ou navigator.serviceWorker cassé dans l'iframe) — probable limite
   Electron 41 ; piste de fix = upgrade **Electron 42** (qui a déjà corrigé #41613) ou shim Mira.
 - message ATTEINT le SW mais pas de reply ⇒ le port de retour ne revient pas — même classe.
-Nécessite un restart de `npm run dev` (electron-vite ne watche pas le main). **Hypothèses réfutées à
-ne pas reprendre** : « exec-js cassé » (c'était nc) ; « navigator.serviceWorker indispo en page
-d'extension » (marche en top-level) ; « SW mort / alarms throw » (le SW répond) ; « ça converge tout
-seul » (dialog stopped affiché).
+  Nécessite un restart de `npm run dev` (electron-vite ne watche pas le main). **Hypothèses réfutées à
+  ne pas reprendre** : « exec-js cassé » (c'était nc) ; « navigator.serviceWorker indispo en page
+  d'extension » (marche en top-level) ; « SW mort / alarms throw » (le SW répond) ; « ça converge tout
+  seul » (dialog stopped affiché).
 
 ### 8.10 CAUSE RACINE DÉFINITIVE — SW d'extension injoignable depuis une iframe imbriquée
 
@@ -667,6 +676,7 @@ résout ; le handshake `active.postMessage({source:'kondo-iframe'}, [port])` →
 
 La **même page en iframe imbriquée dans une page web** (le cas réel de Kondo :
 `chrome-extension://…/ext.html` dans `https://app.trykondo.com`) est coupée de son SW :
+
 - `navigator.serviceWorker.controller` = **null**
 - `getRegistrations()` = **[]**, `getRegistration()` = **null**
 - `navigator.serviceWorker.ready` = **ne résout jamais** (hang)
@@ -693,6 +703,7 @@ cycle), exec-js (jamais cassé — c'était `nc`, cf. CLAUDE.md), `chrome.runtim
 page-extension→SW.
 
 **Pistes de fix (décision à prendre) :**
+
 1. **Upgrade Electron 41 → 42+** : 42 a corrigé le cycle de vie des SW d'extension (#41613) ; à
    vérifier s'il rattache aussi le SW aux sous-frames. Risque : packaging (patch app-builder figé),
    régressions. Le plus « propre » si ça corrige nativement.
@@ -713,10 +724,10 @@ mini-extension `scratchpad/sw-probe-ext` (désinstallée). Helper de pilotage : 
 
 ### 8.11 RÉCAPITULATIF COMPLET — tout ce qui a été fait, tenté, et ce qui reste
 
-*Section autonome : elle se lit seule. §8.1–8.10 = le journal détaillé (avec mes erreurs et leurs
+_Section autonome : elle se lit seule. §8.1–8.10 = le journal détaillé (avec mes erreurs et leurs
 corrections) ; ici = la synthèse de référence. Tous les faits ci-dessous ont été VÉRIFIÉS en live le
 2026-07-11 (client socket Python `scratchpad/mira.py`, logger `[mira-sw-msg]` dans le SW, et une
-mini-extension de test `scratchpad/sw-probe-ext` que je contrôle entièrement).*
+mini-extension de test `scratchpad/sw-probe-ext` que je contrôle entièrement)._
 
 #### A. Le problème en une phrase
 
@@ -743,18 +754,18 @@ page web n'est pas rattachée au SW de son extension.
 
 #### C. Ce qui a été TESTÉ, et le résultat (le vrai « ce que j'ai tenté »)
 
-| # | Test (live) | Résultat |
-|---|---|---|
-| 1 | `exec-js` via `nc -U` vs client Python | nc → **0 octet** (faux hang) ; Python → **marche**. Le bug était l'outil, pas exec-js. |
-| 2 | Sonde DOM de `app.trykondo.com` | `stoppedDialog: true` — Kondo bien cassé (réfute « ça converge »). |
-| 3 | Onglet **top-level** `ext.html` : `navigator.serviceWorker` | `controller` = le SW, `getRegistrations()` = 1 (**activated**), `ready` **résout**. |
-| 4 | Onglet top-level : handshake `active.postMessage({source:'kondo-iframe'},[port])` → SW | **`gotReply:true`**, reply `{source:'kondo-worker',status:'connected'}`. |
-| 5 | Logger SW pendant le test #4 | `[mira-sw-msg] source=kondo-iframe ports=1` → **logger validé** (il voit bien un vrai message). |
-| 6 | `chrome.runtime.connect({name:'kondo-content'})` depuis `ext.html` → SW | port **reste connecté** (pas de disconnect) → messaging natif runtime OK. |
-| 7 | Recharger le **vrai Kondo** + logger SW | **0** `kondo-iframe` reçu par le SW (alors que le logger marche, #5) → le message n'arrive jamais au SW. |
-| 8 | Depuis `app.trykondo.com`, créer une **iframe `ext.html` imbriquée** + poster session+port (6–8 essais) | **aucune réponse** ; logger SW delta = **0**. Reproduit le bug hors du code Kondo. |
-| 9 | **Mini-extension de test**, iframe imbriquée, rapport par étape | `received: ports:1` (le port ARRIVE dans l'iframe) MAIS `controller:null`, `getRegistrations():[]`, `getRegistration():null`, `ready`: **timeout**. |
-| 10 | Mini-extension, SW : dispatch d'un **`MessageEvent` synthétique avec un vrai MessagePort** sur `self` | `SELF-MESSAGE … portOk=true` puis `SYNTHETIC-OK reply=…` → **le SW-half du shim marche**. |
+| #   | Test (live)                                                                                             | Résultat                                                                                                                                            |
+| --- | ------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `exec-js` via `nc -U` vs client Python                                                                  | nc → **0 octet** (faux hang) ; Python → **marche**. Le bug était l'outil, pas exec-js.                                                              |
+| 2   | Sonde DOM de `app.trykondo.com`                                                                         | `stoppedDialog: true` — Kondo bien cassé (réfute « ça converge »).                                                                                  |
+| 3   | Onglet **top-level** `ext.html` : `navigator.serviceWorker`                                             | `controller` = le SW, `getRegistrations()` = 1 (**activated**), `ready` **résout**.                                                                 |
+| 4   | Onglet top-level : handshake `active.postMessage({source:'kondo-iframe'},[port])` → SW                  | **`gotReply:true`**, reply `{source:'kondo-worker',status:'connected'}`.                                                                            |
+| 5   | Logger SW pendant le test #4                                                                            | `[mira-sw-msg] source=kondo-iframe ports=1` → **logger validé** (il voit bien un vrai message).                                                     |
+| 6   | `chrome.runtime.connect({name:'kondo-content'})` depuis `ext.html` → SW                                 | port **reste connecté** (pas de disconnect) → messaging natif runtime OK.                                                                           |
+| 7   | Recharger le **vrai Kondo** + logger SW                                                                 | **0** `kondo-iframe` reçu par le SW (alors que le logger marche, #5) → le message n'arrive jamais au SW.                                            |
+| 8   | Depuis `app.trykondo.com`, créer une **iframe `ext.html` imbriquée** + poster session+port (6–8 essais) | **aucune réponse** ; logger SW delta = **0**. Reproduit le bug hors du code Kondo.                                                                  |
+| 9   | **Mini-extension de test**, iframe imbriquée, rapport par étape                                         | `received: ports:1` (le port ARRIVE dans l'iframe) MAIS `controller:null`, `getRegistrations():[]`, `getRegistration():null`, `ready`: **timeout**. |
+| 10  | Mini-extension, SW : dispatch d'un **`MessageEvent` synthétique avec un vrai MessagePort** sur `self`   | `SELF-MESSAGE … portOk=true` puis `SYNTHETIC-OK reply=…` → **le SW-half du shim marche**.                                                           |
 
 #### D. Théories RÉFUTÉES (ne JAMAIS rouvrir)
 
@@ -797,16 +808,16 @@ loading states » (même symptôme).
 prouvées #6, #9, #10).** But : rendre le saut iframe→SW fonctionnel dans les pages d'extension, de
 façon **générique** (débloque toute la classe, pas que Kondo). Deux moitiés :
 
-- *Page (frame preload sur les pages `chrome-extension://`, à enregistrer via
+- _Page (frame preload sur les pages `chrome-extension://`, à enregistrer via
   `ses.registerPreloadScript({type:'frame', …})`, gate `location.href.startsWith('chrome-extension://')`,
-  et seulement quand `navigator.serviceWorker.controller===null` = contexte imbriqué cassé)* :
+  et seulement quand `navigator.serviceWorker.controller===null` = contexte imbriqué cassé)_ :
   patcher `navigator.serviceWorker.ready` pour résoudre vers un objet dont
   `.active.postMessage(msg, [port])` : ouvre `chrome.runtime.connect({name:'__mira_swbridge'})`,
   envoie `msg` (JSON), et **relaie les données** `port ↔ runtimePort` (JSON dans les deux sens —
   Kondo n'échange que du JSON : `{source:'kondo-worker',status:'connected'}`, etc.).
-- *SW (ajout à mon preload alarms existant)* : sur `chrome.runtime.onConnect` name `__mira_swbridge`,
+- _SW (ajout à mon preload alarms existant)_ : sur `chrome.runtime.onConnect` name `__mira_swbridge`,
   créer un `MessageChannel(a,b)`, **dispatcher `self.dispatchEvent(new MessageEvent('message',
-  {data: msg, ports:[b]}))`** (prouvé #10 → le `de()` de Kondo reçoit un vrai port), et relayer
+{data: msg, ports:[b]}))`** (prouvé #10 → le `de()` de Kondo reçoit un vrai port), et relayer
   `a ↔ runtimePort`.
 - **Le MessagePort ne transite JAMAIS par `chrome.runtime`** (qui ne sait pas le transférer) : chaque
   côté fabrique sa propre paire locale, on ne relaie que les données. C'est la clé qui rend le shim
@@ -840,8 +851,8 @@ documenter comme limite connue (cohérent avec le §1 : « plafond qui vient d'E
 - Helper de pilotage `scratchpad/mira.py` et modèle de mini-extension `scratchpad/sw-probe-ext/`
   (hors repo, session-scoped — recréer si besoin ; snippets dans CLAUDE.md et ci-dessus).
 
-*(Nettoyage fait à la résolution, cf. §8.12 : `sw-debug.ts` supprimé, switch `vmodule` retiré,
-`[mira-sw-msg]` déjà retiré pendant le codage du shim ; `cdp-eval.ts` GARDÉ en durcissement.)*
+_(Nettoyage fait à la résolution, cf. §8.12 : `sw-debug.ts` supprimé, switch `vmodule` retiré,
+`[mira-sw-msg]` déjà retiré pendant le codage du shim ; `cdp-eval.ts` GARDÉ en durcissement.)_
 
 ### 8.12 ✅ RÉSOLUTION (2026-07-11 soir) — le shim était juste, son preload ne s'exécutait jamais
 
@@ -853,12 +864,12 @@ retenue et VALIDÉE. Récit de la résolution, pour mémoire :
 
 1. **Le shim a été codé (session Codex)**, fidèle au design §8.11-G, en deux moitiés dans
    `src/main/extension-capabilities.ts` :
-   - *Moitié SW* (`SERVICE_WORKER_BRIDGE_SW_MAIN_WORLD`) : `chrome.runtime.onConnect` sur le port
+   - _Moitié SW_ (`SERVICE_WORKER_BRIDGE_SW_MAIN_WORLD`) : `chrome.runtime.onConnect` sur le port
      privé `__mira_extension_service_worker_bridge_v1__` → recrée un `MessageChannel` local →
      dispatche un `MessageEvent('message')` synthétique avec un vrai port sur `self` → relaie les
      données (JSON) entre port local et runtime port. Installée via le preload alarms existant
      (donc AVANT le `Object.freeze(chrome)` de la lib).
-   - *Moitié frame* (`SERVICE_WORKER_BRIDGE_FRAME_MAIN_WORLD`) : dans une page `chrome-extension://`
+   - _Moitié frame_ (`SERVICE_WORKER_BRIDGE_FRAME_MAIN_WORLD`) : dans une page `chrome-extension://`
      imbriquée dont le `controller` est null, patche le getter `navigator.serviceWorker.ready` pour
      résoudre vers un pseudo-registration dont `.active.postMessage(msg, [ports])` ouvre un
      `chrome.runtime.connect` et relaie. Un runtime port par appel `postMessage` ; les MessagePorts

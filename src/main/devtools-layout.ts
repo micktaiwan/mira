@@ -24,14 +24,25 @@ export const DEVTOOLS_MIN_WIDTH = 250
  * right. The DevTools column is `fraction` of the width, floored at
  * DEVTOOLS_MIN_WIDTH but never wider than the area itself; the page takes the rest.
  * Widths always sum back to `area.width` (no gap, no overlap) so resize is exact. */
-export function dockRight(area: Rect, fraction: number = DEVTOOLS_FRACTION): {
+export function dockRight(
+  area: Rect,
+  fraction: number = DEVTOOLS_FRACTION
+): {
   page: Rect
   devtools: Rect
 } {
-  const dtWidth = Math.min(area.width, Math.max(DEVTOOLS_MIN_WIDTH, Math.round(area.width * fraction)))
+  const dtWidth = Math.min(
+    area.width,
+    Math.max(DEVTOOLS_MIN_WIDTH, Math.round(area.width * fraction))
+  )
   const pageWidth = Math.max(0, area.width - dtWidth)
   return {
     page: { x: area.x, y: area.y, width: pageWidth, height: area.height },
-    devtools: { x: area.x + pageWidth, y: area.y, width: area.width - pageWidth, height: area.height }
+    devtools: {
+      x: area.x + pageWidth,
+      y: area.y,
+      width: area.width - pageWidth,
+      height: area.height
+    }
   }
 }

@@ -33,10 +33,9 @@ export interface MagnifierState {
 /** No magnification. */
 export const NO_MAGNIFIER: MagnifierState = { scale: 1, originX: 0, originY: 0 }
 
-/** Zoom stays within [1, MAX]: 1 = off, 6× is plenty for reading fine print
- * without the render turning to mush. */
+/** Zoom floors at 1× (off) and has NO upper cap — you can push it as far as you
+ * want (the render turns to mush eventually, but that's the user's call). */
 export const MAG_MIN_SCALE = 1
-export const MAG_MAX_SCALE = 6
 
 /** Wheel-to-zoom sensitivity. Scale is multiplied by exp(-deltaY * K) so zoom
  * feels geometric (each notch a constant ratio) and direction-correct: scrolling
@@ -47,7 +46,7 @@ export const MAG_WHEEL_K = 0.002
 const ZOOM_EPSILON = 1e-3
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(hi, v))
-const clampScale = (s: number): number => clamp(s, MAG_MIN_SCALE, MAG_MAX_SCALE)
+const clampScale = (s: number): number => Math.max(MAG_MIN_SCALE, s)
 
 /** Is this state actually magnifying (vs. the identity 1× clip)? Below this the
  * controller clears the override entirely and restores normal input. */
@@ -133,13 +132,26 @@ export function magnifierTransform(state: MagnifierState): string {
 
 /** JS (run via the debugger) that applies the magnifier transform to the page
  * root, saving the page's own transform/origin/overflow first so we can restore
- * them. Idempotent: it only snapshots the originals once. */
+ * them. Idempotent: it only snapshots the originals once.
+ *
+ * Scroll compensation: the transform-origin (0,0) is the document's top-left,
+ * not the viewport's. On a scrolled page those differ by the scroll offset, so a
+ * plain `translate(-origin) scale` would anchor the zoom off-screen. We fold the
+ * live scroll in: `t = -origin - scroll*(scale-1)`, which re-anchors the whole
+ * transform to the VIEWPORT top-left regardless of how far the page is scrolled.
+ * Scroll is read at apply time (and frozen by `overflow:hidden`, plus the wheel
+ * shim blocks native scroll while magnified, so it stays put). */
 export function applyMagnifierJs(state: MagnifierState): string {
+  const { scale, originX, originY } = state
   return (
     `(() => { const e = document.documentElement;` +
     ` if (e.__miraMagPrev === undefined) { e.__miraMagPrev = e.style.transform || '';` +
     ` e.__miraMagPrevOrigin = e.style.transformOrigin || ''; e.__miraMagPrevOverflow = e.style.overflow || ''; }` +
-    ` e.style.transformOrigin = '0 0'; e.style.transform = '${magnifierTransform(state)}'; e.style.overflow = 'hidden'; })();`
+    ` const k = ${scale}, sx = window.scrollX || 0, sy = window.scrollY || 0;` +
+    ` const tx = ${-originX} - sx * (k - 1), ty = ${-originY} - sy * (k - 1);` +
+    ` e.style.transformOrigin = '0 0';` +
+    ` e.style.transform = 'translate(' + tx + 'px, ' + ty + 'px) scale(' + k + ')';` +
+    ` e.style.overflow = 'hidden'; })();`
   )
 }
 

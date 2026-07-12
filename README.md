@@ -1,6 +1,6 @@
 # Mira
 
-A personal, **Chromium-based** web browser. Sibling of [Kova](https://github.com/micktaiwan) (the terminal): small, personal, tailored to one user's workflow. `mira` = "look" (Latin *mirari*, to marvel) plus a star. A browser's job: show the web.
+A personal, **Chromium-based** web browser. Sibling of [Kova](https://github.com/micktaiwan) (the terminal): small, personal, tailored to one user's workflow. `mira` = "look" (Latin _mirari_, to marvel) plus a star. A browser's job: show the web.
 
 Built on **Electron** (Chromium + Node), with a React + TypeScript "chrome" and one `WebContentsView` per tab. The engine is embedded, not forked — Chromium is a dependency, we build the UI and features on top. See [`CLAUDE.md`](./CLAUDE.md) for the full architecture rationale, and [`track.md`](./track.md) for the live state of each work item.
 
@@ -22,15 +22,15 @@ Built on **Electron** (Chromium + Node), with a React + TypeScript "chrome" and 
 
 Registered in `src/main/commands.ts`. Callable identically over IPC, socket, or (later) MCP:
 
-| Command | Params | Effect |
-|---|---|---|
-| `navigate` | `{ url }` | Normalize input and load it in the target window |
-| `open-profile` | `{ id }` | Open the window for an existing profile id, or focus it if already open |
-| `create-profile` | `{ label? }` | Create a new profile (fresh id + label) and open its window |
-| `rename-profile` | `{ id, label }` | Relabel a profile; its id and cookies are untouched |
-| `list-profiles` | — | List every known profile (`{ id, label, open }`) and the focused id |
-| `open-settings` | — | Open the Settings window (profile manager), or focus it if already open |
-| `whoami` | — | Return the target window's profile (`{ id, label }`) |
+| Command          | Params          | Effect                                                                  |
+| ---------------- | --------------- | ----------------------------------------------------------------------- |
+| `navigate`       | `{ url }`       | Normalize input and load it in the target window                        |
+| `open-profile`   | `{ id }`        | Open the window for an existing profile id, or focus it if already open |
+| `create-profile` | `{ label? }`    | Create a new profile (fresh id + label) and open its window             |
+| `rename-profile` | `{ id, label }` | Relabel a profile; its id and cookies are untouched                     |
+| `list-profiles`  | —               | List every known profile (`{ id, label, open }`) and the focused id     |
+| `open-settings`  | —               | Open the Settings window (profile manager), or focus it if already open |
+| `whoami`         | —               | Return the target window's profile (`{ id, label }`)                    |
 
 ## Project layout
 

@@ -24,22 +24,18 @@ export interface MediaContext {
   /** Download one or more urls (http(s) or data:) to the Downloads folder for
    * the tab's profile session. Resolves with how many saved and which failed. */
   downloadMedia: (urls: string[], tabId?: string) => Promise<{ saved: number; failed: string[] }>
-  /** Record a PLAYING video to a file by capturing its decoded stream
-   * (captureStream + MediaRecorder, in the page). This is the escape hatch for
-   * streamed video (MSE/HLS/blob, e.g. X/YouTube) that has no downloadable file
-   * URL: if Chromium can play it, this grabs what plays. Runs for roughly the
-   * clip's duration. `url` picks the matching <video>; omitted → the first one.
-   * Fails on DRM-protected video (the stream is tainted). */
-  recordVideo: (
-    tabId?: string,
-    url?: string
-  ) => Promise<{ saved: boolean; file?: string; error?: string }>
+  /** Download a streamed video (MSE/HLS/blob, e.g. X/YouTube) as a real file by
+   * delegating to yt-dlp. `url` is the PRECISE permalink for that one video
+   * (resolved from the DOM), never the tab URL — a page holds many videos. Runs in
+   * the background (nothing kept open), resolving with the saved file's basename
+   * or a clean error (yt-dlp missing / extraction failed). */
+  downloadVideoUrl: (url: string) => Promise<{ saved: boolean; file?: string; error?: string }>
   /** Aggregate count + RAM footprint of the target window's network buffers, plus
-   * any video recordings in flight (with when each started), for the status bar. */
+   * any yt-dlp downloads in flight (with when each started), for the status bar. */
   getMediaStats: () => {
     count: number
     bytes: number
-    recordings?: { startedAt: number }[]
+    downloads?: { startedAt: number }[]
   }
   /** Open/close/toggle the fullscreen media gallery overlay (hides the active
    * web view so the chrome overlay is visible — like the command palette). */
@@ -83,19 +79,16 @@ export const mediaCommands: CommandMap<CommandContext> = {
     }
   },
 
-  // Record a streamed video (captureStream + MediaRecorder) — the fallback for
-  // MSE/HLS/blob video with no file URL. Blocks for ~the clip's duration.
-  'record-video': async (ctx, params) => {
-    const { tabId, url } = (params ?? {}) as { tabId?: unknown; url?: unknown }
-    if (tabId !== undefined && (typeof tabId !== 'string' || tabId.trim() === '')) {
-      return { ok: false, error: 'invalid "tabId"' }
-    }
-    if (url !== undefined && typeof url !== 'string') {
-      return { ok: false, error: 'invalid "url"' }
+  // Download a streamed video (MSE/HLS/blob with no file URL) via yt-dlp. `url` is
+  // the precise per-video permalink. Runs in the background — a true file download.
+  'download-video-url': async (ctx, params) => {
+    const { url } = (params ?? {}) as { url?: unknown }
+    if (typeof url !== 'string' || url.trim() === '') {
+      return { ok: false, error: 'missing "url"' }
     }
     try {
-      const res = await ctx.recordVideo(tabId as string | undefined, url as string | undefined)
-      if (!res.saved) return { ok: false, error: res.error ?? 'recording failed' }
+      const res = await ctx.downloadVideoUrl(url)
+      if (!res.saved) return { ok: false, error: res.error ?? 'download failed' }
       return { ok: true, file: res.file }
     } catch (error) {
       return fail(error)
@@ -104,17 +97,17 @@ export const mediaCommands: CommandMap<CommandContext> = {
 
   'get-media-stats': (ctx) => {
     try {
-      const { count, bytes, recordings } = ctx.getMediaStats()
-      const active = recordings ?? []
+      const { count, bytes, downloads } = ctx.getMediaStats()
+      const active = downloads ?? []
       // Earliest start, so the status bar can show a single elapsed clock.
-      const since = active.length ? Math.min(...active.map((r) => r.startedAt)) : null
+      const since = active.length ? Math.min(...active.map((d) => d.startedAt)) : null
       return {
         ok: true,
         count,
         bytes,
         text: formatCaptureMemory(bytes),
-        recordings: active.length,
-        recordingSince: since
+        downloads: active.length,
+        downloadingSince: since
       }
     } catch (error) {
       return fail(error)

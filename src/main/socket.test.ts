@@ -76,7 +76,7 @@ function setup(): {
     getTabCounts: () => ({ total: 0, loaded: 0, asleep: 0 }),
     collectMedia: async () => [],
     downloadMedia: async () => ({ saved: 0, failed: [] }),
-    recordVideo: async () => ({ saved: true, file: 'video-recording.webm' }),
+    downloadVideoUrl: async () => ({ saved: true, file: 'clip.mp4' }),
     getMediaStats: () => ({ count: 0, bytes: 0 }),
     setMediaGalleryOpen: (open) => ({ open: open ?? true }),
     // Tab slice: minimal stubs, not exercised by these socket-dispatch tests.

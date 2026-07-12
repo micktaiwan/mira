@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   NO_MAGNIFIER,
-  MAG_MAX_SCALE,
   MAG_MIN_SCALE,
   isMagnified,
   zoomAt,
@@ -50,11 +49,11 @@ describe('zoomAt', () => {
     expect((400 + s.originX) / s.scale).toBeCloseTo(before, 3)
   })
 
-  it('clamps scale to [MIN, MAX]', () => {
+  it('floors scale at MIN but has no upper cap', () => {
     let s = NO_MAGNIFIER
     for (let i = 0; i < 50; i++) s = zoomAt(s, 450, 350, -120, W, H)
-    expect(s.scale).toBe(MAG_MAX_SCALE)
-    for (let i = 0; i < 50; i++) s = zoomAt(s, 450, 350, 120, W, H)
+    expect(s.scale).toBeGreaterThan(6) // no ceiling — keeps climbing
+    for (let i = 0; i < 200; i++) s = zoomAt(s, 450, 350, 120, W, H)
     expect(s.scale).toBe(MAG_MIN_SCALE)
   })
 
@@ -110,9 +109,14 @@ describe('magnifierTransform', () => {
 })
 
 describe('apply / clear magnifier JS', () => {
-  it('applies the transform and snapshots the page originals once', () => {
+  it('applies the transform (scroll-compensated) and snapshots the originals once', () => {
     const js = applyMagnifierJs({ scale: 3, originX: 10, originY: 20 })
-    expect(js).toContain("e.style.transform = 'translate(-10px, -20px) scale(3)'")
+    expect(js).toContain('const k = 3')
+    // t = -origin - scroll*(k-1), so the zoom anchors to the viewport, not the
+    // document, even on a scrolled page.
+    expect(js).toContain('window.scrollX')
+    expect(js).toContain('-10 - sx * (k - 1)')
+    expect(js).toContain('-20 - sy * (k - 1)')
     expect(js).toContain('__miraMagPrev === undefined') // snapshot guard
     expect(js).toContain("e.style.overflow = 'hidden'")
   })

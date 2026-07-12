@@ -38,28 +38,32 @@ commands that can take an explicit target id should be preferred:
 
 ### Discovery & status
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `list-commands` | — | `{commands: string[]}` — every command name, sorted |
-| `get-status` | — | memory usage + tab counts (total / loaded / asleep) |
-| `whoami` | — | id of the profile owning the target window |
+| Command         | Params | Effect / result                                     |
+| --------------- | ------ | --------------------------------------------------- |
+| `list-commands` | —      | `{commands: string[]}` — every command name, sorted |
+| `get-status`    | —      | memory usage + tab counts (total / loaded / asleep) |
+| `whoami`        | —      | id of the profile owning the target window          |
 
 ### Navigation (active tab of the target window)
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `navigate` | `url`, `newTab?` | load a (normalized) url; `newTab:true` opens a new tab |
-| `back` / `forward` / `reload` | — | session-history step / reload |
-| `zoom-in` / `zoom-out` / `zoom-reset` | — | active tab Chromium zoom (reflows the page) |
+| Command                               | Params           | Effect / result                                        |
+| ------------------------------------- | ---------------- | ------------------------------------------------------ |
+| `navigate`                            | `url`, `newTab?` | load a (normalized) url; `newTab:true` opens a new tab |
+| `back` / `forward` / `reload`         | —                | session-history step / reload                          |
+| `zoom-in` / `zoom-out` / `zoom-reset` | —                | active tab Chromium zoom (reflows the page)            |
 
 ### Default-browser handoff (last-focused profile, NOT the caller's active tab)
 
 Mirrors what macOS does when Mira is the default browser / `.html` handler: opens in a **new tab of the last-focused profile window** (creating the default profile if none is open), unlike `navigate` which loads into the active tab. In the packaged app these fire from the OS `open-url` / `open-file` events; the socket commands exist so the same path is drivable and testable (the OS never routes those events to `npm run dev`).
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `open-url` | `url` | open a url in the last-focused profile; result `{url}` |
-| `open-file` | `path` | open a local file (absolute path → `file://`) in the last-focused profile; result `{url}` |
+| Command     | Params | Effect / result                                                                           |
+| ----------- | ------ | ----------------------------------------------------------------------------------------- |
+| `open-url`  | `url`, `profileId?`  | open a url in the last-focused profile, or in `profileId` when given (opens that profile if closed); result `{url, profileId?}` |
+| `open-file` | `path`, `profileId?` | open a local file (absolute path → `file://`) in the last-focused profile, or in `profileId` when given; result `{url, profileId?}` |
+
+`profileId` makes targeting **deterministic** from the socket: the last-focused fallback relies on OS focus state, which a background-app socket caller can't control (`getFocusedWindow()` is null, so it drifts to the first open window). Pass `profileId` (from `list-profiles`) to hit a specific profile. An unknown or locked id → `{ok:false}`.
+
+**Single-instance forwarding.** macOS only routes `open`/double-click/clicked-link to the packaged bundle, never to `npm run dev`. So on boot, if the packaged app was launched by an open AND a Mira already answers on this socket (typically the running dev instance, same `/tmp/mira.sock`), it forwards the queued url(s) here via `open-url` and quits before creating a window — the page opens in the running Mira, no second app. Client side: `src/main/single-instance.ts`; boot guard: `src/main/index.ts` `whenReady`.
 
 ### Magnifier (optical loupe, active tab of the target window)
 
@@ -68,140 +72,141 @@ root, so the page does NOT reflow (unlike `zoom-in`). Normally driven by Cmd+scr
 (zoom) / scroll (pan); these commands expose the same actions. While magnified,
 clicks are swallowed (they'd land wrong), so it is a "look only" mode.
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `magnifier-zoom` | `deltaY`, `cursorX`, `cursorY` | zoom by a wheel delta, anchored on the cursor (surface CSS px); returns `{scale, magnified}` |
-| `magnifier-pan` | `deltaX`, `deltaY` | pan the loupe (surface px); returns `{magnified}` |
-| `magnifier-reset` | — | back to 100% (flashes a frame if it was zoomed) |
-| `magnifier-state` | — | current `{scale, originX, originY, magnified}` |
+| Command           | Params                         | Effect / result                                                                              |
+| ----------------- | ------------------------------ | -------------------------------------------------------------------------------------------- |
+| `magnifier-zoom`  | `deltaY`, `cursorX`, `cursorY` | zoom by a wheel delta, anchored on the cursor (surface CSS px); returns `{scale, magnified}` |
+| `magnifier-pan`   | `deltaX`, `deltaY`             | pan the loupe (surface px); returns `{magnified}`                                            |
+| `magnifier-reset` | —                              | back to 100% (flashes a frame if it was zoomed)                                              |
+| `magnifier-state` | —                              | current `{scale, originX, originY, magnified}`                                               |
 
 ### Find in page (active tab of the target window)
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `find-open` | — | show + focus the find bar in the window's chrome (Cmd+F). Fails when the active tab is not a web page |
-| `find-in-page` | `text`, `forward?`, `findNext?` | start a search (`findNext:false`, default) or step it (`findNext:true`); highlights matches in the page. Match counts are pushed to the chrome (Chromium reports them asynchronously), not returned here |
-| `find-next` / `find-previous` | — | step the remembered search (Cmd+G / Cmd+Shift+G); `{found:false}` when no search is active |
-| `find-stop` | `action?` | end the search; `action` is `clearSelection` (default), `keepSelection` or `activateSelection` |
+| Command                       | Params                          | Effect / result                                                                                                                                                                                          |
+| ----------------------------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `find-open`                   | —                               | show + focus the find bar in the window's chrome (Cmd+F). Fails when the active tab is not a web page                                                                                                    |
+| `find-in-page`                | `text`, `forward?`, `findNext?` | start a search (`findNext:false`, default) or step it (`findNext:true`); highlights matches in the page. Match counts are pushed to the chrome (Chromium reports them asynchronously), not returned here |
+| `find-next` / `find-previous` | —                               | step the remembered search (Cmd+G / Cmd+Shift+G); `{found:false}` when no search is active                                                                                                               |
+| `find-stop`                   | `action?`                       | end the search; `action` is `clearSelection` (default), `keepSelection` or `activateSelection`                                                                                                           |
 
 ### Tabs
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `list-tabs` | — | `{tabs, activeId, panelCollapsed}` — tabs of the target window, with their UUID ids |
-| `new-tab` | `url?`, `background?` | open a tab (default: home). `background:true` opens it hidden without switching to it or bringing Mira to the foreground — use this when driving a page from a script so Mira does not pop in front of what you are doing |
-| `select-tab` | `id` | activate a tab (wakes it if asleep) |
-| `close-tab` | `id` | close a tab |
-| `close-active-tab` | — | close the active tab (Cmd+W semantics, pinned tabs are guarded) |
-| `discard-tab` | `id` | unload a tab's page, keep the tab (frees RAM) |
-| `discard-active-tab` | — | same, for the active tab |
-| `prev-tab` / `next-tab` | — | cycle the strip |
-| `pin-tab` / `unpin-tab` | `id` | pin state |
-| `move-tab` | `id`, `toIndex` | reorder the strip |
-| `reopen-closed-tab` | — | restore the most recently closed tab |
-| `toggle-tabs-panel` | `collapsed?` | collapse/expand the tab sidebar |
+| Command                 | Params                | Effect / result                                                                                                                                                                                                           |
+| ----------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list-tabs`             | —                     | `{tabs, activeId, panelCollapsed}` — tabs of the target window, with their UUID ids                                                                                                                                       |
+| `new-tab`               | `url?`, `background?` | open a tab (default: home). `background:true` opens it hidden without switching to it or bringing Mira to the foreground — use this when driving a page from a script so Mira does not pop in front of what you are doing |
+| `select-tab`            | `id`                  | activate a tab (wakes it if asleep)                                                                                                                                                                                       |
+| `close-tab`             | `id`                  | close a tab                                                                                                                                                                                                               |
+| `close-active-tab`      | —                     | close the active tab (Cmd+W semantics, pinned tabs are guarded)                                                                                                                                                           |
+| `discard-tab`           | `id`                  | unload a tab's page, keep the tab (frees RAM)                                                                                                                                                                             |
+| `discard-active-tab`    | —                     | same, for the active tab                                                                                                                                                                                                  |
+| `prev-tab` / `next-tab` | —                     | cycle the strip                                                                                                                                                                                                           |
+| `pin-tab` / `unpin-tab` | `id`                  | pin state                                                                                                                                                                                                                 |
+| `move-tab`              | `id`, `toIndex`       | reorder the strip                                                                                                                                                                                                         |
+| `reopen-closed-tab`     | —                     | restore the most recently closed tab                                                                                                                                                                                      |
+| `toggle-tabs-panel`     | `collapsed?`          | collapse/expand the tab sidebar                                                                                                                                                                                           |
 
 ### Page introspection (devtools domain)
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `exec-js` | `code`, `tabId?` | run JS in a tab's page world, return its JSON-serializable value. With `tabId` (from `list-tabs`), targets **any tab in any window**; without, the active tab. Errors: `unknown tab: <id>`, `tab is asleep: <id>`, `not a web page (Settings tab)` |
-| `toggle-devtools` | — | open/close the inspector on the active tab |
-| `inspect-cookies` | — | open the inspector on the active tab (if needed, never closes it) and reveal the Cookies view of the Application panel; result `{ open }`. Errors: `no active web page` |
+| Command           | Params           | Effect / result                                                                                                                                                                                                                                    |
+| ----------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exec-js`         | `code`, `tabId?` | run JS in a tab's page world, return its JSON-serializable value. With `tabId` (from `list-tabs`), targets **any tab in any window**; without, the active tab. Errors: `unknown tab: <id>`, `tab is asleep: <id>`, `not a web page (Settings tab)` |
+| `toggle-devtools` | —                | open/close the inspector on the active tab                                                                                                                                                                                                         |
+| `inspect-cookies` | —                | open the inspector on the active tab (if needed, never closes it) and reveal the Cookies view of the Application panel; result `{ open }`. Errors: `no active web page`                                                                            |
 
 ### Media (collect & download page media)
 
 The media gallery (shortcut `Cmd+Alt+Shift+M`) collects every media on the page from **two sources**, merged with provenance: the live **DOM** (images, video/audio + sources, inline SVG, CSS backgrounds, canvas exported to PNG) and a **continuous per-tab network buffer** (every image / audio-video / font response that transited the wire, metadata only — no bodies held). Each item's `sources` lists `dom`, `network`, or both.
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `collect-media` | `tabId?` | harvest the tab's media, merged + deduped. Result `{media: MediaItem[], count}`. `MediaItem = {url, kind, mime?, width?, height?, bytes?, alt?, sources[], tainted?}`; `kind ∈ image|video|audio|svg|canvas|font|other`. Errors: `unknown tab`, `tab is asleep`, `no active web page` |
-| `download-media` | `url` \| `urls[]`, `tabId?` | download to the Downloads folder via the tab's session (authenticated media keep the page's cookies); `data:` URLs (canvas/SVG) written directly. Result `{saved, failed[]}` |
-| `get-media-stats` | — | the target window's capture footprint: `{count, bytes, text}` (`text` = formatted RAM of the metadata buffer) |
-| `toggle-media-gallery` | `open?` | show/hide the fullscreen gallery overlay (hides the web view like the palette); result `{open}` |
-| `open-media-gallery` / `close-media-gallery` | — | force the overlay open / closed |
+| Command                                      | Params                      | Effect / result                                                                                                                                                                      |
+| -------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `collect-media`                              | `tabId?`                    | harvest the tab's media, merged + deduped. Result `{media: MediaItem[], count}`. `MediaItem = {url, kind, mime?, width?, height?, bytes?, alt?, sources[], tainted?, poster?, pageUrl?}`; `kind ∈ image | video | audio | svg | canvas | font | other`. `poster` is a video thumbnail; `pageUrl` is a streamed video's permalink (for `download-video-url`). Errors: `unknown tab`, `tab is asleep`, `no active web page` |
+| `download-media`                             | `url` \| `urls[]`, `tabId?` | download to the Downloads folder via the tab's session (authenticated media keep the page's cookies); `data:` URLs (canvas/SVG) written directly. Result `{saved, failed[]}`         |
+| `download-video-url`                         | `url`                       | download a streamed video (MSE/HLS/blob — X, YouTube…) as a real file via yt-dlp. `url` is the precise per-video permalink (from `collect-media`'s `pageUrl`), never the tab URL. Runs in the background. Result `{file}`; errors when yt-dlp is missing or extraction fails |
+| `get-media-stats`                            | —                           | the target window's capture footprint plus in-flight yt-dlp downloads: `{count, bytes, text, downloads, downloadingSince}` (`text` = formatted RAM of the metadata buffer)          |
+| `toggle-media-gallery`                       | `open?`                     | show/hide the fullscreen gallery overlay (hides the web view like the palette); result `{open}`                                                                                      |
+| `open-media-gallery` / `close-media-gallery` | —                           | force the overlay open / closed                                                                                                                                                      |
 
 ### Skills & AI pane
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `list-skills` | — | skills applicable to the active page |
-| `run-skill` | `id` | extract page content, run the skill's engine, show in the pane |
-| `run-prompt` | `prompt`, `withScreenshot?` | one chat turn against the page (pane thread) |
-| `get-skill-pane` / `close-skill-pane` | — | pane state / hide (keeps content) |
-| `toggle-skill-pane` | `open?` | show/hide the pane |
-| `clear-chat` / `copy-chat` | — | reset / copy the pane thread |
-| `set-chat-options` | `model?`, `loadMcp?` | per-chat LLM options |
+| Command                               | Params                      | Effect / result                                                |
+| ------------------------------------- | --------------------------- | -------------------------------------------------------------- |
+| `list-skills`                         | —                           | skills applicable to the active page                           |
+| `run-skill`                           | `id`                        | extract page content, run the skill's engine, show in the pane |
+| `run-prompt`                          | `prompt`, `withScreenshot?` | one chat turn against the page (pane thread)                   |
+| `get-skill-pane` / `close-skill-pane` | —                           | pane state / hide (keeps content)                              |
+| `toggle-skill-pane`                   | `open?`                     | show/hide the pane                                             |
+| `clear-chat` / `copy-chat`            | —                           | reset / copy the pane thread                                   |
+| `set-chat-options`                    | `model?`, `loadMcp?`        | per-chat LLM options                                           |
 
 ### Bookmarks
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `list-bookmarks` | — | the whole bookmark tree |
-| `add-bookmark` | `url?`, `title?`, `parentId?` | default: bookmark the active tab |
-| `add-folder` | `title`, `parentId?` | create a folder |
-| `open-bookmark` | `id` | navigate to a bookmark |
-| `rename-bookmark` | `id`, `title` | rename a node |
-| `move-bookmark` | `id`, `parentId?`, `index?` | reparent/reorder |
-| `remove-bookmark` | `id` | delete a node |
+| Command           | Params                        | Effect / result                  |
+| ----------------- | ----------------------------- | -------------------------------- |
+| `list-bookmarks`  | —                             | the whole bookmark tree          |
+| `add-bookmark`    | `url?`, `title?`, `parentId?` | default: bookmark the active tab |
+| `add-folder`      | `title`, `parentId?`          | create a folder                  |
+| `open-bookmark`   | `id`                          | navigate to a bookmark           |
+| `rename-bookmark` | `id`, `title`                 | rename a node                    |
+| `move-bookmark`   | `id`, `parentId?`, `index?`   | reparent/reorder                 |
+| `remove-bookmark` | `id`                          | delete a node                    |
 
 ### History
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `list-history` | `limit?` | most recent visits |
-| `search-history` | `query`, `limit?` | fuzzy search |
-| `clear-history` | — | wipe it |
+| Command          | Params            | Effect / result    |
+| ---------------- | ----------------- | ------------------ |
+| `list-history`   | `limit?`          | most recent visits |
+| `search-history` | `query`, `limit?` | fuzzy search       |
+| `clear-history`  | —                 | wipe it            |
 
 ### Profiles & windows
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `list-profiles` | — | profiles + which are open + focused id |
-| `open-profile` | `id` | open (or focus) a profile window |
-| `close-profile` | `id` | close a profile's window without quitting the app (`closed:false` if it was not open) |
-| `create-profile` | `label?` | new profile |
-| `rename-profile` | `id`, `label` | rename |
-| `set-profile-color` | `id`, `color` | `#rrggbb` hex, or null/'' to clear |
-| `focus-app` | — | bring Mira to the foreground |
-| `list-spaces` | — | macOS virtual desktops per display, in Mission Control order, plus where the target window sits (`window: {displayId, spaceIndex}`, null when unknown). `displays: []` = no Spaces support (non-mac / addon not built) |
-| `move-window-to-space` | `spaceIndex` | move the target window onto that desktop (0-based index on its display). `moved:false` = was already there. Persisted: the window reopens on that desktop next launch |
+| Command                | Params        | Effect / result                                                                                                                                                                                                        |
+| ---------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list-profiles`        | —             | profiles + which are open + focused id                                                                                                                                                                                 |
+| `open-profile`         | `id`          | open (or focus) a profile window                                                                                                                                                                                       |
+| `close-profile`        | `id`          | close a profile's window without quitting the app (`closed:false` if it was not open)                                                                                                                                  |
+| `create-profile`       | `label?`      | new profile                                                                                                                                                                                                            |
+| `rename-profile`       | `id`, `label` | rename                                                                                                                                                                                                                 |
+| `set-profile-color`    | `id`, `color` | `#rrggbb` hex, or null/'' to clear                                                                                                                                                                                     |
+| `focus-app`            | —             | bring Mira to the foreground                                                                                                                                                                                           |
+| `list-spaces`          | —             | macOS virtual desktops per display, in Mission Control order, plus where the target window sits (`window: {displayId, spaceIndex}`, null when unknown). `displays: []` = no Spaces support (non-mac / addon not built) |
+| `move-window-to-space` | `spaceIndex`  | move the target window onto that desktop (0-based index on its display). `moved:false` = was already there. Persisted: the window reopens on that desktop next launch                                                  |
 
 ### Settings
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `open-settings` | `section?` | open the Settings tab (`general`, `ai`, `profiles`, `extensions`, `permissions`, `data`) |
-| `get-settings` | — | current app settings |
-| `set-home-url` | `url` | home page |
-| `set-llm-config` | `provider`, `apiKey?`, `model?` | AI engine (`claude-cli`, `anthropic-api`, `extractive`) |
-| `set-sidebar-width` / `set-skill-pane-width` | `width` | panel widths (px, clamped) |
+| Command                                      | Params                          | Effect / result                                                                          |
+| -------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------- |
+| `open-settings`                              | `section?`                      | open the Settings tab (`general`, `ai`, `profiles`, `extensions`, `permissions`, `data`) |
+| `get-settings`                               | —                               | current app settings                                                                     |
+| `set-home-url`                               | `url`                           | home page                                                                                |
+| `set-llm-config`                             | `provider`, `apiKey?`, `model?` | AI engine (`claude-cli`, `anthropic-api`, `extractive`)                                  |
+| `set-sidebar-width` / `set-skill-pane-width` | `width`                         | panel widths (px, clamped)                                                               |
 
 ### Cookies & data
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `import-cookies` | `to`, `profileDir`, `userDataDir?`, `safeStorageService?` | import Chrome cookies into a Mira profile |
-| `count-active-cookies` | — | cookies the active site would send |
-| `clear-site-data` | `url?` | cookies + storage for one site (default: active site) |
-| `clear-data` | `profile?` | wipe a profile's browsing data |
+| Command                | Params                                                    | Effect / result                                       |
+| ---------------------- | --------------------------------------------------------- | ----------------------------------------------------- |
+| `import-cookies`       | `to`, `profileDir`, `userDataDir?`, `safeStorageService?` | import Chrome cookies into a Mira profile             |
+| `count-active-cookies` | —                                                         | cookies the active site would send                    |
+| `clear-site-data`      | `url?`                                                    | cookies + storage for one site (default: active site) |
+| `clear-data`           | `profile?`                                                | wipe a profile's browsing data                        |
 
 ### Extensions
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `list-extensions` | — | loaded extensions of the target profile |
-| `install-extension` | `id` | install from the Chrome Web Store id |
-| `load-extension` | `path` | load an unpacked extension |
-| `enable-extension` / `disable-extension` / `uninstall-extension` | `id` | lifecycle |
-| `update-extensions` | — | update all |
+| Command                                                          | Params | Effect / result                         |
+| ---------------------------------------------------------------- | ------ | --------------------------------------- |
+| `list-extensions`                                                | —      | loaded extensions of the target profile |
+| `install-extension`                                              | `id`   | install from the Chrome Web Store id    |
+| `load-extension`                                                 | `path` | load an unpacked extension              |
+| `enable-extension` / `disable-extension` / `uninstall-extension` | `id`   | lifecycle                               |
+| `update-extensions`                                              | —      | update all                              |
 
 ### Permissions
 
-| Command | Params | Effect / result |
-|---|---|---|
-| `list-permissions` / `clear-permissions` | — | web-permission grant log |
-| `location-auth-status` / `request-location-authorization` / `open-location-settings` | — | macOS location authorization |
+| Command                                                                              | Params | Effect / result              |
+| ------------------------------------------------------------------------------------ | ------ | ---------------------------- |
+| `list-permissions` / `clear-permissions`                                             | —      | web-permission grant log     |
+| `location-auth-status` / `request-location-authorization` / `open-location-settings` | —      | macOS location authorization |
 
 ### UI plumbing (used by the chrome; rarely useful externally)
 
@@ -212,4 +217,4 @@ The media gallery (shortcut `Cmd+Alt+Shift+M`) collects every media on the page 
 
 Source of truth = the registry (`src/main/commands/`, one file per domain). When you add
 or change a command, update its row here — and remember `list-commands` already exposes
-the *names* for free, so the only thing that can rot here is params/semantics.
+the _names_ for free, so the only thing that can rot here is params/semantics.

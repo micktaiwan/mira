@@ -42,12 +42,8 @@ import type {
 } from './commands'
 import { closedSkillPane, formatMemory } from './commands'
 import { MediaBuffer, captureStats, fileNameFor, mergeMedia } from './media-capture'
-import {
-  MEDIA_COLLECT_SOURCE,
-  MEDIA_RECORD_STATUS_SOURCE,
-  mediaRecordStartSource,
-  parseDomMedia
-} from './media-collect'
+import { MEDIA_COLLECT_SOURCE, nearestVideoPermalinkSource, parseDomMedia } from './media-collect'
+import { ytdlpDownload } from './ytdlp'
 import { homePageUrl, isMiraHomeUrl, type HomeStats } from './home-doc'
 import { errorPageUrl, isMiraErrorUrl } from './error-doc'
 import { type LlmConfig, type ChatMessage, type PageContext } from './llm'
@@ -199,11 +195,6 @@ const CLOSED_TAB_STACK_LIMIT = 25
  * (`state`, from tab-store) plus the native WebContentsView per tab (`views`,
  * keyed by tab id). Only the active tab's view is visible; the panel-collapsed
  * flag shifts where the active view sits. Tabs are per-window (CLAUDE.md). */
-/** Await `ms` milliseconds. Used to pace the recording-status poll loop. */
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 /** A filename not already taken in `dir` nor in `used` (this download batch):
  * appends " (1)", " (2)", … before the extension until free — Chrome-style. */
 function uniqueFileName(name: string, dir: string, used: Set<string>): string {
@@ -426,11 +417,13 @@ export class ProfileManager {
   private readonly unlockedPartition = new Map<string, string>()
   /** Only the currently open profiles, keyed by stable id. */
   private readonly openById = new Map<string, ProfileWindow>()
-  /** Video recordings in flight, keyed by tab id, with when each started. A
-   * recording runs in main (independent of the gallery UI), so this lets the
-   * status bar show it and keep it alive after the gallery closes — the user is
-   * not blocked for the clip's whole length. */
-  private readonly activeRecordings = new Map<string, { startedAt: number }>()
+  /** yt-dlp video downloads in flight, keyed by a unique id, with when each
+   * started. A download runs in a background process (independent of any UI), so
+   * this lets the status bar show one is running and how long it has taken. */
+  private readonly activeDownloads = new Map<number, { startedAt: number }>()
+  /** Monotonic id for activeDownloads entries (two downloads of the same url must
+   * be tracked distinctly). */
+  private downloadSeq = 0
   /** Pending debounced flush of sessions.json (one timer for the whole app, as
    * there is a single file). null when no write is pending. */
   private saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -681,6 +674,11 @@ export class ProfileManager {
     if (existing && !existing.window.isDestroyed()) {
       if (existing.window.isMinimized()) existing.window.restore()
       existing.window.focus()
+      // Record the focus target SYNCHRONOUSLY. window.focus() only fires the OS
+      // 'focus' event asynchronously (and not at all when Mira is a background
+      // app), so a scripted `open-profile` then `open-url` would otherwise still
+      // target the previously focused profile — the handoff picks menuFocusId.
+      this.menuFocusId = id
       this.deps.onChange?.()
       return { id, created: false }
     }
@@ -717,18 +715,28 @@ export class ProfileManager {
    * profile window, else any open one; if Mira was launched by the click and has
    * no window yet, opens the default profile first. The tab takes page focus (not
    * the address bar) — the user asked for this page, not to type one. */
-  openUrl(url: string): void {
+  openUrl(url: string, profileId?: string): void {
     const trimmed = url.trim()
     if (!trimmed) return
-    // A link/file opened from ANOTHER app (a terminal `open foo.html`, a chat
-    // client) leaves Mira unfocused, so getFocusedWindow() is null. Fall back to
-    // the last focused profile window (menuFocusId, kept in sync on every 'focus'),
-    // then to any open one.
-    let target: ProfileWindow | null =
-      this.findByWindow(BrowserWindow.getFocusedWindow()) ??
-      (this.menuFocusId ? (this.openById.get(this.menuFocusId) ?? null) : null) ??
-      this.openById.values().next().value ??
-      null
+    let target: ProfileWindow | null
+    if (profileId) {
+      // Explicit target (socket/MCP `open-url {profileId}`): open that profile if
+      // it is closed (throws on an unknown/locked id), then aim at its window.
+      // Deterministic — no dependency on the flaky OS focus state, which the
+      // last-focused fallback below can't control when Mira is a background app.
+      this.openProfile(profileId)
+      target = this.openById.get(profileId) ?? null
+    } else {
+      // A link/file opened from ANOTHER app (a terminal `open foo.html`, a chat
+      // client) leaves Mira unfocused, so getFocusedWindow() is null. Fall back to
+      // the last focused profile window (menuFocusId, kept in sync on every 'focus'),
+      // then to any open one.
+      target =
+        this.findByWindow(BrowserWindow.getFocusedWindow()) ??
+        (this.menuFocusId ? (this.openById.get(this.menuFocusId) ?? null) : null) ??
+        this.openById.values().next().value ??
+        null
+    }
     if (!target || target.window.isDestroyed()) {
       this.openProfile(DEFAULT_PROFILE_ID)
       target = this.openById.get(DEFAULT_PROFILE_ID) ?? this.openById.values().next().value ?? null
@@ -1996,107 +2004,21 @@ export class ProfileManager {
     await writeFile(join(dir, name), bytes)
   }
 
-  /** Record a PLAYING video into a file by capturing its decoded stream in the
-   * page (captureStream + MediaRecorder). This is the only way to grab streamed
-   * video (MSE/HLS/blob, e.g. X) that has no downloadable file URL: the segments
-   * are fetched by Chromium's native media engine, invisible to page fetch and to
-   * our resourceType-filtered network buffer — but the decoded frames ARE
-   * reachable. Runs for roughly the clip's duration.
-   *
-   * The recording lives entirely in the page (on window.__miraRec) because
-   * evalInWebContents time-boxes each call to a few seconds: we START it in one
-   * quick call, POLL its status, then read the base64 result back in chunks — the
-   * "kick off async, stash on window, read in sync" pattern (see CLAUDE.md). */
-  private async recordVideoInTab(
-    wc: WebContents,
-    url: string,
-    dir: string,
-    used: Set<string>
+  /** Download a streamed video (MSE/HLS/blob — e.g. X) as a real file via yt-dlp.
+   * `pageUrl` is the PRECISE permalink for that one video, resolved from the DOM;
+   * yt-dlp extracts and muxes it. This runs in a background process with nothing
+   * kept open — the key advantage over the old in-page recorder, which pinned the
+   * tab to the playing page. Registered in activeDownloads so the status bar shows
+   * a download is in flight. Resolves with the saved basename or a clean error. */
+  private async downloadVideoUrl(
+    pageUrl: string
   ): Promise<{ saved: boolean; file?: string; error?: string }> {
-    // The gallery hides the web view while open; a hidden view can be throttled,
-    // which would pause the playback we need to capture. Best-effort: keep this
-    // tab decoding at full rate for the duration of the recording. Restored after.
-    let throttleRestored = false
+    const id = ++this.downloadSeq
+    this.activeDownloads.set(id, { startedAt: Date.now() })
     try {
-      wc.setBackgroundThrottling(false)
-    } catch {
-      throttleRestored = true // method absent — nothing to restore
-    }
-    const restoreThrottle = (): void => {
-      if (throttleRestored) return
-      throttleRestored = true
-      try {
-        wc.setBackgroundThrottling(true)
-      } catch {
-        // best-effort
-      }
-    }
-    const start = (await evalInWebContents(wc, mediaRecordStartSource(url))) as string
-    if (start !== 'started') {
-      restoreThrottle()
-      const reason =
-        start === 'no-video'
-          ? 'no video element on the page'
-          : start === 'no-capture'
-            ? 'this video cannot be captured (DRM-protected?)'
-            : start === 'busy'
-              ? 'a recording is already in progress on this tab'
-              : 'could not start the recorder'
-      return { saved: false, error: reason }
-    }
-    try {
-      // Poll until the page reports done/error/stall. The hard cap adapts to the
-      // clip's duration (read from the status) so a long video is not cut short,
-      // with a 15 min absolute ceiling as a backstop.
-      let status: {
-        status?: string
-        error?: string
-        size?: number
-        len?: number
-        mime?: string
-        dur?: number
-      } = {}
-      for (let i = 0; i < 900; i++) {
-        await sleep(1000)
-        const raw = (await evalInWebContents(wc, MEDIA_RECORD_STATUS_SOURCE)) as string
-        try {
-          status = JSON.parse(raw)
-        } catch {
-          status = { status: 'missing' }
-        }
-        if (status.status === 'done' || status.status === 'error' || status.status === 'missing')
-          break
-        if (typeof status.dur === 'number' && status.dur > 0 && i > status.dur + 25) break
-      }
-      if (status.status !== 'done') {
-        return {
-          saved: false,
-          error: status.error || `recording did not complete (${status.status})`
-        }
-      }
-      if (!status.len) return { saved: false, error: 'empty recording' }
-      // Read the base64 payload back in chunks small enough to clear the eval
-      // timeout, concatenating in main.
-      const CHUNK = 3_000_000
-      let b64 = ''
-      for (let offset = 0; offset < status.len; offset += CHUNK) {
-        const part = (await evalInWebContents(
-          wc,
-          `window.__miraRec && window.__miraRec.b64 ? window.__miraRec.b64.substr(${offset}, ${CHUNK}) : ''`
-        )) as string
-        b64 += typeof part === 'string' ? part : ''
-      }
-      const ext = status.mime && status.mime.includes('mp4') ? 'mp4' : 'webm'
-      const name = uniqueFileName(`video-recording.${ext}`, dir, used)
-      used.add(name)
-      await writeFile(join(dir, name), Buffer.from(b64, 'base64'))
-      return { saved: true, file: name }
+      return await ytdlpDownload(pageUrl, app.getPath('downloads'), process.env)
     } finally {
-      restoreThrottle()
-      // Free the (potentially large) base64 held on the page, on every path.
-      await evalInWebContents(wc, 'try { delete window.__miraRec } catch (e) {} ; "ok"').catch(
-        () => {}
-      )
+      this.activeDownloads.delete(id)
     }
   }
 
@@ -2401,11 +2323,21 @@ export class ProfileManager {
         selectionText: params.selectionText,
         isEditable: params.isEditable,
         canGoBack: wc.navigationHistory.canGoBack(),
-        canGoForward: wc.navigationHistory.canGoForward()
+        canGoForward: wc.navigationHistory.canGoForward(),
+        mediaType: params.mediaType,
+        srcURL: params.srcURL
       })
       const template: MenuItemConstructorOptions[] = items.map((item) => {
         if (item.type === 'separator') return { type: 'separator' }
         if (item.type === 'role') return { role: item.role, label: item.label }
+        if (item.type === 'download-stream') {
+          // Resolve the precise permalink at the click point, then hand it to
+          // yt-dlp via the registry (elementFromPoint runs in the tab, not here).
+          return {
+            label: item.label,
+            click: () => void this.downloadStreamAt(wc, params.x, params.y)
+          }
+        }
         return {
           label: item.label,
           enabled: item.enabled,
@@ -2422,6 +2354,21 @@ export class ProfileManager {
       }
       menu.popup({ window: pw.window })
     })
+  }
+
+  /** Right-click "Download Video" on a streamed video: resolve the precise
+   * permalink for the video at the click point (in the tab's DOM), then route it
+   * to the `download-video-url` command (yt-dlp). Falls back to the page URL when
+   * no permalink is found. Best-effort — logs and gives up on failure. */
+  private async downloadStreamAt(wc: WebContents, x: number, y: number): Promise<void> {
+    try {
+      const resolved = (await evalInWebContents(wc, nearestVideoPermalinkSource(x, y))) as unknown
+      const url = typeof resolved === 'string' && resolved ? resolved : wc.getURL()
+      if (!url) return
+      this.deps.runCommand?.(wc, 'download-video-url', { url })
+    } catch (error) {
+      console.error('[mira] download-stream: could not resolve video URL', error)
+    }
   }
 
   /** Step to the tab one position from the active one (arrow up/down): -1 for the
@@ -2673,10 +2620,11 @@ export class ProfileManager {
         // on macOS; stealing app focus is the documented way.
         app.focus({ steal: true })
       },
-      // Default-browser handoff: openUrl does its OWN targeting (last-focused
-      // profile), independent of this context's target window — the command may
-      // arrive over the socket while a different window is "focused".
-      openExternalUrl: (url) => this.openUrl(url),
+      // Default-browser handoff: openUrl does its OWN targeting (an explicit
+      // profileId, else the last-focused profile), independent of this context's
+      // target window — the command may arrive over the socket while a different
+      // window is "focused".
+      openExternalUrl: (url, profileId) => this.openUrl(url, profileId),
       openProfile: (id) => this.openProfile(id),
       closeProfile: (id) => this.closeProfile(id),
       createProfile: (label) => this.createProfile(label),
@@ -2861,22 +2809,14 @@ export class ProfileManager {
         }
         return { saved, failed }
       },
-      recordVideo: async (tabId, url) => {
-        const { wc } = this.resolveMediaTab(target, tabId)
-        // Register so the status bar shows the recording and it survives the
-        // gallery closing (the capture itself runs in the page + here, not in the
-        // gallery UI). Key by tab so a per-tab recording is tracked distinctly.
-        const key = tabId ?? target?.state.activeId ?? 'active'
-        this.activeRecordings.set(key, { startedAt: Date.now() })
-        try {
-          return await this.recordVideoInTab(wc, url ?? '', app.getPath('downloads'), new Set())
-        } finally {
-          this.activeRecordings.delete(key)
-        }
+      downloadVideoUrl: async (url) => {
+        // yt-dlp runs as its own process on the permalink — no tab needed. (The
+        // permalink was resolved from the tab's DOM by the gallery / context menu.)
+        return this.downloadVideoUrl(url)
       },
       getMediaStats: () => {
         const base = target ? captureStats(target.media.values()) : { count: 0, bytes: 0 }
-        return { ...base, recordings: [...this.activeRecordings.values()] }
+        return { ...base, downloads: [...this.activeDownloads.values()] }
       },
       setMediaGalleryOpen: (open) => {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')

@@ -49,13 +49,13 @@ extension. La portabilité vers d'autres navigateurs n'est pas un objectif.
 
 La conf d'un site = une **liste de skills**. Un skill est décrit par :
 
-| Champ | Rôle |
-|---|---|
-| `name` | Libellé affiché dans la palette (« Skills sur cette page ») |
-| `match` | Quand le skill s'applique (domaine, pattern d'URL, éventuellement un sélecteur — voir ❓ extraction) |
-| `prompt` | Le prompt système propre au skill |
-| `source` | Ce qu'on extrait de la page et qu'on donne à l'IA (voir §4) |
-| `sink` | Où va le résultat (voir ci-dessous) |
+| Champ    | Rôle                                                                                                 |
+| -------- | ---------------------------------------------------------------------------------------------------- |
+| `name`   | Libellé affiché dans la palette (« Skills sur cette page »)                                          |
+| `match`  | Quand le skill s'applique (domaine, pattern d'URL, éventuellement un sélecteur — voir ❓ extraction) |
+| `prompt` | Le prompt système propre au skill                                                                    |
+| `source` | Ce qu'on extrait de la page et qu'on donne à l'IA (voir §4)                                          |
+| `sink`   | Où va le résultat (voir ci-dessous)                                                                  |
 
 ### La destination (`sink`) — dépend du skill
 
@@ -67,7 +67,7 @@ familles, de difficulté croissante — c'est le cœur du découpage V1/V2 :
    du `CLAUDE.md`) : ce pane **rétrécit la vue web** (on réduit la largeur du
    `WebContentsView`, comme la sidebar le décale à gauche), il ne **déborde donc pas**
    par-dessus la page → pas de couche native au-dessus, pas le problème de l'overlay.
-   **Périmètre V1** (c'est la surface d'affichage par défaut). *(surface à construire)*
+   **Périmètre V1** (c'est la surface d'affichage par défaut). _(surface à construire)_
 2. **Sur la page elle-même** — ex. répondre auto qui écrit dans la zone de compo, ou
    annoter/surligner. C'est un **write DOM** dans la `WebContentsView`. **Fragile**
    (dépend du HTML du site, casse quand le site change). **Différé V2** (voir §6).
@@ -90,7 +90,7 @@ Deux commandes dans le registre (domaine `commands/skills.ts`, sur le modèle de
 `commands/tabs.ts` / `commands/palette.ts`) :
 
 - **`list-skills`** — pour la page/le site courant, retourne les skills applicables
-  (`{ name, ... }`). Alimente les entrées « Skills sur cette page » de la palette *et*
+  (`{ name, ... }`). Alimente les entrées « Skills sur cette page » de la palette _et_
   est interrogeable au socket/MCP.
 - **`run-skill`** — exécute un skill nommé : extrait la source, appelle l'IA avec le
   prompt, applique le `sink`. Asynchrone (voir §2).

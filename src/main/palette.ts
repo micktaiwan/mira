@@ -75,7 +75,13 @@ const STATIC_COMMANDS: ReadonlyArray<Omit<PaletteEntry, 'group'>> = [
     keywords: 'quit',
     shortcut: '⌘W'
   },
-  { id: 'cmd:reload', title: 'Reload Page', command: 'reload', keywords: 'refresh', shortcut: '⌘R' },
+  {
+    id: 'cmd:reload',
+    title: 'Reload Page',
+    command: 'reload',
+    keywords: 'refresh',
+    shortcut: '⌘R'
+  },
   {
     id: 'cmd:find',
     title: 'Find in Page',

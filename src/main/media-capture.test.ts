@@ -40,7 +40,12 @@ describe('classifyMedia', () => {
 
 describe('mergeMedia', () => {
   it('unions sources and fills fields for the same url', () => {
-    const dom: MediaItem = { url: 'https://x.com/a.png', kind: 'image', width: 10, sources: ['dom'] }
+    const dom: MediaItem = {
+      url: 'https://x.com/a.png',
+      kind: 'image',
+      width: 10,
+      sources: ['dom']
+    }
     const net: MediaItem = {
       url: 'https://x.com/a.png',
       kind: 'image',

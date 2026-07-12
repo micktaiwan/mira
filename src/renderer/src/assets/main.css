@@ -673,19 +673,20 @@ body {
 }
 
 .profile-color-swatch.selected {
-  box-shadow: 0 0 0 2px var(--color-background-soft), 0 0 0 4px var(--swatch-color, var(--ev-c-gray-1));
+  box-shadow:
+    0 0 0 2px var(--color-background-soft),
+    0 0 0 4px var(--swatch-color, var(--ev-c-gray-1));
 }
 
 /* The "no color" swatch: an empty circle with a diagonal strike. */
 .profile-color-none {
-  background:
-    linear-gradient(
-      135deg,
-      transparent 44%,
-      var(--ev-c-gray-1) 44%,
-      var(--ev-c-gray-1) 56%,
-      transparent 56%
-    );
+  background: linear-gradient(
+    135deg,
+    transparent 44%,
+    var(--ev-c-gray-1) 44%,
+    var(--ev-c-gray-1) 56%,
+    transparent 56%
+  );
 }
 
 .profile-status {
@@ -840,7 +841,10 @@ body {
   padding: 24px;
   background: #1e1e1e;
   color: #eee;
-  font: 13px/1.5 -apple-system, system-ui, sans-serif;
+  font:
+    13px/1.5 -apple-system,
+    system-ui,
+    sans-serif;
 }
 
 .error-boundary h1 {

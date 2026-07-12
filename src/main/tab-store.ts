@@ -196,14 +196,9 @@ export function unpinTab(state: TabState, id: string): TabState {
  * own that bit of state and must reset it whenever the active tab changes
  * (select / new tab), so only truly consecutive presses close. */
 export type CloseActiveDecision =
-  | { action: 'none' }
-  | { action: 'arm'; id: string }
-  | { action: 'close'; id: string }
+  { action: 'none' } | { action: 'arm'; id: string } | { action: 'close'; id: string }
 
-export function closeActiveDecision(
-  state: TabState,
-  armedId: string | null
-): CloseActiveDecision {
+export function closeActiveDecision(state: TabState, armedId: string | null): CloseActiveDecision {
   const active = state.tabs.find((t) => t.id === state.activeId)
   if (!active) return { action: 'none' }
   if (active.pinned === true && armedId !== active.id) return { action: 'arm', id: active.id }

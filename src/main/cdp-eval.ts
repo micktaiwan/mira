@@ -90,7 +90,9 @@ export async function evalInWebContents(wc: WebContents, code: string): Promise<
       )) as RuntimeEvaluateReply
       return interpretRuntimeEvaluate(reply)
     } catch (error) {
-      console.warn(`[cdp-eval] Runtime.evaluate failed, falling back to executeJavaScript: ${error}`)
+      console.warn(
+        `[cdp-eval] Runtime.evaluate failed, falling back to executeJavaScript: ${error}`
+      )
       // fall through to executeJavaScript
     }
   }

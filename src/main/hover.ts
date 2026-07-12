@@ -39,9 +39,7 @@ export const EMPTY_HOVER: HoverState = { targetUrl: '', jsAction: false }
 /** An update from one of the two hover sources.
  *  - `target`: Chromium's `update-target-url` (the link under the cursor, or '').
  *  - `js`: our injected detector toggling whether a JS control is under the cursor. */
-export type HoverEvent =
-  | { type: 'target'; url: string }
-  | { type: 'js'; active: boolean }
+export type HoverEvent = { type: 'target'; url: string } | { type: 'js'; active: boolean }
 
 /** Fold a hover source event into the merged state.
  *
@@ -100,10 +98,7 @@ const DETECTOR_SOURCE = String.raw`
  * debugger may already be attached (stealth attaches it on web-contents-created);
  * we guard the attach and just add our binding + script and a message listener,
  * which coexist with stealth's on the same session. */
-export function installHoverReporter(
-  wc: WebContents,
-  onJsHover: (active: boolean) => void
-): void {
+export function installHoverReporter(wc: WebContents, onJsHover: (active: boolean) => void): void {
   try {
     if (!wc.debugger.isAttached()) wc.debugger.attach('1.3')
     // Runtime.enable must precede addBinding; Page.enable precedes addScript.

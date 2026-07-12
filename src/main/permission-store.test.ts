@@ -11,7 +11,13 @@ describe('recordGrant', () => {
   it('prepends a new (origin, permission) pair', () => {
     const list = recordGrant([], { origin: 'https://a.com', permission: 'geolocation', at: 10 })
     expect(list).toEqual([
-      { origin: 'https://a.com', permission: 'geolocation', firstGranted: 10, lastGranted: 10, count: 1 }
+      {
+        origin: 'https://a.com',
+        permission: 'geolocation',
+        firstGranted: 10,
+        lastGranted: 10,
+        count: 1
+      }
     ])
   })
 
@@ -21,8 +27,20 @@ describe('recordGrant', () => {
     list = recordGrant(list, { origin: 'https://b.com', permission: 'notifications', at: 20 })
     list = recordGrant(list, { origin: 'https://a.com', permission: 'geolocation', at: 30 })
     expect(list).toEqual([
-      { origin: 'https://a.com', permission: 'geolocation', firstGranted: 10, lastGranted: 30, count: 2 },
-      { origin: 'https://b.com', permission: 'notifications', firstGranted: 20, lastGranted: 20, count: 1 }
+      {
+        origin: 'https://a.com',
+        permission: 'geolocation',
+        firstGranted: 10,
+        lastGranted: 30,
+        count: 2
+      },
+      {
+        origin: 'https://b.com',
+        permission: 'notifications',
+        firstGranted: 20,
+        lastGranted: 20,
+        count: 1
+      }
     ])
   })
 
@@ -70,10 +88,22 @@ describe('normalizePermissions', () => {
     const raw = [
       { permission: 'geolocation', lastGranted: 1 },
       { origin: 'https://a.com', lastGranted: 1 },
-      { origin: 'https://b.com', permission: 'geolocation', lastGranted: 5, firstGranted: 3, count: 2 }
+      {
+        origin: 'https://b.com',
+        permission: 'geolocation',
+        lastGranted: 5,
+        firstGranted: 3,
+        count: 2
+      }
     ]
     expect(normalizePermissions(raw)).toEqual([
-      { origin: 'https://b.com', permission: 'geolocation', firstGranted: 3, lastGranted: 5, count: 2 }
+      {
+        origin: 'https://b.com',
+        permission: 'geolocation',
+        firstGranted: 3,
+        lastGranted: 5,
+        count: 2
+      }
     ])
   })
 

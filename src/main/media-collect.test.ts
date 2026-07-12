@@ -46,6 +46,28 @@ describe('parseDomMedia', () => {
     expect(out[0].poster).toBe('data:image/jpeg;base64,zzz')
   })
 
+  it('keeps a url-less video that carries a permalink (downloadable via yt-dlp)', () => {
+    // A <video> with no src yet (X attaches the blob only on play) still yields a
+    // downloadable item as long as its permalink was resolved.
+    const raw = JSON.stringify([
+      { kind: 'video', url: '', pageUrl: 'https://x.com/a/status/1' }
+    ])
+    const out = parseDomMedia(raw)
+    expect(out).toHaveLength(1)
+    expect(out[0]).toMatchObject({ kind: 'video', url: '', pageUrl: 'https://x.com/a/status/1' })
+  })
+
+  it('drops a url-less record with neither taint nor permalink', () => {
+    expect(parseDomMedia(JSON.stringify([{ kind: 'video', url: '' }]))).toEqual([])
+  })
+
+  it('carries a video permalink through', () => {
+    const raw = JSON.stringify([
+      { kind: 'video', url: 'blob:https://x.com/abc', pageUrl: 'https://x.com/a/status/1/video/1' }
+    ])
+    expect(parseDomMedia(raw)[0].pageUrl).toBe('https://x.com/a/status/1/video/1')
+  })
+
   it('keeps a tainted canvas record even without a url', () => {
     const raw = JSON.stringify([{ kind: 'canvas', url: '', tainted: true, width: 100, height: 50 }])
     const out = parseDomMedia(raw)

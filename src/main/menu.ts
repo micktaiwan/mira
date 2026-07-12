@@ -292,7 +292,12 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
         // "zoom in" (no Shift); a hidden twin binds Cmd+Plus so both fire it.
         { label: 'Actual Size', accelerator: 'CmdOrCtrl+0', click: () => handlers.zoomReset() },
         { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => handlers.zoomIn() },
-        { label: 'Zoom In', accelerator: 'CmdOrCtrl+Plus', visible: false, click: () => handlers.zoomIn() },
+        {
+          label: 'Zoom In',
+          accelerator: 'CmdOrCtrl+Plus',
+          visible: false,
+          click: () => handlers.zoomIn()
+        },
         { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => handlers.zoomOut() },
         { type: 'separator' },
         { role: 'togglefullscreen' }

@@ -26,7 +26,45 @@ export interface RawDomMedia {
   mime?: string
   tainted?: boolean
   poster?: string
+  /** For a streamed video: the precise permalink URL to hand to yt-dlp (resolved
+   * in-page from the DOM around the <video>). Absent for still media. */
+  pageUrl?: string
 }
+
+/** In-page JS (a function DEFINITION injected as a string) that finds the best
+ * "permalink" URL to hand to yt-dlp for the video at/above `el`: the closest
+ * ancestor content permalink (X `/status/…`, YouTube watch, `/video/`, `/reel/`,
+ * `/shorts/`), falling back to the page URL. A streamed (blob:/MSE) <video> has no
+ * usable src, so this per-video URL is what makes a precise download possible on a
+ * page holding many videos. Shared by the DOM harvest and the right-click resolver
+ * so both pick URLs identically. Self-contained and defensive. */
+export const PERMALINK_FN = String.raw`
+function miraCleanPermalink(href) {
+  // An X/Twitter status link often carries a /photo/N or /video/N (or query)
+  // suffix pointing at one attachment; yt-dlp wants the canonical tweet URL, so
+  // truncate to '.../status/<id>'. Other sites (YouTube watch?v=…) keep their URL.
+  try {
+    var m = href.match(/^(https?:\/\/[^\/]+\/[^\/]+\/status\/\d+)/);
+    return m ? m[1] : href;
+  } catch (e) { return href; }
+}
+function miraNearestPermalink(el) {
+  try {
+    var re = /\/status\/\d+|\/watch\b|youtu\.be\/|\/video\/|\/reel\/|\/shorts\//;
+    var n = el;
+    for (var depth = 0; n && depth < 20; depth++, n = n.parentElement) {
+      if (n.tagName === 'A' && n.href && re.test(n.href)) return miraCleanPermalink(n.href);
+      if (n.querySelectorAll) {
+        var as = n.querySelectorAll('a[href]');
+        for (var i = 0; i < as.length; i++) {
+          if (as[i].href && re.test(as[i].href)) return miraCleanPermalink(as[i].href);
+        }
+      }
+    }
+  } catch (e) {}
+  return (typeof location !== 'undefined' && location.href) || '';
+}
+`
 
 /** Script evaluated in the page to harvest visible media. Returns a JSON string
  * of RawDomMedia[]. Self-contained and defensive: wrapped so any failure yields
@@ -34,13 +72,17 @@ export interface RawDomMedia {
 export const MEDIA_COLLECT_SOURCE = String.raw`
 (function () {
   try {
+    ${PERMALINK_FN}
     var out = []
     var seen = Object.create(null)
     var MAX_ELEMENTS = 6000
     function push(rec) {
       if (!rec) return
-      // Dedup by url within the DOM pass; url-less records (tainted canvas) always pass.
+      // Dedup by url within the DOM pass; a url-less video (no src yet) dedups by
+      // its permalink so one <video> is not listed twice; a tainted canvas (no url,
+      // no pageUrl) always passes.
       if (rec.url) { if (seen[rec.url]) return; seen[rec.url] = 1 }
+      else if (rec.pageUrl) { var pk = 'p:' + rec.pageUrl; if (seen[pk]) return; seen[pk] = 1 }
       out.push(rec)
     }
     function abs(u) {
@@ -74,7 +116,14 @@ export const MEDIA_COLLECT_SOURCE = String.raw`
         }
       }
       var ssrc = so.getAttribute('src')
-      if (ssrc) push({ kind: srcKind, url: abs(ssrc), mime: so.getAttribute('type') || undefined })
+      if (ssrc) {
+        // A <video><source> is a downloadable video too — attach the permalink
+        // (resolved from its parent <video>) so it gets a working download button,
+        // exactly like a <video> with a direct src.
+        var spageUrl = ''
+        if (srcKind === 'video') { try { spageUrl = miraNearestPermalink(so.parentElement || so) } catch (e) { spageUrl = '' } }
+        push({ kind: srcKind, url: abs(ssrc), mime: so.getAttribute('type') || undefined, pageUrl: spageUrl || undefined })
+      }
     }
     // <video> — currentSrc/src, plus a THUMBNAIL. A blob:/MSE src cannot render
     // in the chrome (it is page-scoped), so grab the current frame to a canvas
@@ -100,7 +149,18 @@ export const MEDIA_COLLECT_SOURCE = String.raw`
         poster = ''
       }
       if (!poster && vid.poster) poster = abs(vid.poster)
-      if (vsrc) push({ kind: 'video', url: abs(vsrc), width: vid.videoWidth || 0, height: vid.videoHeight || 0, poster: poster || undefined })
+      // Precise permalink for this specific video, for a yt-dlp download (a blob:
+      // src is not downloadable; the permalink is what yt-dlp can extract).
+      var pageUrl = ''
+      try { pageUrl = miraNearestPermalink(vid) } catch (e) { pageUrl = '' }
+      if (vsrc) {
+        push({ kind: 'video', url: abs(vsrc), width: vid.videoWidth || 0, height: vid.videoHeight || 0, poster: poster || undefined, pageUrl: pageUrl || undefined })
+      } else if (pageUrl) {
+        // The <video> has no direct src yet (e.g. X attaches the blob only on
+        // play) but we DO have its permalink — emit a url-less video item so it
+        // still gets a working yt-dlp download button. Deduped by pageUrl below.
+        push({ kind: 'video', url: '', width: vid.videoWidth || 0, height: vid.videoHeight || 0, poster: poster || undefined, pageUrl: pageUrl })
+      }
       if (vid.poster) push({ kind: 'image', url: abs(vid.poster), alt: 'poster' })
     }
     // <audio>.
@@ -154,116 +214,20 @@ export const MEDIA_COLLECT_SOURCE = String.raw`
 })();
 `
 
-/** Page script that STARTS recording a playing <video> via captureStream +
- * MediaRecorder, stashing the growing state on `window.__miraRec`. Returns
- * quickly ('started' | 'no-video' | 'no-capture' | 'error') — the actual capture
- * runs asynchronously in the page for the clip's duration (main polls
- * MEDIA_RECORD_STATUS_SOURCE, then reads back `__miraRec.b64`). `url` selects the
- * matching video (by currentSrc/src); empty → the first playable one. Defensive:
- * any throw is recorded on `__miraRec` rather than propagated. */
-export function mediaRecordStartSource(url: string): string {
+/** Page script that resolves the precise permalink for the video under a
+ * right-click at viewport coordinates (x, y), for the context menu's "Download
+ * Video" on a streamed video. Returns the URL string (or the page URL as a
+ * fallback). Uses the same nearest-permalink logic as the DOM harvest. */
+export function nearestVideoPermalinkSource(x: number, y: number): string {
   return `(function () {
+    ${PERMALINK_FN}
     try {
-      // One recording at a time per tab: the state lives on a single global, so a
-      // second concurrent capture would corrupt the first. Refuse instead.
-      if (window.__miraRec && window.__miraRec.status === 'recording') return 'busy';
-      var want = ${JSON.stringify(url || '')};
-      var vids = [].slice.call(document.querySelectorAll('video'));
-      var v = want ? vids.filter(function (x) { return (x.currentSrc || x.src) === want; })[0] : null;
-      if (!v) v = vids.filter(function (x) { return (x.readyState || 0) >= 2; })[0] || vids[0];
-      if (!v) return 'no-video';
-      var capture = v.captureStream || v.mozCaptureStream;
-      if (!capture || !window.MediaRecorder) return 'no-capture';
-      var elStream = capture.call(v);
-      // Record a CANVAS we draw the video into, not the element's own video track.
-      // When the gallery hides the web view the <video> stops PAINTING to screen,
-      // which starves captureStream's video track (the "audio only, no frames"
-      // bug) — but drawImage() still reads each decoded frame, so the canvas keeps
-      // producing frames. Audio is taken straight from the element's stream.
-      var canvas = document.createElement('canvas');
-      canvas.width = v.videoWidth || 640;
-      canvas.height = v.videoHeight || 360;
-      var cctx = canvas.getContext('2d');
-      var drawTimer = setInterval(function () {
-        try {
-          if (v.videoWidth && canvas.width !== v.videoWidth) { canvas.width = v.videoWidth; canvas.height = v.videoHeight; }
-          cctx.drawImage(v, 0, 0, canvas.width, canvas.height);
-        } catch (e) {}
-      }, 40);
-      var out;
-      if (canvas.captureStream) {
-        out = new MediaStream();
-        canvas.captureStream(25).getVideoTracks().forEach(function (t) { out.addTrack(t); });
-        elStream.getAudioTracks().forEach(function (t) { out.addTrack(t); });
-      } else {
-        out = elStream; // no canvas capture support — fall back (may miss frames offscreen)
-      }
-      var types = ['video/mp4', 'video/webm;codecs=h264,opus', 'video/webm;codecs=vp9,opus', 'video/webm'];
-      var mt = types.filter(function (t) { return MediaRecorder.isTypeSupported(t); })[0] || '';
-      var rec = new MediaRecorder(out, mt ? { mimeType: mt } : undefined);
-      var chunks = [];
-      var dur = (isFinite(v.duration) && v.duration > 0) ? v.duration : 0;
-      var R = { status: 'recording', error: '', size: 0, len: 0, mime: mt || 'video/webm', dur: dur, cur: 0, stalled: false };
-      window.__miraRec = R;
-      rec.ondataavailable = function (e) { if (e.data && e.data.size) { chunks.push(e.data); R.size += e.data.size; } };
-      rec.onerror = function (e) { R.status = 'error'; R.error = String((e && e.error && e.error.message) || 'recorder error'); };
-      rec.onstop = function () {
-        // A stall stopped the recorder deliberately — keep the error verdict
-        // instead of finalizing a truncated/empty file as success.
-        if (R.stalled) { R.status = 'error'; if (!R.error) R.error = 'playback stalled'; return; }
-        try {
-          var blob = new Blob(chunks, { type: R.mime });
-          var fr = new FileReader();
-          fr.onload = function () { var s = String(fr.result || ''); var c = s.indexOf(','); R.b64 = c >= 0 ? s.slice(c + 1) : ''; R.len = R.b64.length; R.status = 'done'; };
-          fr.onerror = function () { R.status = 'error'; R.error = 'read failed'; };
-          fr.readAsDataURL(blob);
-        } catch (e) { R.status = 'error'; R.error = String(e && e.message || e); }
-      };
-      var stop = function () { try { clearInterval(drawTimer); } catch (e) {} try { if (rec.state !== 'inactive') rec.stop(); } catch (e) {} };
-      v.addEventListener('ended', stop, { once: true });
-      // Hard ceiling on wall-clock in case 'ended' never fires.
-      setTimeout(stop, ((dur > 0 ? dur : 60) + 3) * 1000);
-      // Stall watchdog: if NEITHER playback time NOR the captured size advances for
-      // a few seconds, the page is likely paused in the background (the gallery
-      // hides the web view) — fail FAST with a clear reason instead of waiting the
-      // whole duration for an empty file.
-      // Gauge progress by PLAYBACK time, not captured size: the canvas emits
-      // frames even when the video is paused (it re-draws the last frame), so
-      // size alone can't reveal a stall. currentTime only advances while playing.
-      var lastT = -1, stuck = 0;
-      var wd = setInterval(function () {
-        if (!window.__miraRec || R.status !== 'recording') { clearInterval(wd); return; }
-        R.cur = v.currentTime || 0;
-        var advanced = (v.currentTime !== lastT);
-        lastT = v.currentTime;
-        if (advanced) { stuck = 0; }
-        else if (++stuck >= 4) {
-          R.stalled = true;
-          R.error = 'playback stalled (video paused in background?)';
-          clearInterval(wd);
-          stop();
-        }
-      }, 1000);
-      v.muted = true;
-      try { v.currentTime = 0; } catch (e) {}
-      rec.start(1000);
-      var p = v.play(); if (p && p.catch) p.catch(function () {});
-      return 'started';
-    } catch (e) {
-      window.__miraRec = { status: 'error', error: String(e && e.message || e) };
-      return 'error';
-    }
+      var el = document.elementFromPoint(${Math.round(x)}, ${Math.round(y)});
+      if (!el) return (typeof location !== 'undefined' && location.href) || '';
+      return miraNearestPermalink(el) || location.href;
+    } catch (e) { return (typeof location !== 'undefined' && location.href) || ''; }
   })();`
 }
-
-/** Page script that reads the current recording status as a JSON string (never
- * the payload itself — that is read separately in chunks). `cur`/`dur` drive a
- * progress display; `stalled` marks a background-pause failure. */
-export const MEDIA_RECORD_STATUS_SOURCE = String.raw`(function () {
-  var r = window.__miraRec;
-  if (!r) return JSON.stringify({ status: 'missing' });
-  return JSON.stringify({ status: r.status, error: r.error, size: r.size, len: r.len, mime: r.mime, dur: r.dur, cur: r.cur });
-})();`
 
 const KINDS: ReadonlySet<MediaKind> = new Set<MediaKind>([
   'image',
@@ -294,8 +258,10 @@ export function parseDomMedia(raw: unknown): MediaItem[] {
   for (const entry of arr as RawDomMedia[]) {
     if (!entry || typeof entry !== 'object') continue
     const url = typeof entry.url === 'string' ? entry.url : ''
-    // Drop empty records that are not the special tainted-canvas case.
-    if (!url && !entry.tainted) continue
+    const pageUrl = typeof entry.pageUrl === 'string' ? entry.pageUrl : ''
+    // Drop empty records — EXCEPT a tainted canvas, or a url-less video that still
+    // carries a permalink (downloadable via yt-dlp even with no direct src).
+    if (!url && !entry.tainted && !pageUrl) continue
     // When the record carries a MIME type it is authoritative — a <source
     // type="video/mp4"> is a video even if the script guessed "image". Fall back
     // to the script's kind only when there is no MIME to classify from (canvas,
@@ -312,6 +278,7 @@ export function parseDomMedia(raw: unknown): MediaItem[] {
     if (typeof entry.height === 'number' && entry.height > 0) item.height = entry.height
     if (typeof entry.alt === 'string' && entry.alt) item.alt = entry.alt
     if (typeof entry.poster === 'string' && entry.poster) item.poster = entry.poster
+    if (typeof entry.pageUrl === 'string' && entry.pageUrl) item.pageUrl = entry.pageUrl
     if (entry.tainted) item.tainted = true
     out.push(item)
   }

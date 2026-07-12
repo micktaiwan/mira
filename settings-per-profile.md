@@ -28,7 +28,7 @@ Les settings sont **100 % globaux**, partagés par tous les profils :
 1. **Le contexte de commande connaît déjà le profil.** `makeContext(target)`
    reçoit la fenêtre ciblée ; `getSettings`/`setHomeUrl` pourraient adresser le
    bon profil sans nouvelle plomberie de routage. La surface Settings étant un
-   onglet *dans* une fenêtre profil, « quel profil édite-t-on ? » a une réponse
+   onglet _dans_ une fenêtre profil, « quel profil édite-t-on ? » a une réponse
    naturelle : celui de la fenêtre.
 2. **Le pattern de persistance par profil existe déjà.** `sessions.json` est un
    `Record<profileId, …>` (`session-store.ts`). On copierait ce modèle — pas de
@@ -37,7 +37,7 @@ Les settings sont **100 % globaux**, partagés par tous les profils :
 ## Impacts concrets si on le faisait
 
 - `settings-store.ts` : ajouter un normalizer de **map** `Record<profileId,
-  AppSettings>` (comme `normalizeSessions`) ; définir le défaut d'un profil sans
+AppSettings>` (comme `normalizeSessions`) ; définir le défaut d'un profil sans
   entrée.
 - Stockage (`index.ts`) : `settings.json` devient une map par id. **Migration**
   du fichier plat actuel `{homeUrl}` (l'appliquer au `default` ? à tous ?) sinon

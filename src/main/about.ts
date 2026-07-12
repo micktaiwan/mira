@@ -28,6 +28,7 @@ export function aboutPanelOptions({ version, year, chrome }: AboutInput): AboutP
     copyright: `© ${year} Mickael Faivre-Maçon`,
     // Shown under the version. "mira" = look (Latin mirari, to marvel) + a star:
     // a browser's job is to show the web.
-    credits: 'A personal web browser, built on Chromium.\nmira — “look”, from Latin mirari (to marvel), and a star.'
+    credits:
+      'A personal web browser, built on Chromium.\nmira — “look”, from Latin mirari (to marvel), and a star.'
   }
 }

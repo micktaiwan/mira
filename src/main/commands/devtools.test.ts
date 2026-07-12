@@ -20,11 +20,7 @@ describe('exec-js', () => {
     await registry.execute('select-tab', { id: 'tab-1' }, ctx)
     expect(tabState().activeId).toBe('tab-1')
 
-    const res = await registry.execute(
-      'exec-js',
-      { code: 'document.title', tabId: 'tab-2' },
-      ctx
-    )
+    const res = await registry.execute('exec-js', { code: 'document.title', tabId: 'tab-2' }, ctx)
     expect(res).toEqual({ ok: true, result: 'ran:document.title' })
     expect(execJs).toEqual([{ code: 'document.title', tabId: 'tab-2' }])
   })

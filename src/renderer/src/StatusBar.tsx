@@ -34,11 +34,11 @@ interface Status {
   /** The capture buffer's RAM footprint, formatted (e.g. "48.0 KB") — what the
    * always-on capture costs. */
   mediaText: string
-  /** Video recordings in flight (captureStream capture runs in main, so this
-   * shows even after the gallery is closed). */
-  recordings: number
-  /** Epoch ms the earliest active recording started, for the elapsed clock. */
-  recordingSince: number | null
+  /** yt-dlp video downloads in flight (run in a background process, so this shows
+   * even with no gallery open — often the only feedback for a context-menu save). */
+  downloads: number
+  /** Epoch ms the earliest active download started, for the elapsed clock. */
+  downloadingSince: number | null
 }
 
 const EMPTY: Status = {
@@ -50,8 +50,8 @@ const EMPTY: Status = {
   cookieUrl: null,
   mediaCount: null,
   mediaText: '',
-  recordings: 0,
-  recordingSince: null
+  downloads: 0,
+  downloadingSince: null
 }
 
 /** m:ss for an elapsed-ms span. */
@@ -133,8 +133,8 @@ export default function StatusBar(): React.JSX.Element {
           ok: boolean
           count?: number
           text?: string
-          recordings?: number
-          recordingSince?: number | null
+          downloads?: number
+          downloadingSince?: number | null
         }
       ]
       if (!alive || !res.ok) return
@@ -147,8 +147,8 @@ export default function StatusBar(): React.JSX.Element {
         cookieUrl: cookieRes.ok ? (cookieRes.url ?? null) : null,
         mediaCount: mediaRes.ok ? (mediaRes.count ?? null) : null,
         mediaText: mediaRes.ok ? (mediaRes.text ?? '') : '',
-        recordings: mediaRes.ok ? (mediaRes.recordings ?? 0) : 0,
-        recordingSince: mediaRes.ok ? (mediaRes.recordingSince ?? null) : null
+        downloads: mediaRes.ok ? (mediaRes.downloads ?? 0) : 0,
+        downloadingSince: mediaRes.ok ? (mediaRes.downloadingSince ?? null) : null
       })
     }
     // get-status walks every process (getAppMetrics), so coalesce bursts of tab
@@ -202,20 +202,28 @@ export default function StatusBar(): React.JSX.Element {
     void window.mira.command('hide-tooltip')
   }
 
-  const { tabs, processes, cookies, cookieUrl, mediaCount, mediaText, recordings, recordingSince } =
-    status
+  const {
+    tabs,
+    processes,
+    cookies,
+    cookieUrl,
+    mediaCount,
+    mediaText,
+    downloads,
+    downloadingSince
+  } = status
 
-  // Tick the elapsed clock every second while recording (the memory poll only
-  // runs every 5s, too coarse for a live timer).
+  // Tick the elapsed clock every second while a download runs (the memory poll
+  // only runs every 5s, too coarse for a live timer).
   useEffect(() => {
-    if (recordings === 0) return
+    if (downloads === 0) return
     const id = setInterval(() => setRecNow(Date.now()), 1000)
     return () => clearInterval(id)
-  }, [recordings])
+  }, [downloads])
 
-  const recElapsed =
-    recordings > 0 && recordingSince && recNow > recordingSince
-      ? elapsedText(recNow - recordingSince)
+  const dlElapsed =
+    downloads > 0 && downloadingSince && recNow > downloadingSince
+      ? elapsedText(recNow - downloadingSince)
       : '0:00'
   const tabsDetail = tabs ? `${tabs.loaded} loaded, ${tabs.asleep} asleep` : ''
   const cookieDetail =
@@ -230,13 +238,13 @@ export default function StatusBar(): React.JSX.Element {
     <div className="status-bar">
       {hoverUrl && <span className="status-item status-hover-url">{hoverUrl}</span>}
       <div className="status-right">
-        {recordings > 0 && (
+        {downloads > 0 && (
           <span
-            className="status-item status-recording status-clickable"
+            className="status-item status-downloading status-clickable"
             onMouseEnter={(e) =>
               show(
                 e.currentTarget,
-                `Recording ${recordings} video${recordings > 1 ? 's' : ''} in the background — saves to Downloads when done. Click to open the gallery.`
+                `Downloading ${downloads} video${downloads > 1 ? 's' : ''} with yt-dlp in the background — saves to Downloads when done. Click to open the gallery.`
               )
             }
             onMouseLeave={hide}
@@ -245,7 +253,7 @@ export default function StatusBar(): React.JSX.Element {
               void window.mira.command('open-media-gallery')
             }}
           >
-            {`🔴 ${recElapsed}`}
+            {`⬇ ${dlElapsed}`}
           </span>
         )}
         {mediaCount != null && mediaCount > 0 && (

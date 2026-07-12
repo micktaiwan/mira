@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { buildPageMenu, type PageContext } from './page-menu'
+import { buildPageMenu, buildMediaItem, type PageContext } from './page-menu'
 
 const base: PageContext = {
   linkURL: '',
   selectionText: '',
   isEditable: false,
   canGoBack: false,
-  canGoForward: false
+  canGoForward: false,
+  mediaType: 'none',
+  srcURL: ''
 }
 
 describe('buildPageMenu', () => {
@@ -46,5 +48,54 @@ describe('buildPageMenu', () => {
     const items = buildPageMenu(base)
     expect(items.some((i) => i.type === 'role')).toBe(false)
     expect(items.some((i) => i.type === 'separator')).toBe(false)
+  })
+
+  it('adds a direct "Download Image" command over an image', () => {
+    const items = buildPageMenu({ ...base, mediaType: 'image', srcURL: 'https://x.com/a.png' })
+    expect(items).toContainEqual({
+      type: 'command',
+      command: 'download-media',
+      params: { url: 'https://x.com/a.png' },
+      label: 'Download Image',
+      enabled: true
+    })
+  })
+
+  it('routes a streamed (blob:) video to the yt-dlp download-stream item', () => {
+    const items = buildPageMenu({ ...base, mediaType: 'video', srcURL: 'blob:https://x.com/abc' })
+    expect(items).toContainEqual({ type: 'download-stream', label: 'Download Video' })
+  })
+})
+
+describe('buildMediaItem', () => {
+  it('downloads a plain-file video directly (not via yt-dlp)', () => {
+    const item = buildMediaItem('video', 'https://x.com/clip.mp4')
+    expect(item).toEqual({
+      type: 'command',
+      command: 'download-media',
+      params: { url: 'https://x.com/clip.mp4' },
+      label: 'Download Video',
+      enabled: true
+    })
+  })
+
+  it('routes a blob: or empty video src to yt-dlp (a stream has no file)', () => {
+    expect(buildMediaItem('video', 'blob:x')).toEqual({
+      type: 'download-stream',
+      label: 'Download Video'
+    })
+    expect(buildMediaItem('video', '')).toEqual({
+      type: 'download-stream',
+      label: 'Download Video'
+    })
+  })
+
+  it('downloads audio directly and ignores non-media', () => {
+    expect(buildMediaItem('audio', 'https://x.com/a.mp3')).toMatchObject({
+      command: 'download-media',
+      label: 'Download Audio'
+    })
+    expect(buildMediaItem('none', '')).toBeNull()
+    expect(buildMediaItem('image', '')).toBeNull()
   })
 })
