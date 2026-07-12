@@ -280,7 +280,7 @@ tout investissement UI. Si E2 casse, on le sait au plus tôt.
 ## 7. Décisions (toutes tranchées avec Mickael, 2026-07-10)
 
 - **D1 — Licence.** `license: 'GPL-3.0'` : gratuit, impose de fournir les sources **si on
-  distribue** Mira (repo privé interne = pas un problème aujourd'hui). Alternative :
+  distribue** Mira (pas de distribution prévue aujourd'hui = pas un problème). Alternative :
   sponsor GitHub → licence Patron. **Reco : GPL-3.0. [TRANCHÉ 2026-07-10 : GPL-3.0 — pas de
   distribution prévue.]**
 - **D2 — Extensions globales ou par profil ?** **[TRANCHÉ 2026-07-10 : PAR PROFIL** — « on

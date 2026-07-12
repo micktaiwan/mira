@@ -1,7 +1,7 @@
 // The LLM engine behind skills: turn a system prompt + page text into a summary.
 // Two real providers plus a local fallback, chosen in Settings:
 //   - 'claude-cli'    : shell out to `claude -p` (Claude Code print mode), which
-//                       uses Mickael's logged-in subscription — no API key, no cost.
+//                       uses the logged-in Claude subscription — no API key, no cost.
 //   - 'anthropic-api' : POST the Anthropic Messages API with a stored key.
 //   - 'extractive'    : the dependency-free local lead-sentence summary (skills.ts).
 //
@@ -242,7 +242,7 @@ export function composeChatPrompt(systemPrompt: string, messages: ChatMessage[])
 // --- CLI stream-json (image-capable) ------------------------------------------
 // Plain `claude -p "<text>"` can't take an image. `claude -p --input-format
 // stream-json` accepts a user message whose `content` is a block array — text +
-// an image block, exactly like the API — so the CLI (Mickael's subscription) can
+// an image block, exactly like the API — so the CLI (the Claude subscription) can
 // see a screenshot too. Used ONLY when a screenshot is attached; the text-only
 // chat stays on the simpler plain-text path.
 

@@ -37,7 +37,7 @@ export function clampWidth(
 }
 
 /** The built-in home page, used when nothing is persisted yet. */
-export const DEFAULT_HOME_URL = 'https://www.example.com'
+export const DEFAULT_HOME_URL = 'https://www.google.com'
 
 /** The default AI engine: Claude Code print mode, which uses the logged-in
  * subscription with no API key. */
