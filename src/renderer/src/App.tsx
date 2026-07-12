@@ -28,6 +28,14 @@ function activeUrlOf(tabs: TabInfo[], activeId: string | null): string {
   return tabs.find((t) => t.id === activeId)?.url ?? ''
 }
 
+/** Whether an address-bar push should overwrite the field. When the active tab
+ * changed (select / close / open) we always resync, else a stale URL lingers
+ * while the bar holds focus. For a same-tab push (live title/favicon) we skip
+ * while focused so the user's in-progress edit is not clobbered. */
+export function shouldSyncAddressBar(tabChanged: boolean, barFocused: boolean): boolean {
+  return tabChanged || !barFocused
+}
+
 /** A favorites tree node as the chrome sees it. The full tree lives in the native
  * Bookmarks menu (main-side); the chrome only needs the flat url→id map to drive
  * the address-bar star, so `url`/`children` are optional here. */
@@ -58,6 +66,10 @@ function App(): React.JSX.Element {
   // Always-fresh copy of the active tab's URL, so the focus/blur handlers can
   // read it without depending on React's async state.
   const activeUrlRef = useRef('')
+  // Last activeId we synced the bar to. A change means a different tab is now
+  // active (select / close / open), so the bar must resync even if focused —
+  // otherwise closing a tab leaves the old URL in the field until it blurs.
+  const syncedActiveIdRef = useRef<string | null>(null)
   // The chrome holds no tab state of its own: main pushes the strip, we render
   // it, and every action is a command back to the registry (CLAUDE.md).
   const [tabs, setTabs] = useState<TabInfo[]>([])
@@ -115,7 +127,13 @@ function App(): React.JSX.Element {
   const syncAddressBar = (nextTabs: TabInfo[], nextActiveId: string | null): void => {
     const active = activeUrlOf(nextTabs, nextActiveId)
     activeUrlRef.current = active
-    if (document.activeElement !== addressInputRef.current) setUrl(active)
+    // The active tab changed (select / close / open): resync unconditionally, so a
+    // stale URL never lingers in the bar while it happens to hold focus. Only for a
+    // same-tab push (live title/favicon) do we keep the field's edits untouched.
+    const tabChanged = nextActiveId !== syncedActiveIdRef.current
+    syncedActiveIdRef.current = nextActiveId
+    const barFocused = document.activeElement === addressInputRef.current
+    if (shouldSyncAddressBar(tabChanged, barFocused)) setUrl(active)
   }
 
   useEffect(() => {
