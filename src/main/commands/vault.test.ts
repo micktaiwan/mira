@@ -71,3 +71,25 @@ describe('unlock-profile / lock-profile', () => {
     expect((await run(ctx, 'lock-profile', {})).error).toMatch(/id/)
   })
 })
+
+describe('lock-all-vaults', () => {
+  it('locks every currently-unlocked profile and reports them', async () => {
+    const { ctx } = makeContext()
+    for (const id of ['work', 'perso']) {
+      await run(ctx, 'encrypt-profile', { id, password: 'pw' })
+      await run(ctx, 'unlock-profile', { id, password: 'pw' })
+    }
+    expect((await run(ctx, 'list-vaults')).unlocked).toEqual(['work', 'perso'])
+
+    const res = await run(ctx, 'lock-all-vaults')
+    expect(res.ok).toBe(true)
+    expect((res.locked as string[]).sort()).toEqual(['perso', 'work'])
+    expect((await run(ctx, 'list-vaults')).unlocked).toEqual([])
+  })
+
+  it('is a no-op with nothing unlocked', async () => {
+    const { ctx } = makeContext()
+    const res = await run(ctx, 'lock-all-vaults')
+    expect(res).toMatchObject({ ok: true, locked: [] })
+  })
+})

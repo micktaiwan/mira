@@ -28,6 +28,7 @@ import type { StatusContext } from './status'
 import type { TabsContext } from './tabs'
 import type { TooltipContext } from './tooltip'
 import type { VaultContext } from './vault'
+import type { ZenContext } from './zen'
 
 export type CommandContext = AppContext &
   BookmarkContext &
@@ -50,4 +51,5 @@ export type CommandContext = AppContext &
   StatusContext &
   TabsContext &
   TooltipContext &
-  VaultContext
+  VaultContext &
+  ZenContext

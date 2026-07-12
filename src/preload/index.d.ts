@@ -19,6 +19,10 @@ export interface TabsState {
   tabs: TabInfo[]
   activeId: string | null
   panelCollapsed: boolean
+  /** Zen (focus) mode: true while the toolbar, status bar, and both side panels
+   * are hidden. Rides this channel because it is a chrome layout bit like
+   * panelCollapsed. */
+  chromeHidden: boolean
 }
 
 /** A favorites tree node (mirrors BookmarkNode in the registry). The full tree

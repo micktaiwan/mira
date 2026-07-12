@@ -427,6 +427,9 @@ app.whenReady().then(async () => {
       // bus as their toolbar buttons (no arg → flip the current state).
       toggleTabsPanel: () => runDetached('toggle-tabs-panel', {}, profiles.contextForFocused()),
       toggleSkillPane: () => runDetached('toggle-skill-pane', {}, profiles.contextForFocused()),
+      // Cmd+Shift+H: zen mode — hide/show the toolbar, status bar, and both panels
+      // at once. Same bus as the socket / MCP (no arg → flip).
+      toggleZen: () => runDetached('toggle-zen', {}, profiles.contextForFocused()),
       // Route the accelerators through the registry so they hit the same bus as
       // the toolbar buttons and the socket — the focused window is the target.
       goBack: () => runDetached('back', {}, profiles.contextForFocused()),
@@ -509,7 +512,23 @@ app.whenReady().then(async () => {
   // Tell the manager the app is quitting BEFORE its windows close, so a window
   // open at quit keeps its "was open" flag (and reopens next launch) instead of
   // being recorded as a user close. Fires before the 'closed' handlers.
-  app.on('before-quit', () => profiles.beginQuit())
+  //
+  // If any encrypted profile is still unlocked, DEFER the quit and re-lock it first:
+  // otherwise its live plaintext is left on disk and reconcile wipes it at next
+  // startup, discarding every cookie/login since the last window-close. We
+  // preventDefault, lock all vaults (a few seconds of hdiutil), then quit for real
+  // (the second pass skips this block — nothing is unlocked anymore).
+  let quitVaultLockStarted = false
+  app.on('before-quit', (event) => {
+    profiles.beginQuit()
+    if (quitVaultLockStarted || !profiles.hasUnlockedVaults()) return
+    quitVaultLockStarted = true
+    event.preventDefault()
+    profiles
+      .lockAllVaults()
+      .catch((error) => console.error('[mira] lock-on-quit failed', error))
+      .finally(() => app.quit())
+  })
 
   // Session writes are debounced in the ProfileManager; flush any pending one on
   // quit so the last changes always land (see flushPendingSaves).

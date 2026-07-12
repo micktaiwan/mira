@@ -36,6 +36,7 @@ import { statusCommands } from './status'
 import { tabsCommands } from './tabs'
 import { tooltipCommands } from './tooltip'
 import { vaultCommands } from './vault'
+import { zenCommands } from './zen'
 
 // Public types, re-exported so consumers keep importing from './commands'.
 export type { CommandContext } from './context'
@@ -71,6 +72,8 @@ export type { StatusContext, MemoryUsage, TabCounts } from './status'
 export type { TabsContext, TabInfo, TabKind } from './tabs'
 export type { TooltipContext } from './tooltip'
 export type { VaultContext } from './vault'
+export type { ZenContext, ZenState, PanelSnapshot } from './zen'
+export { nextZen } from './zen'
 
 export type CommandRegistry = CommandRegistryOf<CommandContext>
 
@@ -97,7 +100,8 @@ export function createCommandRegistry(): CommandRegistry {
     ...statusCommands,
     ...tabsCommands,
     ...tooltipCommands,
-    ...vaultCommands
+    ...vaultCommands,
+    ...zenCommands
   }
   return buildRegistry(commands)
 }

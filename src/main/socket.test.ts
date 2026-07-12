@@ -116,6 +116,7 @@ function setup(): {
       panelCollapsed: false
     }),
     toggleTabsPanel: (collapsed?: boolean) => ({ collapsed: collapsed ?? true }),
+    toggleZen: (hidden?: boolean) => ({ hidden: hidden ?? true }),
     setPaletteOpen: (open?: boolean) => ({ open: open ?? true }),
     // Bookmark slice: minimal stubs, not exercised by these socket-dispatch tests.
     addBookmark: (url?: string, title?: string) => ({
@@ -150,6 +151,7 @@ function setup(): {
     encryptProfile: async (id: string) => ({ id }),
     unlockProfile: async (id: string) => ({ id }),
     lockProfile: async (id: string) => ({ id, locked: true }),
+    lockAllVaults: async () => ({ locked: [] }),
     listVaults: () => ({ encrypted: [], unlocked: [] }),
     openLocationSettings: () => ({ opened: true }),
     locationAuthStatus: () => 'authorized' as const,

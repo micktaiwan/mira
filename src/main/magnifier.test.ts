@@ -49,6 +49,23 @@ describe('zoomAt', () => {
     expect((400 + s.originX) / s.scale).toBeCloseTo(before, 3)
   })
 
+  it('snaps to a hard 1× when zooming out into the near-1 band (clean exit)', () => {
+    // An out-notch that WOULD land on an invisible ~1.002× residual (1.2 * e^-0.18)
+    // must instead snap to a hard 1× — that residual is the "zoom eats scroll" bug.
+    const out = zoomAt({ scale: 1.2, originX: 20, originY: 20 }, 100, 100, 90, W, H)
+    expect(out.scale).toBe(MAG_MIN_SCALE)
+    expect(isMagnified(out)).toBe(false)
+    // Even a tiny out-notch from within the near-1 band snaps off, never sticks.
+    const tiny = zoomAt({ scale: 1.03, originX: 0, originY: 0 }, 100, 100, 5, W, H)
+    expect(tiny.scale).toBe(MAG_MIN_SCALE)
+  })
+
+  it('does NOT snap a gentle zoom-IN starting from 1×', () => {
+    // The snap is directional: starting to zoom in from off must not be swallowed.
+    const inn = zoomAt(NO_MAGNIFIER, 100, 100, -20, W, H)
+    expect(inn.scale).toBeGreaterThan(1)
+  })
+
   it('floors scale at MIN but has no upper cap', () => {
     let s = NO_MAGNIFIER
     for (let i = 0; i < 50; i++) s = zoomAt(s, 450, 350, -120, W, H)

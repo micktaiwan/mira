@@ -22,6 +22,9 @@ export interface AppMenuHandlers {
   /** Toggle the right AI panel (Cmd+J) in the focused window. Wired to the
    * toggle-skill-pane command, so the same bus as the toolbar ◪ button. */
   toggleSkillPane: () => void
+  /** Toggle zen (focus) mode (Cmd+Shift+H) in the focused window: hide/show the
+   * toolbar, status bar, and both side panels at once. Wired to toggle-zen. */
+  toggleZen: () => void
   /** Navigate the focused window back / forward in its history. Wired to the
    * back / forward commands so the Cmd+Arrow accelerators stay pilotable. */
   goBack: () => void
@@ -278,6 +281,14 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
           label: 'Toggle AI Panel',
           accelerator: 'CmdOrCtrl+J',
           click: () => handlers.toggleSkillPane()
+        },
+        {
+          // Zen mode: hide toolbar + status bar + both panels in one shot; toggle
+          // back to restore whatever was open. Character-mapped accelerator (not
+          // globalShortcut), so H is fine on AZERTY (CLAUDE.md piège #4).
+          label: 'Toggle Zen Mode',
+          accelerator: 'CmdOrCtrl+Shift+H',
+          click: () => handlers.toggleZen()
         },
         { type: 'separator' },
         {

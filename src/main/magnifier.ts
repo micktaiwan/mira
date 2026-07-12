@@ -42,6 +42,14 @@ export const MAG_MIN_SCALE = 1
  * up (deltaY < 0) zooms in. One trackpad notch (~120) ≈ a 1.27× step. */
 export const MAG_WHEEL_K = 0.002
 
+/** Clean-exit threshold: when zooming OUT lands the scale below this, snap to a
+ * hard 1× (off) instead of leaving a near-1 residual. Without it, trackpad
+ * momentum drops you on an invisible ~1.01× that still reads as magnified, so the
+ * wheel stays captured and the page cannot scroll natively — the "zoom eats the
+ * scroll" bug, only cleared by a reload. Directional (only on the way out) so a
+ * gentle zoom-IN from 1× is never swallowed. */
+export const MAG_SNAP_OUT = 1.05
+
 /** Scale is "on" only clearly above 1, to avoid a stuck 1.0001× clip. */
 const ZOOM_EPSILON = 1e-3
 
@@ -90,7 +98,10 @@ export function zoomAt(
   width: number,
   height: number
 ): MagnifierState {
-  const nextScale = clampScale(state.scale * Math.exp(-deltaY * MAG_WHEEL_K))
+  let nextScale = clampScale(state.scale * Math.exp(-deltaY * MAG_WHEEL_K))
+  // Clean exit: zooming out (deltaY > 0) into the near-1 band collapses to a hard
+  // 1×, so we never sit on an invisible residual that keeps the wheel captured.
+  if (deltaY > 0 && nextScale < MAG_SNAP_OUT) nextScale = MAG_MIN_SCALE
   // The page point under the cursor before the zoom must stay under it after.
   const anchor = pageAt(state, cursorX, cursorY)
   const next: MagnifierState = {

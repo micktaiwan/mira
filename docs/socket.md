@@ -104,6 +104,7 @@ clicks are swallowed (they'd land wrong), so it is a "look only" mode.
 | `move-tab`              | `id`, `toIndex`       | reorder the strip                                                                                                                                                                                                         |
 | `reopen-closed-tab`     | —                     | restore the most recently closed tab                                                                                                                                                                                      |
 | `toggle-tabs-panel`     | `collapsed?`          | collapse/expand the tab sidebar                                                                                                                                                                                           |
+| `toggle-zen`            | `hidden?`             | zen (focus) mode: hide/show the toolbar, status bar, and both side panels at once. `hidden` omitted flips it; a boolean forces it. Exiting restores the panels to their pre-zen state. Cmd+Shift+H.                        |
 
 ### Page introspection (devtools domain)
 
@@ -171,6 +172,18 @@ The media gallery (shortcut `Cmd+Alt+Shift+M`) collects every media on the page 
 | `focus-app`            | —             | bring Mira to the foreground                                                                                                                                                                                           |
 | `list-spaces`          | —             | macOS virtual desktops per display, in Mission Control order, plus where the target window sits (`window: {displayId, spaceIndex}`, null when unknown). `displays: []` = no Spaces support (non-mac / addon not built) |
 | `move-window-to-space` | `spaceIndex`  | move the target window onto that desktop (0-based index on its display). `moved:false` = was already there. Persisted: the window reopens on that desktop next launch                                                  |
+
+### Vault (encrypted profiles)
+
+A profile marked `encrypted` keeps its data (browsing trails + session partition) in an AES-256 sparsebundle at rest. Unlocking mounts it and copies the data back to the normal userData locations; locking re-encrypts and wipes the plaintext.
+
+| Command            | Params            | Effect / result                                                                                                                                                            |
+| ------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `encrypt-profile`  | `id`, `password`  | turn a profile into an encrypted one (creates its vault, moves data in, wipes plaintext). Leaves it LOCKED. Not the default profile; window must be closed                |
+| `unlock-profile`   | `id`, `password`  | mount + restore the vault to its live locations so the window can open. Wrong password → `{ok:false}`                                                                      |
+| `lock-profile`     | `id`              | copy the live data back into the vault and wipe the plaintext (`locked:false` if it was already locked). Close the profile window first                                   |
+| `lock-all-vaults`  | —                 | lock EVERY currently-unlocked vault at once (closes each window, re-encrypts, wipes). Returns `{locked:[ids]}`. A panic-lock; also the path app quit uses to not lose a session left unlocked |
+| `list-vaults`      | —                 | `{encrypted:[ids], unlocked:[ids]}`                                                                                                                                       |
 
 ### Settings
 

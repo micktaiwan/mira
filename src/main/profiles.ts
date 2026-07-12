@@ -36,11 +36,12 @@ import type {
   FindStopAction,
   MemoryUsage,
   PaletteMode,
+  PanelSnapshot,
   ProfileInfo,
   SkillPaneState,
   TabInfo
 } from './commands'
-import { closedSkillPane, formatMemory } from './commands'
+import { closedSkillPane, formatMemory, nextZen } from './commands'
 import { MediaBuffer, captureStats, fileNameFor, mergeMedia } from './media-capture'
 import { MEDIA_COLLECT_SOURCE, nearestVideoPermalinkSource, parseDomMedia } from './media-collect'
 import { ytdlpDownload } from './ytdlp'
@@ -222,6 +223,13 @@ interface ProfileWindow {
   devtools: Map<string, WebContentsView>
   state: TabState
   panelCollapsed: boolean
+  /** Zen (focus) mode: while true, layout() hides the toolbar + status bar (the
+   * active view fills the whole window height) and both side panels are collapsed.
+   * Set only through toggleZenIn. */
+  chromeHidden: boolean
+  /** The pre-zen panel state, snapshotted on entering zen so exit restores the
+   * sidebar / AI pane to exactly what they were. null while not in zen. */
+  zenSnapshot: PanelSnapshot | null
   /** Id of this window's internal Settings tab, or null when none is open. The
    * settings tab is a strip entry with NO WebContentsView (chrome-rendered), so
    * "which tab is settings" lives here natively — like `loaded` — not in the pure
@@ -435,6 +443,11 @@ export class ProfileManager {
    * the close path tell the two apart: a user close marks the profile not-open
    * (so it won't reopen), a quit leaves the open flag alone (so it will). */
   private quitting = false
+  /** True only while lockAllVaults() is closing+locking every unlocked vault (a
+   * bulk lock, e.g. on quit). It tells the window 'closed' handler to NOT also fire
+   * its own auto-lock for that profile — lockAllVaults locks each one explicitly,
+   * so without this both would race on the same vault (double hdiutil mount/copy). */
+  private lockingAll = false
   /** True only while openSavedProfiles() recreates the windows of the previous
    * session. Windows created then are put back on their saved virtual desktop;
    * a window opened later (user action) opens on the CURRENT desktop instead —
@@ -522,6 +535,12 @@ export class ProfileManager {
     if (!profile) throw new Error(`unknown profile: ${id}`)
     if (profile.encrypted) throw new Error(`already encrypted: ${id}`)
     if (this.openById.has(id)) throw new Error('close the profile window before encrypting it')
+    // Land freshly-set cookies/storage on disk BEFORE the vault captures them:
+    // Chromium buffers recent cookies in memory and only writes them to the SQLite
+    // DB on a timer, so an unflushed capture silently drops recent logins.
+    const ses = this.sessionFor(id)
+    await ses.cookies.flushStore().catch(() => {})
+    ses.flushStorageData()
     const plan = vaultPlan(this.deps.userDataDir, id)
     await vaultService.encrypt(plan, password)
     this.profiles = this.profiles.map((p) => (p.id === id ? { ...p, encrypted: true } : p))
@@ -562,9 +581,20 @@ export class ProfileManager {
     const password = this.unlockedVaults.get(id)
     if (password === undefined) return { id, locked: false }
     if (this.openById.has(id)) throw new Error('close the profile window before locking it')
+    await this.performVaultLock(id, password)
+    return { id, locked: true }
+  }
+
+  /** The actual lock work, shared by the command path (lockProfileVault, which
+   * first requires the window closed) and the bulk path (lockAllVaults, which
+   * closes the windows itself). Assumes the profile's window is already gone
+   * (handles released) and that it is unlocked with `password`. Flushes the live
+   * session to disk, copies it into the vault, wipes the plaintext, clears state. */
+  private async performVaultLock(id: string, password: string): Promise<void> {
     // Land every last change on disk BEFORE the copy: ProfileData's debounced
     // history/permissions writes, and the Electron session's cookies + DOM storage.
-    // Without this the vault would capture a slightly stale snapshot.
+    // Without this the vault captures a stale snapshot (recent cookies are buffered
+    // in Chromium's memory, not yet in the SQLite DB — the cookie-loss bug).
     this.dataById.get(id)?.flush()
     const ses = this.sessionFor(id)
     await ses.cookies.flushStore().catch(() => {})
@@ -581,7 +611,62 @@ export class ProfileManager {
     // plaintext we just wiped, and the next unlock re-reads from the vault.
     this.evictProfileDataCaches(id)
     this.deps.onChange?.()
-    return { id, locked: true }
+  }
+
+  /** Whether any encrypted profile is currently unlocked (has live plaintext on
+   * disk). index.ts checks this on 'before-quit' to decide whether to defer the
+   * quit and re-lock first. */
+  hasUnlockedVaults(): boolean {
+    return this.unlockedVaults.size > 0
+  }
+
+  /** Lock EVERY currently-unlocked vault: close each one's window (so its file
+   * handles are released), then copy its live data back into the vault and wipe the
+   * plaintext. Called on app quit so a session left unlocked is preserved instead of
+   * discarded by reconcile at next startup — and pilotable as `lock-all-vaults` (a
+   * panic-lock). Best-effort per profile: one failure is logged, the rest proceed. */
+  async lockAllVaults(): Promise<{ locked: string[] }> {
+    this.lockingAll = true
+    const locked: string[] = []
+    try {
+      for (const id of [...this.unlockedVaults.keys()]) {
+        const password = this.unlockedVaults.get(id)
+        if (password === undefined) continue
+        try {
+          await this.closeWindowAndWait(id)
+          await this.performVaultLock(id, password)
+          locked.push(id)
+        } catch (error) {
+          console.error(`[mira] lock-all of profile ${id} failed`, error)
+        }
+      }
+    } finally {
+      this.lockingAll = false
+    }
+    return { locked }
+  }
+
+  /** Close a profile's window (if open) and resolve once it is gone. Prefers a
+   * graceful close() (fires the 'close'/'closed' bookkeeping, e.g. geometry save),
+   * with a forced destroy() fallback if a page's beforeunload stalls it. The
+   * lockingAll flag keeps the 'closed' handler from double-locking underneath us. */
+  private closeWindowAndWait(id: string): Promise<void> {
+    const pw = this.openById.get(id)
+    if (!pw || pw.window.isDestroyed()) return Promise.resolve()
+    return new Promise<void>((resolve) => {
+      let done = false
+      const finish = (): void => {
+        if (done) return
+        done = true
+        resolve()
+      }
+      pw.window.once('closed', finish)
+      pw.window.close()
+      setTimeout(() => {
+        if (!pw.window.isDestroyed()) pw.window.destroy()
+        finish()
+      }, 2000)
+    })
   }
 
   /** Drop a profile's cached history/permissions and bookmarks readers, cancelling
@@ -902,6 +987,8 @@ export class ProfileManager {
       devtools: new Map(),
       state: emptyTabState(),
       panelCollapsed: false,
+      chromeHidden: false,
+      zenSnapshot: null,
       settingsTabId: null,
       closeArmedId: null,
       closedTabs: [],
@@ -974,7 +1061,10 @@ export class ProfileManager {
       // and can't reliably finish before exit; a quit-while-unlocked session's
       // leftover plaintext is discarded at next startup (reconcileVaults), which is
       // acceptable (losing an unclean session is fine — CONFIRMED). Fire-and-forget.
-      if (!this.quitting && this.unlockedVaults.has(profile.id)) {
+      // Skipped during a bulk lockAllVaults() (it locks this profile explicitly —
+      // see lockingAll) and during app quit (before-quit re-locks via lockAllVaults
+      // instead, so the close here must not race it).
+      if (!this.quitting && !this.lockingAll && this.unlockedVaults.has(profile.id)) {
         this.lockProfileVault(profile.id).catch((error) =>
           console.error(`[mira] auto-lock of profile ${profile.id} failed`, error)
         )
@@ -1573,15 +1663,20 @@ export class ProfileManager {
     // Panel widths are live (resizable): read the current settings, not the
     // startup deps, so a drag repositions the web view immediately.
     const x = pw.panelCollapsed ? 0 : this.appSettings.sidebarWidth
+    // Zen (focus) mode hides the toolbar AND the status bar: the chrome removes
+    // both from the DOM (App.tsx), so the native view must fill the space they
+    // left — start at y=0 and take the full window height.
+    const topChrome = pw.chromeHidden ? 0 : this.deps.toolbarHeight
     // The status bar sits at the very bottom of the chrome; leave room for it so
-    // the native view doesn't cover it (see CLAUDE.md, "les deux pièges").
-    const verticalChrome = this.deps.toolbarHeight + this.deps.statusBarHeight
+    // the native view doesn't cover it (see CLAUDE.md, "les deux pièges") — unless
+    // zen mode hid it too.
+    const verticalChrome = pw.chromeHidden ? 0 : this.deps.toolbarHeight + this.deps.statusBarHeight
     // The skill pane, when open, sits on the RIGHT: shrink the view's width by it
     // so the pane is beside the page, not hidden behind the native layer.
     const paneRight = pw.skillPane.open ? this.appSettings.skillPaneWidth : 0
     const bounds = {
       x,
-      y: this.deps.toolbarHeight,
+      y: topChrome,
       width: Math.max(0, width - x - paneRight),
       height: Math.max(0, height - verticalChrome)
     }
@@ -1708,7 +1803,10 @@ export class ProfileManager {
     pw.window.webContents.send('mira:tabs-changed', {
       tabs: this.tabInfos(pw),
       activeId: pw.state.activeId,
-      panelCollapsed: pw.panelCollapsed
+      panelCollapsed: pw.panelCollapsed,
+      // Zen mode rides the tabs channel (like panelCollapsed): both are chrome
+      // layout bits, so the renderer learns to hide/show the bars for free.
+      chromeHidden: pw.chromeHidden
     })
   }
 
@@ -2422,6 +2520,23 @@ export class ProfileManager {
     return { collapsed: pw.panelCollapsed }
   }
 
+  /** Toggle zen (focus) mode: hide/show the toolbar, status bar, and both side
+   * panels together, restoring the panels to their pre-zen state on exit. The
+   * pure state transition (snapshot on entry, restore on exit) lives in nextZen;
+   * here we only apply it. Setting chromeHidden BEFORE toggling the panels makes
+   * the pushTabs inside toggleTabsPanelIn carry the new zen flag to the chrome. */
+  private toggleZenIn(pw: ProfileWindow, hidden?: boolean): { hidden: boolean } {
+    const live = { tabsCollapsed: pw.panelCollapsed, skillPaneOpen: pw.skillPane.open }
+    const { zen, apply } = nextZen({ hidden: pw.chromeHidden, snapshot: pw.zenSnapshot }, live, hidden)
+    pw.chromeHidden = zen.hidden
+    pw.zenSnapshot = zen.snapshot
+    // Both push the chrome + re-layout: toggleTabsPanelIn sends mira:tabs-changed
+    // (carrying chromeHidden), setSkillPaneIn sends mira:skill-pane.
+    this.toggleTabsPanelIn(pw, apply.tabsCollapsed)
+    this.setSkillPaneIn(pw, { ...pw.skillPane, open: apply.skillPaneOpen })
+    return { hidden: zen.hidden }
+  }
+
   /** Add a url favorite under `parentId` (a folder id, or undefined = top level).
    * With no url, bookmark `target`'s active tab. Idempotent by url — an
    * already-saved page (anywhere in the tree) returns the existing node with
@@ -3035,6 +3150,10 @@ export class ProfileManager {
         if (!target) throw new Error('no target window')
         return this.toggleTabsPanelIn(target, collapsed)
       },
+      toggleZen: (hidden) => {
+        if (!target) throw new Error('no target window')
+        return this.toggleZenIn(target, hidden)
+      },
       setPaletteOpen: (open, mode, query) => {
         if (!target) throw new Error('no target window')
         return this.setPaletteOpenIn(target, open, mode, query)
@@ -3063,6 +3182,7 @@ export class ProfileManager {
       encryptProfile: (id, password) => this.encryptProfileVault(id, password),
       unlockProfile: (id, password) => this.unlockProfileVault(id, password),
       lockProfile: (id) => this.lockProfileVault(id),
+      lockAllVaults: () => this.lockAllVaults(),
       listVaults: () => this.listVaultsState(),
       // Extensions act on the TARGET window's profile session — sets are per
       // profile (D2): installing in "Work" leaves "Default" untouched.

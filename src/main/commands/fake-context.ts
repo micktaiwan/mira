@@ -8,6 +8,7 @@ import type { CookieSetDetails } from '../chrome-import'
 import type { TooltipRect } from '../tooltip'
 import type { SkillSource } from '../skills'
 import type { LlmConfig, ChatMessage, PageContext } from '../llm'
+import { nextZen, type PanelSnapshot } from './zen'
 import {
   emptyTabState,
   addTab,
@@ -55,6 +56,9 @@ export interface FakeContext {
   tabState: () => TabState
   /** Live view of the fake window's tab-panel collapsed flag. */
   panelCollapsed: () => boolean
+  /** Live view of the fake window's zen-mode flag (toggle-zen spy): true while the
+   * toolbar, status bar, and both panels are hidden. */
+  chromeHidden: () => boolean
   /** Live view of the active tab's zoom level (zoom-in/out/reset spy). */
   zoomLevel: () => number
   /** Live view of the fake window's palette-open flag (toggle-palette spy). */
@@ -160,6 +164,10 @@ export function makeContext(
     // A window always starts with one tab, like the real ProfileManager.
     tabs: addTab(emptyTabState(), { id: 'tab-1', title: '', url: 'home', favicon: null }),
     panelCollapsed: false,
+    // Zen (focus) mode: true while the toolbar, status bar, and both panels are
+    // hidden. zenSnapshot holds the pre-zen panel state to restore on exit.
+    chromeHidden: false,
+    zenSnapshot: null as PanelSnapshot | null,
     // Active tab's zoom level (Chrome's log scale: 0 = 100%), driven by the
     // zoom-in / zoom-out / zoom-reset commands.
     zoomLevel: 0,
@@ -703,6 +711,20 @@ export function makeContext(
       state.panelCollapsed = collapsed ?? !state.panelCollapsed
       return { collapsed: state.panelCollapsed }
     },
+    toggleZen: (hidden?: boolean) => {
+      const live = { tabsCollapsed: state.panelCollapsed, skillPaneOpen: state.skillPane.open }
+      const { zen, apply } = nextZen(
+        { hidden: state.chromeHidden, snapshot: state.zenSnapshot },
+        live,
+        hidden
+      )
+      state.chromeHidden = zen.hidden
+      state.zenSnapshot = zen.snapshot
+      state.panelCollapsed = apply.tabsCollapsed
+      state.skillPane = { ...state.skillPane, open: apply.skillPaneOpen }
+      skillPaneStates.push(state.skillPane)
+      return { hidden: zen.hidden }
+    },
     setPaletteOpen: (open?: boolean) => {
       // mode / query only matter to the chrome; the fake tracks open/closed.
       state.paletteOpen = open ?? !state.paletteOpen
@@ -738,6 +760,11 @@ export function makeContext(
       if (!encryptedProfiles.has(id)) throw new Error(`not encrypted: ${id}`)
       const locked = unlockedProfiles.delete(id)
       return { id, locked }
+    },
+    lockAllVaults: async () => {
+      const locked = [...unlockedProfiles]
+      unlockedProfiles.clear()
+      return { locked }
     },
     listVaults: () => ({
       encrypted: [...encryptedProfiles],
@@ -902,6 +929,7 @@ export function makeContext(
     focused: state.focused,
     tabState: () => state.tabs,
     panelCollapsed: () => state.panelCollapsed,
+    chromeHidden: () => state.chromeHidden,
     zoomLevel: () => state.zoomLevel,
     paletteOpen: () => state.paletteOpen,
     bookmarks: () => state.bookmarks,

@@ -63,6 +63,9 @@ function App(): React.JSX.Element {
   const [tabs, setTabs] = useState<TabInfo[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
+  // Zen (focus) mode (Cmd+Shift+H): main hides the toolbar + status bar + both
+  // panels together. The flag rides the tabs-changed push (a chrome layout bit).
+  const [chromeHidden, setChromeHidden] = useState(false)
   // Favorites are global (app-wide) and rendered in the native Bookmarks menu.
   // The chrome keeps the tree only to drive the address-bar star; main pushes it.
   const [bookmarks, setBookmarks] = useState<BookmarkNode[]>([])
@@ -133,6 +136,7 @@ function App(): React.JSX.Element {
       setTabs(state.tabs)
       setActiveId(state.activeId)
       setPanelCollapsed(state.panelCollapsed)
+      setChromeHidden(state.chromeHidden)
       syncAddressBar(state.tabs, state.activeId)
     })
   }, [])
@@ -346,6 +350,9 @@ function App(): React.JSX.Element {
 
   return (
     <div className="chrome">
+      {/* Zen mode hides the whole top strip; the native view then fills its space
+          (main gives the view y=0, full height). */}
+      {!chromeHidden && (
       <div className="toolbar">
         <button
           type="button"
@@ -461,6 +468,7 @@ function App(): React.JSX.Element {
           Mira <span className="toolbar-drag-version">{__APP_VERSION__}</span>
         </div>
       </div>
+      )}
       <div className="body">
         {!panelCollapsed && (
           <Sidebar
@@ -483,7 +491,7 @@ function App(): React.JSX.Element {
           </div>
         )}
       </div>
-      <StatusBar />
+      {!chromeHidden && <StatusBar />}
       {/* Mounted only while open, so its search/selection state starts fresh each
           time. Main has hidden the web view, so this overlay is visible. `mode`
           decides the default target of a page pick (current tab in address mode,

@@ -25,6 +25,10 @@ export interface VaultContext {
   /** Lock an unlocked encrypted profile now: close its window, copy the live data
    * back into the vault, and wipe the plaintext. No-op-safe if already locked. */
   lockProfile: (id: string) => Promise<{ id: string; locked: boolean }>
+  /** Lock EVERY currently-unlocked vault at once (close each window, re-encrypt,
+   * wipe): a panic-lock, and the path app quit uses so a session left unlocked is
+   * preserved instead of discarded. Returns the ids actually locked. */
+  lockAllVaults: () => Promise<{ locked: string[] }>
   /** The encrypted-profile state: which profile ids are encrypted, and which are
    * currently unlocked this session. */
   listVaults: () => { encrypted: string[]; unlocked: string[] }
@@ -69,6 +73,15 @@ export const vaultCommands: CommandMap<CommandContext> = {
     try {
       const res = await ctx.lockProfile(id.trim())
       return { ok: true, id: res.id, locked: res.locked }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  'lock-all-vaults': async (ctx) => {
+    try {
+      const { locked } = await ctx.lockAllVaults()
+      return { ok: true, locked }
     } catch (error) {
       return fail(error)
     }
