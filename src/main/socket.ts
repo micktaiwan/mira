@@ -32,13 +32,20 @@ export function handleRequestLine(
     return { ok: false, error: 'invalid JSON' }
   }
 
-  const { command, params } = (msg ?? {}) as { command?: unknown; params?: unknown }
-  if (typeof command !== 'string') {
+  // `cmd` is a tolerated alias for `command` — Kova's sibling socket uses `cmd`,
+  // so copy-pasted requests work across both. `command` stays the canonical form.
+  const { command, cmd, params } = (msg ?? {}) as {
+    command?: unknown
+    cmd?: unknown
+    params?: unknown
+  }
+  const name = typeof command === 'string' ? command : cmd
+  if (typeof name !== 'string') {
     return { ok: false, error: 'missing "command" field' }
   }
 
   try {
-    return registry.execute(command, params, ctx)
+    return registry.execute(name, params, ctx)
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) }
   }

@@ -1,0 +1,202 @@
+#!/usr/bin/env node
+// The `mira` CLI: a thin client over Mira's control socket (docs/socket.md).
+// Pure logic lives in ../src/cli/mira-core.mjs (unit-tested); this file is the
+// I/O shell — it connects, sends ONE JSON request, reads the reply until the
+// newline the server always appends, prints it, and sets the exit code.
+//
+// Why this exists instead of `printf ... | nc -U`: macOS `nc` closes on stdin
+// EOF and drops the async reply (exec-js returns 0 bytes — a false "empty" that
+// wastes hours). This reads until '\n', so async commands reply reliably.
+//
+// Tab targeting is stateful via the ENVIRONMENT only (never a shared file):
+//   --tab <id>  >  $MIRA_TAB  >  focused window's active tab
+// so parallel sessions never clobber each other's target. `mira use` prints an
+// `export MIRA_TAB=<id>` line to pin a tab for the rest of the shell session.
+//
+// Usage:
+//   mira tabs                       list tabs (id / title / url), * = active
+//   mira use --url <substr>         resolve a tab by url, print export MIRA_TAB=<id>
+//   mira use --active               pin the focused window's active tab
+//   mira use <id>                   pin an explicit id
+//   mira exec <code|-|@file>        run JS in the pinned/active tab
+//   mira reload                     reload the pinned (via exec-js) or active tab
+//   mira nav <url>                  navigate the active tab
+//   mira commands                   list every command the running build knows
+//   mira call <command> [--params '<json>']   generic passthrough to any command
+//   mira <command> [--params '<json>']        same, shorthand
+// Global flags: --tab <id>, --json (raw response), --socket <path>.
+
+import { createConnection } from 'node:net'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
+import {
+  parseArgs,
+  resolveTabId,
+  pickTabByUrl,
+  buildExec,
+  buildReload,
+  buildCall,
+  formatTabs,
+  resolveCode
+} from '../src/cli/mira-core.mjs'
+
+const HERE = dirname(fileURLToPath(import.meta.url))
+
+/** Send one request object, resolve with the parsed JSON reply. Reads until the
+ * first newline (the server appends one per response). */
+function call(request, socketPath, timeoutMs = 30000) {
+  return new Promise((resolveP, reject) => {
+    const conn = createConnection(socketPath)
+    let buf = ''
+    conn.setTimeout(timeoutMs)
+    conn.on('connect', () => conn.write(JSON.stringify(request) + '\n'))
+    conn.on('data', (chunk) => {
+      buf += chunk.toString()
+      const nl = buf.indexOf('\n')
+      if (nl >= 0) {
+        conn.end()
+        try {
+          resolveP(JSON.parse(buf.slice(0, nl)))
+        } catch (e) {
+          reject(new Error(`bad reply: ${buf.slice(0, nl)}`))
+        }
+      }
+    })
+    conn.on('timeout', () => {
+      conn.destroy()
+      reject(new Error(`timed out after ${timeoutMs}ms`))
+    })
+    conn.on('error', (e) => {
+      if (e && e.code === 'ENOENT')
+        reject(new Error(`no Mira socket at ${socketPath} (is Mira running?)`))
+      else if (e && e.code === 'ECONNREFUSED')
+        reject(new Error(`stale socket at ${socketPath} (Mira not listening)`))
+      else reject(e)
+    })
+  })
+}
+
+function die(msg, code = 1) {
+  process.stderr.write(String(msg) + '\n')
+  process.exit(code)
+}
+
+/** Print a response and exit with 0 on ok, 1 on failure. `pretty` overrides the
+ * default JSON dump for the human-facing verbs.
+ *
+ * Exit MUST wait for the write to flush: process.exit() kills the process
+ * before Node drains an async pipe write, which on macOS truncates output at the
+ * 64KB pipe buffer (big `extension-console` dumps lost their tail). Passing the
+ * exit as the write callback fires it only once the data has reached the OS. */
+function report(res, { json, pretty } = {}) {
+  let stream = process.stdout
+  let text
+  if (json || !pretty) text = JSON.stringify(res)
+  else if (res.ok) text = pretty(res)
+  else {
+    stream = process.stderr
+    text = JSON.stringify(res)
+  }
+  stream.write(text + '\n', () => process.exit(res.ok ? 0 : 1))
+}
+
+async function main() {
+  const { command, positionals, flags } = parseArgs(process.argv.slice(2))
+  const socketPath =
+    (typeof flags.socket === 'string' && flags.socket) ||
+    process.env.MIRA_SOCKET ||
+    '/tmp/mira.sock'
+  const json = flags.json === true
+  const tabId = resolveTabId({ flagTab: flags.tab, envTab: process.env.MIRA_TAB })
+
+  if (!command || command === 'help' || flags.help) {
+    process.stdout.write(
+      readFileSync(resolve(HERE, 'mira'), 'utf8')
+        .split('\n')
+        .filter((l) => l.startsWith('//'))
+        .map((l) => l.slice(3))
+        .join('\n') + '\n'
+    )
+    process.exit(command ? 0 : 2)
+  }
+
+  const send = (req, opts) =>
+    call(req, socketPath)
+      .then((res) => report(res, opts))
+      .catch((e) => die(e.message, 2))
+
+  switch (command) {
+    case 'tabs':
+      return send({ command: 'list-tabs' }, { json, pretty: (r) => formatTabs(r.tabs, r.activeId) })
+
+    case 'commands':
+      return send(
+        { command: 'list-commands' },
+        { json, pretty: (r) => (r.commands ?? []).join('\n') }
+      )
+
+    case 'exec': {
+      const cr = resolveCode(positionals[0], {
+        readStdin: () => readFileSync(0, 'utf8'),
+        readFile: (p) => readFileSync(p, 'utf8')
+      })
+      if ('error' in cr) return die(cr.error, 2)
+      return send(buildExec(cr.code, tabId), { json })
+    }
+
+    case 'reload':
+      return send(buildReload(tabId), { json })
+
+    case 'nav':
+    case 'navigate': {
+      const url = positionals[0]
+      if (!url) return die('nav needs a url', 2)
+      return send({ command: 'navigate', params: { url } }, { json })
+    }
+
+    case 'use': {
+      // Prints `export MIRA_TAB=<id>` to stdout (for `eval "$(mira use ...)"`).
+      // Diagnostics go to stderr so they never pollute what eval consumes.
+      if (positionals[0]) {
+        process.stdout.write(`export MIRA_TAB=${positionals[0]}\n`)
+        return process.exit(0)
+      }
+      const res = await call({ command: 'list-tabs' }, socketPath).catch((e) => die(e.message, 2))
+      if (!res.ok) return die(JSON.stringify(res), 1)
+      if (flags.active) {
+        if (!res.activeId) return die('no active tab', 1)
+        process.stdout.write(`export MIRA_TAB=${res.activeId}\n`)
+        return process.exit(0)
+      }
+      if (typeof flags.url === 'string') {
+        const pick = pickTabByUrl(res.tabs, flags.url)
+        if ('error' in pick) {
+          if (pick.matches)
+            for (const m of pick.matches) process.stderr.write(`  ${m.id}  ${m.url ?? ''}\n`)
+          return die(pick.error, 1)
+        }
+        process.stdout.write(`export MIRA_TAB=${pick.tab.id}\n`)
+        return process.exit(0)
+      }
+      return die('use: pass <id>, --url <substr>, or --active', 2)
+    }
+
+    case 'call': {
+      const name = positionals[0]
+      if (!name) return die('call needs a command name', 2)
+      const built = buildCall(name, flags.params, tabId)
+      if ('error' in built) return die(built.error, 2)
+      return send(built.request, { json })
+    }
+
+    default: {
+      // Shorthand: `mira <any-command> [--params '<json>']` == `mira call ...`.
+      const built = buildCall(command, flags.params, tabId)
+      if ('error' in built) return die(built.error, 2)
+      return send(built.request, { json })
+    }
+  }
+}
+
+main().catch((e) => die(e instanceof Error ? e.message : String(e), 2))

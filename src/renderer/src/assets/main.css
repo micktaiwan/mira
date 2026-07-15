@@ -1,4 +1,5 @@
 @import './base.css';
+@import './tab-folders.css';
 @import './palette.css';
 @import './skill-pane.css';
 @import './extension-actions.css';
@@ -383,65 +384,6 @@ body {
   text-overflow: ellipsis;
 }
 
-.tab-close {
-  -webkit-app-region: no-drag;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--ev-c-text-2);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0;
-}
-
-.tab-row:hover .tab-close,
-.tab-row.active .tab-close {
-  opacity: 1;
-}
-
-.tab-close:hover {
-  background: var(--ev-c-gray-1);
-  color: var(--color-text);
-}
-
-/* Pin button on a tab row (hidden until hover, like the ×): sends the tab into
-   the pinned grid. Grayscale keeps the emoji glyph monochrome like the chrome. */
-.tab-pin {
-  -webkit-app-region: no-drag;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  font-size: 11px;
-  line-height: 1;
-  cursor: pointer;
-  opacity: 0;
-  filter: grayscale(1);
-}
-
-.tab-row:hover .tab-pin {
-  opacity: 0.7;
-}
-
-.tab-pin:hover {
-  background: var(--ev-c-gray-1);
-  opacity: 1;
-}
-
 /* ---- Pinned tabs (grid of squares at the head of the tab list) ---------- */
 
 /* Pinned tabs render as compact favicon-only squares that flow across the
@@ -800,6 +742,125 @@ body {
   border: 1px solid var(--ev-c-gray-3);
   border-radius: 999px;
   padding: 1px 8px;
+}
+
+/* Settings → Tabs: cross-profile memory table, ranked heaviest-first. */
+.tab-mem-total {
+  margin-left: auto;
+  align-self: center;
+}
+
+.tab-mem-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.tab-mem-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--ev-c-gray-1);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--ev-c-gray-3);
+}
+
+.tab-mem-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--ev-c-gray-3);
+  vertical-align: top;
+}
+
+.tab-mem-rank {
+  width: 28px;
+  color: var(--ev-c-gray-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.tab-mem-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tab-mem-favicon {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+
+.tab-mem-favicon-blank {
+  background: var(--ev-c-gray-3);
+}
+
+.tab-mem-title {
+  font-weight: 600;
+  color: var(--color-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+
+.tab-mem-host {
+  display: block;
+  margin-top: 2px;
+  color: var(--ev-c-gray-1);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 360px;
+  user-select: text;
+}
+
+.tab-mem-profile {
+  color: var(--ev-c-gray-1);
+  white-space: nowrap;
+}
+
+.tab-mem-size {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-text);
+}
+
+.tab-mem-badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 1px 7px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.tab-mem-active {
+  color: #fff;
+  background: #6988e6;
+}
+
+.tab-mem-shared {
+  display: inline-block;
+  margin-left: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ev-c-gray-1);
+  border: 1px solid var(--ev-c-gray-3);
+  border-radius: 999px;
+  padding: 1px 7px;
+  vertical-align: 1px;
+}
+
+.tab-mem-actions {
+  width: 1%;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .btn {

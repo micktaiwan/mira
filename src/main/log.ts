@@ -15,10 +15,23 @@
 //     its own handle. Trade-off: with =file these lines no longer show in the
 //     dev terminal.
 //
-// The naming embeds a sortable timestamp, so "rotation" is: at boot, delete all
-// but the newest KEEP_RUNS files of each kind (pure logic, tested).
+// The naming embeds a sortable timestamp. Rotation happens at boot: previous
+// launches' logs are gzipped (tail-capped — after a crash only the tail
+// matters), then the oldest archives are deleted so the total stays under a
+// disk budget (pure logic, tested). Read an archive with `zless`/`gunzip`.
 
-import { appendFileSync, mkdirSync, readdirSync, rmSync } from 'fs'
+import {
+  appendFileSync,
+  closeSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'fs'
+import { gzipSync } from 'zlib'
 import { join } from 'path'
 import { app } from 'electron'
 
@@ -29,8 +42,13 @@ if (!process.env.DEBUG) {
   process.env.DEBUG = 'electron-chrome-extensions:*,electron-chrome-web-store:*'
 }
 
-/** How many launches' logs to keep per kind. */
-export const KEEP_RUNS = 10
+/** Total disk budget for archived (gzipped) logs. Text logs compress ~10:1,
+ * so this holds roughly ten times as much uncompressed history. */
+export const MAX_ARCHIVE_BYTES = 50 * 1024 * 1024
+
+/** At archive time, keep at most this much of a file's tail. A log that grew
+ * huge over a multi-day session is only useful near its end (the crash). */
+export const MAX_TAIL_BYTES = 10 * 1024 * 1024
 
 /** Filesystem-safe sortable timestamp: 2026-07-10T23-46-31. */
 export function logTimestamp(at: Date): string {
@@ -46,12 +64,50 @@ export function logFileName(kind: 'main' | 'chromium', at: Date): string {
   return `${kind}-${logTimestamp(at)}.log`
 }
 
-/** Among `names` (any directory listing), the log files of `kind` that should
- * be deleted to keep only the newest `keep`. Timestamps sort lexicographically,
- * so no date parsing is needed. Pure, tested. */
-export function filesToPrune(names: string[], kind: 'main' | 'chromium', keep: number): string[] {
-  const mine = names.filter((n) => n.startsWith(`${kind}-`) && n.endsWith('.log')).sort()
-  return mine.slice(0, Math.max(0, mine.length - keep))
+/** Sortable time key of a log file name: the kind prefix is stripped so the
+ * 'main-…' and 'chromium-…' files of one launch sort together by launch time. */
+export function timeKey(name: string): string {
+  return name.replace(/^[a-z]+-/, '')
+}
+
+export interface ArchiveEntry {
+  name: string
+  size: number
+}
+
+/** Among a directory listing with sizes, the gzipped archives to delete so the
+ * newest-first cumulative size stays within `budget`. Once one archive
+ * overflows the budget, every older one goes too (no gaps in the kept
+ * history). The newest archive always survives, even alone over budget — it is
+ * the previous run, the one crash forensics needs. Pure, tested. */
+export function archivesToPrune(entries: ArchiveEntry[], budget: number): string[] {
+  const archives = entries
+    .filter((e) => e.name.endsWith('.log.gz'))
+    .sort((a, b) => timeKey(b.name).localeCompare(timeKey(a.name)))
+  const doomed: string[] = []
+  let total = 0
+  archives.forEach((e, i) => {
+    total += e.size
+    if (i > 0 && total > budget) doomed.push(e.name)
+  })
+  return doomed
+}
+
+/** Gzip one finished log file (tail-capped) next to it and remove the
+ * original. Called at boot, so no process holds the file anymore. */
+function archiveLog(logsDir: string, name: string): void {
+  const path = join(logsDir, name)
+  const size = statSync(path).size
+  const start = Math.max(0, size - MAX_TAIL_BYTES)
+  const buf = Buffer.alloc(size - start)
+  const fd = openSync(path, 'r')
+  try {
+    readSync(fd, buf, 0, buf.length, start)
+  } finally {
+    closeSync(fd)
+  }
+  writeFileSync(`${path}.gz`, gzipSync(buf))
+  rmSync(path)
 }
 
 export interface LoggingPaths {
@@ -67,16 +123,26 @@ export function initLogging(userDataDir: string, now: Date = new Date()): Loggin
   const logsDir = join(userDataDir, 'logs')
   mkdirSync(logsDir, { recursive: true })
 
-  // Rotation: keep the newest KEEP_RUNS files per kind (this launch included).
-  const existing = readdirSync(logsDir)
-  for (const kind of ['main', 'chromium'] as const) {
-    for (const name of filesToPrune(existing, kind, KEEP_RUNS - 1)) {
-      try {
-        rmSync(join(logsDir, name))
-      } catch {
-        // Never let cleanup break boot.
-      }
+  // Rotation: gzip every previous launch's plain log (this launch's files do
+  // not exist yet), then drop the oldest archives beyond the disk budget.
+  for (const name of readdirSync(logsDir)) {
+    if (!name.endsWith('.log')) continue
+    try {
+      archiveLog(logsDir, name)
+    } catch {
+      // Never let cleanup break boot.
     }
+  }
+  try {
+    const entries = readdirSync(logsDir).map((name) => ({
+      name,
+      size: statSync(join(logsDir, name)).size
+    }))
+    for (const name of archivesToPrune(entries, MAX_ARCHIVE_BYTES)) {
+      rmSync(join(logsDir, name))
+    }
+  } catch {
+    // Never let cleanup break boot.
   }
 
   const mainLog = join(logsDir, logFileName('main', now))

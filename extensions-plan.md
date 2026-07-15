@@ -935,3 +935,110 @@ pas seulement Kondo. À vérifier en E2 (1Password, Obsidian Web Clipper).
 **Nettoyage fait** : `sw-debug.ts` supprimé (+ son appel dans `ensureFor`), switch `vmodule` retiré
 d'`index.ts`. **Gardé en durcissement** : `cdp-eval.ts` (+ tests) — route `exec-js` par
 `Runtime.evaluate` quand un debugger CDP est attaché, avec timeout.
+
+## 9. E8 — Claap : crash SIGTRAP natif + shims offscreen / desktopCapture / tabCapture (2026-07-13)
+
+**✅ VALIDÉ EN VRAI le 2026-07-13** (restart dev par Mickael) : plus de crash au boot avec Claap
+installée, strip appliqué (Claap ET Bitwarden — qui déclare aussi `offscreen`), host offscreen
+monté (`[mira-offscreen] hosting …`), `enumerateDevices` du doc offscreen exécuté sans SIGTRAP,
+idempotence de createDocument confirmée au cycle keepalive du SW, et **enregistrement Claap testé
+par Mickael : « ça marche très bien »**. Limite cosmétique repérée : la bulle webcam injectée
+(`camera.bundle.js` en iframe) est bloquée par la permissions policy Blink (« camera is not
+allowed in this document ») — Chrome exempte les iframes d'extension, pas Electron. À creuser si
+un jour la vignette manque vraiment.
+
+**Symptôme** : installer Claap (`bnflmljpbmkjeahgjakmjdanmhldjhbk`) **tue Mira** — SIGTRAP du
+browser process ~1 s après le chargement de l'extension.
+
+**Cause racine PROUVÉE** (crash `Electron-2026-07-13-120303.ips` symbolisé avec les breakpad
+symbols officiels d'Electron 41.7.0 — UUID identique) : Electron 41 **compile chrome.offscreen**
+(`OffscreenDocumentManager` est dans le binaire, le document se crée vraiment), mais le document
+offscreen est un *extension host* dont le check de permission média passe par
+`ElectronExtensionHostDelegate::CheckMediaAccessPermission` →
+`extensions::media_capture_util::VerifyMediaAccessPermission` — un **CHECK release** sur les
+permissions `audioCapture`/`videoCapture` (permissions de *platform app*, qu'aucune extension MV3
+ne peut détenir). Le doc offscreen de Claap sert à « list media devices » : son premier
+`enumerateDevices()` → CHECK → SIGTRAP du process entier. Même famille de piège que le crash DNR
+de Kondo (§8.2.3) : un chemin natif à moitié câblé, fatal à la simple utilisation.
+
+**Fix (codé, testé, typecheck OK — à valider au prochain restart dev)** :
+
+1. **Strip `offscreen` au load** (`stripUnsupportedPermissions`) : le namespace natif n'existe
+   plus, le chemin piégé est mort. Même pipeline que le strip DNR (backup
+   `manifest.mira-original.json`, gaps/Tier C lisent l'original).
+2. **Shim `chrome.offscreen`** : moitié SW main-world (`OFFSCREEN_SHIM_SOURCE`,
+   `extension-capabilities.ts`), bridge `ServiceWorkerMain.ipc` (le transport de la lib), backend
+   `OffscreenHostService` (`extension-offscreen.ts`) — la page offscreen tourne dans une
+   **BrowserWindow cachée ordinaire** sur la session du profil : permissions média = chemin de
+   session normal (grant-all, `permissions.ts`), plus d'extension host piégé. `createDocument`
+   volontairement **idempotent** (notre host est invisible pour `runtime.getContexts`, et le
+   keepalive relance l'init des SW). Fournit aussi `runtime.ContextType` si `getContexts` existe
+   sans lui (Claap le déréférence).
+3. **Shim `chrome.desktopCapture`** (pages d'extension, preload frame
+   `CAPTURE_SHIM_FRAME_SOURCE` + backend `ExtensionCaptureService`, `extension-capture.ts`) :
+   `chooseDesktopMedia` → `desktopCapturer.getSources` côté main, source écran auto-choisie (pas
+   de picker), `streamId` compatible `getUserMedia {chromeMediaSource:'desktop'}` — exactement le
+   flux du recorder de Claap (`pinnedTab.bundle.js`). `canRequestAudioTrack:false`, honnête (pas
+   de loopback macOS) ; Claap gate son audio dessus.
+4. **Shim `chrome.tabCapture.capture`** : arme le `setDisplayMediaRequestHandler` de la session
+   pour la frame appelante (TTL 10 s, single-use) puis `getDisplayMedia` ; le handler résout vers
+   **l'onglet actif** (sémantique Chrome) en vidéo **et audio** — `audio: WebFrameMain` capture
+   l'audio d'un onglet même sur macOS (vérifié dans electron.d.ts). Un `getDisplayMedia` non armé
+   est refusé (comportement d'avant : aucun handler = deny). Hook `activeTab` ajouté à
+   `ExtensionTabHooks` (`profiles.ts`).
+
+Ordre de registration : tous les shims AVANT la construction d'`ElectronChromeExtensions` (le
+`Object.freeze(chrome)` de la lib rend toute addition postérieure silencieusement inerte — §8.12).
+
+### 9.1 — Bulle webcam (Permissions-Policy) + raccourcis clavier (codés 2026-07-13, à valider)
+
+**Bulle webcam.** L'iframe caméra de Claap (`camera.html`, injectée dans les pages) porte déjà
+`allow="camera;microphone"` — le blocage venait du **header `Permissions-Policy` de la page
+parente** (`app.claap.io` envoie `camera=(self), microphone=(self)`) : la policy déclarée du
+parent exclut l'origine extension, l'attribut `allow` ne peut pas la ré-élargir. Chrome exempte
+les frames d'extension de ce calcul ; Blink sous Electron non. **Prouvé en live** : la même
+iframe sur `example.com` (pas de header) charge et poste `cameraFrameReady` sans violation.
+Fix : `relaxPermissionsPolicy` (`extension-capabilities.ts`, pure, testée) ajoute les origines
+des extensions chargées aux allowlists `camera`/`microphone`/`display-capture` des headers
+`Permissions-Policy` des réponses document — appliquée dans le `onHeadersReceived` existant
+(`extensions.ts`), désormais installé dès qu'une session a des extensions (plus seulement quand
+il y a du DNR).
+
+**Raccourcis clavier d'extension** (`commands` du manifest — Claap : Cmd+Shift+S →
+`_execute_action`). Nouveau `extension-commands.ts` : parsing des `suggested_key` (mac ; `Ctrl`
+→ Command comme Chrome), matching sur `before-input-event` de TOUS les webContents (onglets +
+chrome — pas de `globalShortcut` : scope navigateur, et `input.key` est layout-aware, pas de
+piège AZERTY). `_execute_action` clique le vrai bouton toolbar dans le `<browser-action-list>`
+de la chrome (shadow root ouvert, même chemin qu'un clic utilisateur → popup ancré) via le
+nouveau hook `chromeWebContents` d'`ExtensionTabHooks`. Les commandes nommées partent vers
+`chrome.commands.onCommand` par le routeur interne de la lib
+(`ExtensionsService.sendCommandEvent`, accès gardé à `instance.ctx.router` — la lib écrase notre
+`onCommand` par son ExtensionEvent, ses listeners ne sont joignables que par là ; son `sendEvent`
+réveille un SW arrêté). Aucune collision menu : Mira n'a pas de Cmd+Shift+S (Discard Tab = Cmd+S).
+
+**À valider au restart** : (1) bulle webcam visible sur app.claap.io pendant un enregistrement ;
+(2) Cmd+Shift+S ouvre le popup Claap (focus page ET focus barre d'adresse).
+
+**Piège TCC découvert à la validation (2026-07-13 après-midi) — « l'enregistrement ne marche
+plus ».** Pas une régression du code : en dev, Mira est lancée depuis Kova, donc macOS attribue
+les accès caméra au process responsable **Kova** (`responsibleProc: kova` dans les crash
+reports). L'Info.plist de Kova avait `NSMicrophoneUsageDescription` (d'où le micro OK) mais PAS
+`NSCameraUsageDescription` → au premier accès caméra, TCC **SIGABRT le service de capture vidéo
+de Chromium** (« attempted to access privacy-sensitive data without a usage description »,
+`Electron Helper-*.ips`). Chromium le relance puis abandonne (`Too many GetDeviceInfos()
+retries` dans le log) → toute énumération de devices meurt → l'enregistrement Claap se bloque.
+Le crash existait DÉJÀ pendant la session « ça marche » du matin (rapport de 12:45) mais restait
+sous la limite de retries ; le fix permissions-policy a augmenté la pression caméra (la bulle
+tente un vrai getUserMedia vidéo) et la limite a été atteinte. **Fix** : `NSCameraUsageDescription`
+ajoutée à `~/projects/perso/kova/Info.plist` — effective au prochain build+relaunch de Kova
+(décision Mickael ; ne PAS re-signer l'app installée pendant qu'elle tourne, risque de SIGKILL
+kernel). En attendant : un restart de `npm run dev` remet le compteur de retries à zéro,
+l'enregistrement remarche (surtout caméra coupée côté Claap).
+
+**À valider au restart** (Mickael relance `npm run dev`) : (1) boot sans SIGTRAP avec Claap
+installée (le strip passe au boot via `sanitizeStoreDir`) ; (2) log `[mira-offscreen] hosting …`
+et plus d'erreur « Failed to start service worker » Claap ; (3) popup Claap fonctionnel ;
+(4) un enregistrement de test — mic + écran via le shim desktopCapture ; l'audio d'onglet passe
+par tabCapture (permission macOS « Screen Recording » requise pour l'app Electron, sinon
+`getSources` rend des sources vides — le log `[mira-capture]` le signale). Points ouverts connus :
+pas de picker de source (écran entier d'office), `commands` (Cmd+Shift+S de Claap) toujours inerte.

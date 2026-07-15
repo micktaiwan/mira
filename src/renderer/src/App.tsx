@@ -9,7 +9,7 @@ import ExtensionActions from './features/extensions/ExtensionActions'
 import FindBar from './features/find/FindBar'
 import MediaGallery from './features/media/MediaGallery'
 import { applyProfileColor, initialProfileColor } from './features/profile-theme/profile-theme'
-import type { SkillPaneState } from '../../preload/index.d'
+import type { SkillPaneState, TabFolder } from '../../preload/index.d'
 
 // Panel width bounds — must match SIDEBAR_WIDTH / SKILL_PANE_WIDTH in
 // src/main/settings-store.ts (main clamps to the same range authoritatively).
@@ -75,6 +75,9 @@ function App(): React.JSX.Element {
   const [tabs, setTabs] = useState<TabInfo[]>([])
   const [activeId, setActiveId] = useState<string | null>(null)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
+  // Tab folders (metadata). Main owns them (per window, persisted); they ride the
+  // tabs-changed push, and each tab carries its folderId so the sidebar groups.
+  const [folders, setFolders] = useState<TabFolder[]>([])
   // Zen (focus) mode (Cmd+Shift+H): main hides the toolbar + status bar + both
   // panels together. The flag rides the tabs-changed push (a chrome layout bit).
   const [chromeHidden, setChromeHidden] = useState(false)
@@ -146,6 +149,10 @@ function App(): React.JSX.Element {
       setActiveId(nextActiveId)
       setPanelCollapsed(Boolean(res.panelCollapsed))
       syncAddressBar(nextTabs, nextActiveId)
+      // Folders ride a separate channel from the tab strip; seed them on mount
+      // (later changes arrive on the tabs-changed push below).
+      const fres = await run('list-tab-folders')
+      if (fres.ok) setFolders((fres.folders as TabFolder[]) ?? [])
     }
     void load()
     // Main pushes on every tab change (new / close / select / navigate / panel
@@ -155,6 +162,7 @@ function App(): React.JSX.Element {
       setActiveId(state.activeId)
       setPanelCollapsed(state.panelCollapsed)
       setChromeHidden(state.chromeHidden)
+      setFolders(state.folders)
       syncAddressBar(state.tabs, state.activeId)
     })
   }, [])
@@ -371,121 +379,121 @@ function App(): React.JSX.Element {
       {/* Zen mode hides the whole top strip; the native view then fills its space
           (main gives the view y=0, full height). */}
       {!chromeHidden && (
-      <div className="toolbar">
-        <button
-          type="button"
-          className="nav-button"
-          title={panelCollapsed ? 'Show tabs' : 'Hide tabs'}
-          aria-label="Toggle tab panel"
-          onClick={() => window.mira.command('toggle-tabs-panel')}
-        >
-          {panelCollapsed ? '◧' : '◨'}
-        </button>
-        <button
-          type="button"
-          className="nav-button"
-          title="Back (⌘←)"
-          aria-label="Back"
-          onClick={() => window.mira.command('back')}
-        >
-          ‹
-        </button>
-        <button
-          type="button"
-          className="nav-button"
-          title="Forward (⌘→)"
-          aria-label="Forward"
-          onClick={() => window.mira.command('forward')}
-        >
-          ›
-        </button>
-        <button
-          type="button"
-          className="nav-button"
-          title="Reload (⌘R)"
-          aria-label="Reload"
-          onClick={() => window.mira.command('reload')}
-        >
-          ⟳
-        </button>
-        <form className="address-form" onSubmit={onSubmitUrl}>
-          <input
-            ref={addressInputRef}
-            className="address-input"
-            type="text"
-            placeholder="Search or enter address"
-            value={url}
-            onChange={(e) => {
-              // The URL bar is a launcher: the first keystroke opens the unified
-              // palette in "address" mode, seeded with what was typed, and the
-              // palette input takes over. Focus alone doesn't open it (a new tab
-              // focuses the bar, and we don't want that to pop the palette).
-              if (paletteOpen) return
-              const v = e.target.value
-              if (v === '') {
-                setUrl('')
-                return
-              }
-              // Open OPTIMISTICALLY in the renderer so the palette mounts this
-              // render and its input grabs focus at once — waiting for main's
-              // round-trip here would drop the keystrokes typed in between (the
-              // classic "first char opens the overlay, the rest are lost" bug).
-              setPaletteMode('address')
-              setPaletteQuery(v)
-              setPaletteOpen(true)
-              // Still tell main so it hides the active web view under the overlay.
-              void window.mira.command('toggle-palette', {
-                open: true,
-                mode: 'address',
-                query: v
-              })
-            }}
-            onBlur={() => setUrl(activeUrlRef.current)}
-            spellCheck={false}
-            autoComplete="off"
-            autoCapitalize="off"
-            autoCorrect="off"
-          />
-        </form>
-        {/* Find in page (Cmd+F). Mounted only while open so its query/tally state
+        <div className="toolbar">
+          <button
+            type="button"
+            className="nav-button"
+            title={panelCollapsed ? 'Show tabs' : 'Hide tabs'}
+            aria-label="Toggle tab panel"
+            onClick={() => window.mira.command('toggle-tabs-panel')}
+          >
+            {panelCollapsed ? '◧' : '◨'}
+          </button>
+          <button
+            type="button"
+            className="nav-button"
+            title="Back (⌘←)"
+            aria-label="Back"
+            onClick={() => window.mira.command('back')}
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            className="nav-button"
+            title="Forward (⌘→)"
+            aria-label="Forward"
+            onClick={() => window.mira.command('forward')}
+          >
+            ›
+          </button>
+          <button
+            type="button"
+            className="nav-button"
+            title="Reload (⌘R)"
+            aria-label="Reload"
+            onClick={() => window.mira.command('reload')}
+          >
+            ⟳
+          </button>
+          <form className="address-form" onSubmit={onSubmitUrl}>
+            <input
+              ref={addressInputRef}
+              className="address-input"
+              type="text"
+              placeholder="Search or enter address"
+              value={url}
+              onChange={(e) => {
+                // The URL bar is a launcher: the first keystroke opens the unified
+                // palette in "address" mode, seeded with what was typed, and the
+                // palette input takes over. Focus alone doesn't open it (a new tab
+                // focuses the bar, and we don't want that to pop the palette).
+                if (paletteOpen) return
+                const v = e.target.value
+                if (v === '') {
+                  setUrl('')
+                  return
+                }
+                // Open OPTIMISTICALLY in the renderer so the palette mounts this
+                // render and its input grabs focus at once — waiting for main's
+                // round-trip here would drop the keystrokes typed in between (the
+                // classic "first char opens the overlay, the rest are lost" bug).
+                setPaletteMode('address')
+                setPaletteQuery(v)
+                setPaletteOpen(true)
+                // Still tell main so it hides the active web view under the overlay.
+                void window.mira.command('toggle-palette', {
+                  open: true,
+                  mode: 'address',
+                  query: v
+                })
+              }}
+              onBlur={() => setUrl(activeUrlRef.current)}
+              spellCheck={false}
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+            />
+          </form>
+          {/* Find in page (Cmd+F). Mounted only while open so its query/tally state
             starts fresh each time; sits in the toolbar row, beside the address
             bar (an overlay over the page would be hidden by the native view). */}
-        {findOpen && <FindBar focusSeq={findFocusSeq} onClose={closeFindBar} />}
-        <button
-          type="button"
-          className={`nav-button star-button${currentBookmark ? ' active' : ''}`}
-          title={currentBookmark ? 'Remove from favorites' : 'Add to favorites (⌘D)'}
-          aria-label="Toggle favorite"
-          aria-pressed={currentBookmark ? true : false}
-          disabled={!activeUrl || settingsActive}
-          onClick={onToggleBookmark}
-        >
-          {currentBookmark ? '★' : '☆'}
-        </button>
-        {/* Extension action buttons (Dark Reader & co) — a lib custom element
+          {findOpen && <FindBar focusSeq={findFocusSeq} onClose={closeFindBar} />}
+          <button
+            type="button"
+            className={`nav-button star-button${currentBookmark ? ' active' : ''}`}
+            title={currentBookmark ? 'Remove from favorites' : 'Add to favorites (⌘D)'}
+            aria-label="Toggle favorite"
+            aria-pressed={currentBookmark ? true : false}
+            disabled={!activeUrl || settingsActive}
+            onClick={onToggleBookmark}
+          >
+            {currentBookmark ? '★' : '☆'}
+          </button>
+          {/* Extension action buttons (Dark Reader & co) — a lib custom element
             bound to THIS window's profile session (features/extensions). */}
-        <ExtensionActions />
-        {/* Always-present toggle for the AI panel: open it anytime to type a prompt
+          <ExtensionActions />
+          {/* Always-present toggle for the AI panel: open it anytime to type a prompt
             or see the last result; click again to close. */}
-        <button
-          type="button"
-          className={`nav-button${skillPane.open ? ' active' : ''}`}
-          title="AI panel"
-          aria-label="Toggle AI panel"
-          aria-pressed={skillPane.open}
-          onClick={toggleSkillPane}
-        >
-          ◪
-        </button>
-        {/* Explicit window-drag zone to the right of the URL bar. The toolbar is
+          <button
+            type="button"
+            className={`nav-button${skillPane.open ? ' active' : ''}`}
+            title="AI panel"
+            aria-label="Toggle AI panel"
+            aria-pressed={skillPane.open}
+            onClick={toggleSkillPane}
+          >
+            ◪
+          </button>
+          {/* Explicit window-drag zone to the right of the URL bar. The toolbar is
             already a drag region, but the address field (flex) eats all the free
             space, leaving nothing to grab — Kova's model, where empty tab-bar space
             initiates a window drag (window.rs performWindowDragWithEvent). Shows the
             app name + version; a small fixed handle, not a stretching zone. */}
-        <div className="toolbar-drag" aria-hidden="true">
-          Mira <span className="toolbar-drag-version">{__APP_VERSION__}</span>
+          <div className="toolbar-drag" aria-hidden="true">
+            Mira <span className="toolbar-drag-version">{__APP_VERSION__}</span>
+          </div>
         </div>
-      </div>
       )}
       <div className="body">
         {!panelCollapsed && (
@@ -493,11 +501,18 @@ function App(): React.JSX.Element {
             tabs={tabs}
             activeId={activeId}
             onSelect={(id) => window.mira.command('select-tab', { id })}
-            onClose={(id) => window.mira.command('close-tab', { id })}
             onNew={() => window.mira.command('new-tab')}
             onMove={(id, toIndex) => window.mira.command('move-tab', { id, toIndex })}
-            onPin={(id) => window.mira.command('pin-tab', { id })}
-            onUnpin={(id) => window.mira.command('unpin-tab', { id })}
+            onContextMenu={(id) => window.mira.command('show-tab-menu', { tabId: id })}
+            folders={folders}
+            onToggleFolder={(id) => window.mira.command('toggle-tab-folder', { id })}
+            onRenameFolder={(id, title) => window.mira.command('rename-tab-folder', { id, title })}
+            onRemoveFolder={(id) => window.mira.command('remove-tab-folder', { id })}
+            onFolderContextMenu={(id) => window.mira.command('show-folder-menu', { folderId: id })}
+            onMoveTabToFolder={(tabId, folderId) =>
+              window.mira.command('move-tab-to-folder', { tabId, folderId })
+            }
+            onDetach={(tabId, x, y) => window.mira.command('detach-tab', { id: tabId, x, y })}
           />
         )}
         {/* A web tab's WebContentsView (a native layer) covers the rest of the

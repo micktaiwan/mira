@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "A personal, Chromium-based web browser.",
   "main": "./out/main/index.js",
+  "bin": {
+    "mira": "./bin/mira"
+  },
   "author": "Mickael Faivre-Maçon <faivrem@gmail.com>",
   "homepage": "https://github.com/micktaiwan/mira",
   "scripts": {

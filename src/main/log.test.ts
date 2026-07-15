@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { filesToPrune, logFileName, logTimestamp } from './log'
+import { archivesToPrune, logFileName, logTimestamp, timeKey } from './log'
 
 describe('logTimestamp / logFileName', () => {
   it('formats a filesystem-safe sortable timestamp', () => {
@@ -15,30 +15,61 @@ describe('logTimestamp / logFileName', () => {
   })
 })
 
-describe('filesToPrune', () => {
-  const listing = [
-    'main-2026-07-08T10-00-00.log',
-    'main-2026-07-09T10-00-00.log',
-    'main-2026-07-10T10-00-00.log',
-    'chromium-2026-07-08T10-00-00.log',
-    'chromium-2026-07-10T10-00-00.log',
-    'unrelated.txt'
-  ]
+describe('timeKey', () => {
+  it('strips the kind prefix so both kinds of one launch share a key', () => {
+    expect(timeKey('main-2026-07-10T23-46-31.log.gz')).toBe('2026-07-10T23-46-31.log.gz')
+    expect(timeKey('chromium-2026-07-10T23-46-31.log.gz')).toBe('2026-07-10T23-46-31.log.gz')
+  })
+})
 
-  it('keeps the newest N of one kind, ignores other kinds and files', () => {
-    expect(filesToPrune(listing, 'main', 2)).toEqual(['main-2026-07-08T10-00-00.log'])
-    expect(filesToPrune(listing, 'chromium', 2)).toEqual([])
+describe('archivesToPrune', () => {
+  const gz = (name: string, size: number): { name: string; size: number } => ({ name, size })
+
+  it('keeps everything while the total fits the budget', () => {
+    const entries = [
+      gz('main-2026-07-09T10-00-00.log.gz', 10),
+      gz('chromium-2026-07-09T10-00-00.log.gz', 40)
+    ]
+    expect(archivesToPrune(entries, 100)).toEqual([])
   })
 
-  it('returns everything beyond the keep count, oldest first', () => {
-    expect(filesToPrune(listing, 'main', 1)).toEqual([
-      'main-2026-07-08T10-00-00.log',
-      'main-2026-07-09T10-00-00.log'
-    ])
+  it('drops the oldest archives once the newest-first total overflows', () => {
+    const entries = [
+      gz('chromium-2026-07-08T10-00-00.log.gz', 40),
+      gz('chromium-2026-07-09T10-00-00.log.gz', 40),
+      gz('chromium-2026-07-10T10-00-00.log.gz', 40)
+    ]
+    expect(archivesToPrune(entries, 100)).toEqual(['chromium-2026-07-08T10-00-00.log.gz'])
   })
 
-  it('handles keep=0 and empty listings', () => {
-    expect(filesToPrune([], 'main', 3)).toEqual([])
-    expect(filesToPrune(listing, 'main', 0)).toHaveLength(3)
+  it('never drops the newest archive, even alone over budget', () => {
+    const entries = [
+      gz('chromium-2026-07-09T10-00-00.log.gz', 40),
+      gz('chromium-2026-07-10T10-00-00.log.gz', 500)
+    ]
+    expect(archivesToPrune(entries, 100)).toEqual(['chromium-2026-07-09T10-00-00.log.gz'])
+  })
+
+  it('ignores plain logs and unrelated files', () => {
+    const entries = [
+      gz('main-2026-07-10T10-00-00.log', 999),
+      gz('unrelated.txt', 999),
+      gz('chromium-2026-07-10T10-00-00.log.gz', 10)
+    ]
+    expect(archivesToPrune(entries, 100)).toEqual([])
+  })
+
+  it('sorts by launch time, not by raw name (kinds interleave)', () => {
+    const entries = [
+      gz('main-2026-07-08T10-00-00.log.gz', 30),
+      gz('chromium-2026-07-08T10-00-00.log.gz', 30),
+      gz('main-2026-07-10T10-00-00.log.gz', 30),
+      gz('chromium-2026-07-10T10-00-00.log.gz', 30)
+    ]
+    // Budget fits the whole newest launch pair plus one older file: one file
+    // of the 07-08 launch goes, the newest launch stays intact.
+    const doomed = archivesToPrune(entries, 90)
+    expect(doomed).toHaveLength(1)
+    expect(doomed[0]).toContain('2026-07-08')
   })
 })

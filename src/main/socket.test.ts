@@ -21,6 +21,7 @@ function setup(): {
       goBack: () => {},
       goForward: () => {},
       reload: () => {},
+      reloadIgnoringCache: () => {},
       getZoomLevel: () => 0,
       setZoomLevel: () => {}
     }),
@@ -73,6 +74,7 @@ function setup(): {
     clearProfileData: (profileId?: string) => Promise.resolve({ id: profileId ?? focused }),
     clearSiteData: () => Promise.resolve(null),
     getMemoryUsage: () => ({ rss: 0, processes: 1 }),
+    listTabMemory: () => ({ entries: [], totalBytes: 0 }),
     getTabCounts: () => ({ total: 0, loaded: 0, asleep: 0 }),
     collectMedia: async () => [],
     downloadMedia: async () => ({ saved: 0, failed: [] }),
@@ -86,20 +88,28 @@ function setup(): {
       url: url ?? 'home',
       favicon: null,
       loaded: true,
+      folderId: null,
       kind: 'web' as const,
-      pinned: false
+      pinned: false,
+      keepAwake: false
     }),
     closeTab: () => ({ closed: true }),
     closeActiveTab: () => ({ closed: true, id: 'tab' }),
+    duplicateActiveTab: () => ({ duplicated: true, id: 'tab', url: '' }),
     discardTab: (id: string) => ({ discarded: true, id }),
     discardActiveTab: () => ({ discarded: true, id: 'tab' }),
+    wakeAllTabs: () => ({ woken: 0 }),
     selectTab: (id: string) => ({ id }),
     selectPrevTab: () => ({ id: null }),
     selectNextTab: () => ({ id: null }),
     reopenClosedTab: () => ({ reopened: false, id: null }),
     moveTab: (id: string) => ({ id }),
+    detachTab: async () => ({ windowId: 'w', created: true }),
+    moveTabToWindow: (_id: string, windowId: string) => ({ windowId }),
+    listWindows: () => [],
     pinTab: (id: string) => ({ id, pinned: true }),
     unpinTab: (id: string) => ({ id, pinned: false }),
+    setTabKeepAwake: (id: string, keepAwake: boolean) => ({ id, keepAwake }),
     listTabs: () => ({
       tabs: [
         {
@@ -109,13 +119,24 @@ function setup(): {
           favicon: null,
           loaded: true,
           kind: 'web' as const,
-          pinned: false
+          pinned: false,
+          keepAwake: false,
+          folderId: null
         }
       ],
       activeId: 'tab',
       panelCollapsed: false
     }),
     toggleTabsPanel: (collapsed?: boolean) => ({ collapsed: collapsed ?? true }),
+    showTabMenu: () => {},
+    listTabFolders: () => ({ folders: [] }),
+    createTabFolder: () => ({ id: 'folder-1' }),
+    renameTabFolder: () => ({ renamed: true }),
+    removeTabFolder: () => ({ removed: true }),
+    toggleTabFolder: (_id: string, collapsed?: boolean) => ({ collapsed: collapsed ?? true }),
+    setTabFolderColor: () => ({ updated: true }),
+    showFolderMenu: () => {},
+    moveTabToFolder: () => ({ moved: true }),
     toggleZen: (hidden?: boolean) => ({ hidden: hidden ?? true }),
     setPaletteOpen: (open?: boolean) => ({ open: open ?? true }),
     // Bookmark slice: minimal stubs, not exercised by these socket-dispatch tests.
@@ -139,6 +160,7 @@ function setup(): {
     clearHistory: () => ({ cleared: 0 }),
     showTooltip: () => ({ shown: true }),
     hideTooltip: () => ({ hidden: true }),
+    showToast: () => {},
     // Magnifier slice: minimal stubs, not exercised by these socket-dispatch tests.
     magnifierTarget: () => null,
     getMagnifierState: () => ({ scale: 1, originX: 0, originY: 0 }),
@@ -184,6 +206,7 @@ function setup(): {
     enableExtension: (id: string) =>
       Promise.resolve({ id, name: 'Fake', version: '1.0.0', path: `/ext/${id}`, enabled: true }),
     uninstallExtension: () => Promise.resolve({ removed: true }),
+    readServiceWorkerConsole: () => [],
     // Skill pane slice: minimal stubs.
     showSkillPane: () => {},
     closeSkillPane: () => {},
@@ -203,6 +226,25 @@ describe('handleRequestLine', () => {
     )
     expect(res).toEqual({ ok: true, url: 'https://example.com' })
     expect(loaded).toEqual(['https://example.com'])
+  })
+
+  it('accepts "cmd" as an alias for "command"', () => {
+    const { registry, ctx, loaded } = setup()
+    const res = handleRequestLine(
+      '{"cmd":"navigate","params":{"url":"example.com"}}',
+      registry,
+      ctx
+    )
+    expect(res).toEqual({ ok: true, url: 'https://example.com' })
+    expect(loaded).toEqual(['https://example.com'])
+  })
+
+  it('prefers "command" over "cmd" when both are present', () => {
+    const { registry, ctx } = setup()
+    expect(handleRequestLine('{"command":"fly","cmd":"navigate"}', registry, ctx)).toEqual({
+      ok: false,
+      error: 'Unknown command: fly'
+    })
   })
 
   it('rejects invalid JSON', () => {

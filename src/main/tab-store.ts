@@ -20,6 +20,19 @@ export interface TabMeta {
    * tabs form a contiguous block at the head of the list (pinTab / unpinTab
    * place them there, moveTab never crosses the boundary). */
   pinned?: boolean
+  /** Id of the tab folder this tab belongs to, or absent when the tab is "loose"
+   * (in no folder). Folder membership lives ON the tab — like `pinned` — so it
+   * survives a session restore (tab ids are regenerated, so a separate id→folder
+   * map could not). Folder metadata (title, collapsed, order) lives separately in
+   * tab-folder-store.ts. A pinned tab is never in a folder (pinning clears it). */
+  folderId?: string
+  /** Keep-awake tabs never sleep: they are woken in the background at session
+   * restore (instead of the default metadata-only, wake-on-select) and are immune
+   * to discard (Cmd+S / discard-tab is a no-op on them). Like `pinned`, the flag
+   * lives ON the tab and is persisted; absent means not kept awake — always test
+   * with `=== true`. Independent of `pinned` (a tab can be either, both, neither).
+   * This is lifecycle, not presentation: it adds no visual marker to the tab. */
+  keepAwake?: boolean
 }
 
 /** A window's tab list plus its active tab. `activeId` is null only when there
@@ -186,6 +199,23 @@ export function unpinTab(state: TabState, id: string): TabState {
   const insertAt = tabs.filter((t) => t.pinned === true).length
   tabs.splice(insertAt, 0, { ...tab, pinned: false })
   return { ...state, tabs }
+}
+
+/** Set (or clear) the keep-awake flag on a tab, leaving order and focus
+ * untouched. Writing `false` removes the flag entirely so the tab keeps the
+ * old shape (absent = not kept awake), mirroring how pinTab/unpinTab and the
+ * persistence layer treat the optional flags. No-op on an unknown id. */
+export function setKeepAwake(state: TabState, id: string, value: boolean): TabState {
+  if (!state.tabs.some((t) => t.id === id)) return state
+  return {
+    ...state,
+    tabs: state.tabs.map((t) => {
+      if (t.id !== id) return t
+      if (value) return { ...t, keepAwake: true }
+      const { keepAwake: _drop, ...rest } = t
+      return rest
+    })
+  }
 }
 
 /** What Cmd+W (close-active-tab) does right now. A pinned tab must be asked

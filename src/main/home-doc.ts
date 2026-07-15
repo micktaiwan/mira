@@ -85,7 +85,7 @@ export function buildHomePage(stats: HomeStats): string {
     cursor: default;
     overflow: hidden;
   }
-  .wrap { width: min(680px, 86vw); text-align: center; }
+  .wrap { width: min(920px, 92vw); text-align: center; }
   .brand {
     display: inline-flex;
     align-items: center;
@@ -147,8 +147,60 @@ export function buildHomePage(stats: HomeStats): string {
     font-variant-numeric: tabular-nums;
   }
   .card .sub { font-size: 12px; color: var(--t2); margin-top: 4px; }
-  .foot { margin-top: 30px; color: var(--t3); font-size: 12px; letter-spacing: 0.02em; }
-  @media (max-width: 520px) { .cards { grid-template-columns: 1fr; } }
+  .foot { margin-top: 26px; color: var(--t3); font-size: 12px; letter-spacing: 0.02em; }
+  /* Keyboard-shortcut reference: the "new user, what can I press?" panel. Static
+   * (baked at build time), grouped by task, four columns collapsing to two/one. */
+  .shortcuts {
+    margin-top: 40px;
+    text-align: left;
+    border-top: 1px solid var(--line);
+    padding-top: 26px;
+  }
+  .shortcuts h2 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--t3);
+    font-weight: 600;
+    margin: 0 0 20px;
+    text-align: center;
+  }
+  .sc-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px 28px;
+  }
+  .sc-col h3 {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    margin: 0 0 8px;
+  }
+  .sc-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 3px 0;
+  }
+  .sc-row .desc { color: var(--t2); font-size: 12.5px; }
+  kbd {
+    display: inline-block;
+    font: 600 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--t1);
+    background: #2b2b31;
+    border: 1px solid var(--line);
+    border-bottom-color: #23262d;
+    border-radius: 6px;
+    padding: 2px 6px;
+    white-space: nowrap;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  }
+  @media (max-width: 780px) { .sc-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 520px) {
+    .cards { grid-template-columns: 1fr; }
+    .sc-grid { grid-template-columns: 1fr; }
+  }
   /* Animated starfield behind the chrome: a slow parallax drift of twinkling
    * points, drawn on a full-window canvas. Purely ambient; sits under .wrap. */
   #stars {
@@ -186,6 +238,50 @@ export function buildHomePage(stats: HomeStats): string {
         <div class="label">Memory</div>
         <div class="value">${escapeHtml(stats.memoryText)}</div>
         <div class="sub">${escapeHtml(procNote)}</div>
+      </div>
+    </div>
+    <div class="shortcuts">
+      <h2>Keyboard shortcuts</h2>
+      <div class="sc-grid">
+        <div class="sc-col">
+          <h3>Tabs</h3>
+          <div class="sc-row"><span class="desc">New tab</span><kbd>⌘T</kbd></div>
+          <div class="sc-row"><span class="desc">Close tab</span><kbd>⌘W</kbd></div>
+          <div class="sc-row"><span class="desc">Reopen closed</span><kbd>⌘⇧T</kbd></div>
+          <div class="sc-row"><span class="desc">Duplicate tab</span><kbd>⌘⇧D</kbd></div>
+          <div class="sc-row"><span class="desc">Prev / next</span><kbd>⌘↑ ↓</kbd></div>
+          <div class="sc-row"><span class="desc">Sleep tab (free RAM)</span><kbd>⌘S</kbd></div>
+          <div class="sc-row"><span class="desc">Wake all tabs</span><kbd>⌘⇧R</kbd></div>
+        </div>
+        <div class="sc-col">
+          <h3>Navigate</h3>
+          <div class="sc-row"><span class="desc">Command palette</span><kbd>⌘K</kbd></div>
+          <div class="sc-row"><span class="desc">Back / forward</span><kbd>⌘← →</kbd></div>
+          <div class="sc-row"><span class="desc">Reload</span><kbd>⌘R</kbd></div>
+          <div class="sc-row"><span class="desc">Find in page</span><kbd>⌘F</kbd></div>
+          <div class="sc-row"><span class="desc">Find next / prev</span><kbd>⌘G</kbd></div>
+          <div class="sc-row"><span class="desc">Add to favorites</span><kbd>⌘D</kbd></div>
+          <div class="sc-row"><span class="desc">Zoom in / out / reset</span><kbd>⌘= − 0</kbd></div>
+        </div>
+        <div class="sc-col">
+          <h3>Layout</h3>
+          <div class="sc-row"><span class="desc">Tab sidebar</span><kbd>⌘B</kbd></div>
+          <div class="sc-row"><span class="desc">AI panel</span><kbd>⌘J</kbd></div>
+          <div class="sc-row"><span class="desc">Zen mode</span><kbd>⌘⇧H</kbd></div>
+          <div class="sc-row"><span class="desc">Settings</span><kbd>⌘,</kbd></div>
+          <div class="sc-row"><span class="desc">Developer tools</span><kbd>⌥⌘I</kbd></div>
+          <div class="sc-row"><span class="desc">Fullscreen</span><kbd>⌃⌘F</kbd></div>
+          <div class="sc-row"><span class="desc">Close window</span><kbd>⌘⇧W</kbd></div>
+        </div>
+        <div class="sc-col">
+          <h3>System-wide</h3>
+          <div class="sc-row"><span class="desc">Focus Mira</span><kbd>⌘⇧M</kbd></div>
+          <div class="sc-row"><span class="desc">Media gallery</span><kbd>⌘⌥⇧M</kbd></div>
+          <h3 style="margin-top:16px">Getting started</h3>
+          <div class="sc-row"><span class="desc">Type a URL or search in the bar above</span></div>
+          <div class="sc-row"><span class="desc">Press ⌘K for any command</span></div>
+          <div class="sc-row"><span class="desc">Switch profiles from the menu bar</span></div>
+        </div>
       </div>
     </div>
     <div class="foot">Type an address above, or press ⌘K to search</div>

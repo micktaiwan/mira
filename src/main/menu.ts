@@ -32,17 +32,27 @@ export interface AppMenuHandlers {
   /** Reload the focused window's active tab (Cmd+R). Wired to the reload command,
    * so the accelerator hits the same bus as the toolbar button and the socket. */
   reload: () => void
+  /** Hard reload the active tab (Cmd+Shift+R): re-fetch bypassing the HTTP cache,
+   * for a stale cached page. Wired to the hard-reload command. */
+  hardReload: () => void
   /** Open a new tab (Cmd+T) / close the active tab (Cmd+W) in the focused window.
    * Wired to the new-tab / close-active-tab commands. Cmd+W closes a tab, never
    * the window — window closing moves to Cmd+Shift+W (see the File menu). */
   newTab: () => void
   closeTab: () => void
+  /** Duplicate the active tab (Cmd+Shift+D): open a copy of the current page
+   * right under it and focus it. Wired to the duplicate-active-tab command. */
+  duplicateTab: () => void
   /** Reopen the most recently closed tab (Cmd+Shift+T) in the focused window.
    * Wired to the reopen-closed-tab command; a no-op when nothing was closed. */
   reopenTab: () => void
   /** Discard the active tab's page (Cmd+S): free its RAM, keep the tab, and move
    * to the next tab. Wired to the discard-active-tab command. */
   discardTab: () => void
+  /** Wake every tab that was awake at the previous quit (Cmd+Shift+A): restore
+   * only wakes the active tab, this reloads the rest of that saved set. Wired to
+   * the wake-all-tabs command; a no-op when they are already awake. */
+  wakeAllTabs: () => void
   /** Step up / down the vertical tab strip (Cmd+Up / Cmd+Down). Wired to the
    * prev-tab / next-tab commands; steps through every tab, asleep or not. */
   prevTab: () => void
@@ -154,6 +164,11 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
       },
       { type: 'separator' },
       { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => handlers.newTab() },
+      {
+        label: 'Duplicate Tab',
+        accelerator: 'CmdOrCtrl+Shift+D',
+        click: () => handlers.duplicateTab()
+      },
       { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => handlers.closeTab() },
       {
         label: 'Reopen Closed Tab',
@@ -164,6 +179,14 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
       // (asleep) and moves to the nearest already-loaded tab (never waking a
       // sleeping one) — not the browser's "Save Page As".
       { label: 'Discard Tab', accelerator: 'CmdOrCtrl+S', click: () => handlers.discardTab() },
+      // Cmd+Shift+A: re-open every tab that was awake when Mira last quit (restore
+      // only wakes the active one, the rest come back asleep). Was Cmd+Shift+R,
+      // moved so that reflex maps to Hard Reload (History menu) like a browser.
+      {
+        label: 'Wake All Tabs',
+        accelerator: 'CmdOrCtrl+Shift+A',
+        click: () => handlers.wakeAllTabs()
+      },
       { type: 'separator' },
       // Move up / down the vertical tab strip; wraps around the ends. The
       // accelerator is shown for discoverability but NOT registered here
@@ -229,7 +252,12 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
         { label: 'Back', accelerator: 'CmdOrCtrl+Left', click: () => handlers.goBack() },
         { label: 'Forward', accelerator: 'CmdOrCtrl+Right', click: () => handlers.goForward() },
         { type: 'separator' },
-        { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => handlers.reload() }
+        { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => handlers.reload() },
+        {
+          label: 'Hard Reload',
+          accelerator: 'CmdOrCtrl+Shift+R',
+          click: () => handlers.hardReload()
+        }
       ]
     },
     {

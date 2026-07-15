@@ -4,10 +4,15 @@
 // and restores from it, and index.ts reads/writes it as userData/sessions.json.
 //
 // Keyed by profile id so a closed profile keeps its saved tabs untouched while
-// another profile's window changes. The active tab is stored as an index (not an
-// id) because tab ids are regenerated on restore.
+// another profile's window changes. A profile can have SEVERAL windows open at
+// once (a tab torn off into its own window — see detach-tab), so the value is a
+// LIST of windows, each with its own tabs + geometry, correlated to the live
+// window by `windowId`. The active tab is stored as an index (not an id) because
+// tab ids are regenerated on restore.
 
+import { randomUUID } from 'node:crypto'
 import type { TabState } from './tab-store'
+import { normalizeTabFolders, type TabFolders } from './tab-folder-store'
 
 /** One tab as persisted: enough to recreate and label it before it loads.
  * `pinned` is only written when true, so pre-pin files and unpinned tabs keep
@@ -17,6 +22,21 @@ export interface PersistedTab {
   title: string
   favicon: string | null
   pinned?: boolean
+  /** Id of the tab folder this tab was in, or absent when loose. Written only
+   * when set (like `pinned`), so a pre-folders file keeps the old shape. On
+   * restore, tabs are recreated with a NEW id but carry this folderId, which is
+   * how folder membership survives (a separate id map could not — ids change). */
+  folderId?: string
+  /** Whether this tab had a live WebContentsView (was awake, not asleep) when
+   * Mira last quit. Written only when true (like `pinned`), so a pre-feature file
+   * keeps the old shape. Restore still wakes only the active tab; this flag lets
+   * `wake-all-tabs` (Cmd+Shift+A) re-open exactly the set that was awake at quit. */
+  loaded?: boolean
+  /** Whether this tab is kept awake: woken in the background on restore and immune
+   * to discard. Written only when true (like `pinned`), so a pre-feature file keeps
+   * the old shape. Unlike `loaded` (a runtime snapshot), this is durable tab state
+   * carried across restarts so the tab comes back alive. */
+  keepAwake?: boolean
 }
 
 /** A window's saved geometry: its restored (non-maximized) rectangle plus the
@@ -52,9 +72,19 @@ export interface PersistedBounds {
  * pre-geometry sessions.json (or an off-screen window) simply reopens at the
  * default size. */
 export interface PersistedWindow {
+  /** Stable id correlating this saved entry to the live window it snapshots, so a
+   * profile with several windows updates the right list entry (not append a new
+   * one) on every save. Minted at window create (live) or by normalizeSessions
+   * (legacy files, whose single-window shape had no id). Always present after
+   * normalization. */
+  windowId: string
   tabs: PersistedTab[]
   activeIndex: number
   panelCollapsed: boolean
+  /** The window's tab folders (metadata: title, collapsed, ORDER). Membership is
+   * on each tab (PersistedTab.folderId). Absent when the window has no folders,
+   * so a pre-folders file keeps the old shape. */
+  folders?: TabFolders
   bounds?: PersistedBounds
   /** Whether this profile's window was open when Mira last quit, so startup can
    * reopen exactly the set of windows that were showing (one per open profile).
@@ -64,44 +94,65 @@ export interface PersistedWindow {
   open?: boolean
 }
 
-/** Every profile's last window state, keyed by profile id. */
-export type PersistedSessions = Record<string, PersistedWindow>
+/** Every profile's last windows, keyed by profile id. A profile maps to the LIST
+ * of windows it had (one, or several after a tear-off). */
+export type PersistedSessions = Record<string, PersistedWindow[]>
 
 /** Snapshot a live window's tab strip (and, when known, its geometry) into its
  * persisted form. `bounds` is omitted from the output when not provided so a
- * geometry-less snapshot stays byte-identical to the old shape. */
+ * geometry-less snapshot stays byte-identical to the old shape. `windowId`
+ * correlates this snapshot to the live window (omitted when not given, e.g. in
+ * unit tests that don't care). */
 export function toPersisted(
   state: TabState,
   panelCollapsed: boolean,
   bounds?: PersistedBounds,
-  open?: boolean
+  open?: boolean,
+  folders: TabFolders = [],
+  loadedIds: ReadonlySet<string> = new Set(),
+  windowId?: string
 ): PersistedWindow {
   const found = state.tabs.findIndex((t) => t.id === state.activeId)
   return {
+    // A live snapshot always knows its windowId; the fallback keeps the field's
+    // type non-optional for the rare caller (tests) that omits it.
+    windowId: windowId ?? randomUUID(),
     tabs: state.tabs.map((t) => ({
       url: t.url,
       title: t.title,
       favicon: t.favicon,
-      ...(t.pinned === true ? { pinned: true } : {})
+      ...(t.pinned === true ? { pinned: true } : {}),
+      ...(t.folderId ? { folderId: t.folderId } : {}),
+      ...(loadedIds.has(t.id) ? { loaded: true } : {}),
+      ...(t.keepAwake === true ? { keepAwake: true } : {})
     })),
     activeIndex: found === -1 ? 0 : found,
     panelCollapsed,
+    // Only written when non-empty, so a folder-less window stays byte-identical
+    // to the old shape (mirrors bounds / pinned / open).
+    ...(folders.length ? { folders } : {}),
     ...(bounds ? { bounds } : {}),
-    // Only written when specified, so a geometry-only snapshot stays byte-identical
-    // to the old shape (mirrors bounds / pinned).
     ...(open !== undefined ? { open } : {})
   }
 }
 
 /** Defensively parse the persisted sessions file: keep only well-formed windows
- * (at least one tab with a url), drop the rest. A bad/partial file degrades to
- * an empty map rather than throwing. */
+ * (at least one tab with a url), drop the rest. A profile maps to a LIST of
+ * windows; a legacy file stored a single window object per profile, so a
+ * non-array value is read as a one-window list. A bad/partial file degrades to an
+ * empty map rather than throwing. Every surviving window gets a windowId (minted
+ * for legacy entries that had none), so the manager can correlate saves. */
 export function normalizeSessions(raw: unknown): PersistedSessions {
   if (!raw || typeof raw !== 'object') return {}
   const out: PersistedSessions = {}
   for (const [id, value] of Object.entries(raw as Record<string, unknown>)) {
-    const win = normalizeWindow(value)
-    if (win) out[id] = win
+    const list = Array.isArray(value) ? value : [value]
+    const windows: PersistedWindow[] = []
+    for (const v of list) {
+      const win = normalizeWindow(v)
+      if (win) windows.push(win)
+    }
+    if (windows.length > 0) out[id] = windows
   }
   return out
 }
@@ -109,6 +160,9 @@ export function normalizeSessions(raw: unknown): PersistedSessions {
 function normalizeWindow(value: unknown): PersistedWindow | null {
   if (!value || typeof value !== 'object') return null
   const v = value as Record<string, unknown>
+  // Correlate this saved entry to a live window across restarts; a legacy file
+  // (single-window shape) has no id, so mint one.
+  const windowId = typeof v.windowId === 'string' && v.windowId !== '' ? v.windowId : randomUUID()
   const rawTabs = Array.isArray(v.tabs) ? v.tabs : []
   const tabs: PersistedTab[] = []
   for (const t of rawTabs) {
@@ -119,16 +173,28 @@ function normalizeWindow(value: unknown): PersistedWindow | null {
       url: tv.url,
       title: typeof tv.title === 'string' ? tv.title : '',
       favicon: typeof tv.favicon === 'string' ? tv.favicon : null,
-      ...(tv.pinned === true ? { pinned: true } : {})
+      ...(tv.pinned === true ? { pinned: true } : {}),
+      ...(typeof tv.folderId === 'string' && tv.folderId !== '' ? { folderId: tv.folderId } : {}),
+      ...(tv.loaded === true ? { loaded: true } : {}),
+      ...(tv.keepAwake === true ? { keepAwake: true } : {})
     })
   }
   if (tabs.length === 0) return null
   const rawIndex = typeof v.activeIndex === 'number' ? Math.floor(v.activeIndex) : 0
   const bounds = normalizeBounds(v.bounds)
+  // Folder metadata, then drop any tab folderId with no matching folder (a
+  // dangling membership from a hand-edited or partial file).
+  const folders = normalizeTabFolders(v.folders)
+  const knownFolders = new Set(folders.map((f) => f.id))
+  for (const t of tabs) {
+    if (t.folderId !== undefined && !knownFolders.has(t.folderId)) delete t.folderId
+  }
   return {
+    windowId,
     tabs,
     activeIndex: Math.min(Math.max(rawIndex, 0), tabs.length - 1),
     panelCollapsed: v.panelCollapsed === true,
+    ...(folders.length ? { folders } : {}),
     ...(bounds ? { bounds } : {}),
     ...(typeof v.open === 'boolean' ? { open: v.open } : {})
   }

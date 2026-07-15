@@ -3,6 +3,14 @@ import {
   ALARM_MIN_DELAY_MS,
   ALARMS_POLYFILL_MAIN_WORLD,
   ALARMS_POLYFILL_SOURCE,
+  BEGIN_TAB_CAPTURE_IPC_CHANNEL,
+  CAPTURE_SHIM_FRAME_SOURCE,
+  CAPTURE_SHIM_MAIN_WORLD,
+  CHOOSE_DESKTOP_MEDIA_IPC_CHANNEL,
+  OFFSCREEN_IPC_CHANNEL,
+  OFFSCREEN_SHIM_MAIN_WORLD,
+  OFFSCREEN_SHIM_SOURCE,
+  relaxPermissionsPolicy,
   SERVICE_WORKER_BRIDGE_FRAME_MAIN_WORLD,
   SERVICE_WORKER_BRIDGE_FRAME_SOURCE,
   SERVICE_WORKER_BRIDGE_PORT,
@@ -389,6 +397,260 @@ describe('stripUnsupportedPermissions', () => {
     const dirty = { permissions: ['declarativeNetRequest'] }
     const second = stripUnsupportedPermissions(stripUnsupportedPermissions(dirty).manifest)
     expect(second.changed).toBe(false)
+  })
+
+  it('strips the offscreen permission (Electron 41 native offscreen SIGTRAPs on media access — Claap)', () => {
+    const claapLike = {
+      name: 'Claap',
+      permissions: [
+        'activeTab',
+        'alarms',
+        'storage',
+        'desktopCapture',
+        'tabCapture',
+        'scripting',
+        'offscreen',
+        'contextMenus'
+      ]
+    }
+    const { changed, manifest } = stripUnsupportedPermissions(claapLike)
+    expect(changed).toBe(true)
+    expect(manifest.permissions).not.toContain('offscreen')
+    // The capture permissions are merely unknown to Electron (warning), not
+    // fatal — they stay, and the page-side shims provide the APIs.
+    expect(manifest.permissions).toContain('desktopCapture')
+    expect(manifest.permissions).toContain('tabCapture')
+  })
+})
+
+describe('relaxPermissionsPolicy', () => {
+  const CLAAP = 'chrome-extension://bnflmljpbmkjeahgjakmjdanmhldjhbk'
+
+  it("appends extension origins to app.claap.io's real header", () => {
+    const header = 'camera=(self), microphone=(self), geolocation=(), interest-cohort=()'
+    expect(relaxPermissionsPolicy(header, [CLAAP])).toBe(
+      `camera=(self "${CLAAP}"), microphone=(self "${CLAAP}"), geolocation=(), interest-cohort=()`
+    )
+  })
+
+  it('re-enables a fully denied media feature (Chrome exempts extension frames entirely)', () => {
+    expect(relaxPermissionsPolicy('camera=()', [CLAAP])).toBe(`camera=("${CLAAP}")`)
+  })
+
+  it('leaves wildcard allowlists, bare-token form, and unknown features alone', () => {
+    expect(relaxPermissionsPolicy('camera=*', [CLAAP])).toBe('camera=*')
+    expect(relaxPermissionsPolicy('camera=self', [CLAAP])).toBe(`camera=(self "${CLAAP}")`)
+    expect(relaxPermissionsPolicy('geolocation=(self), payment=()', [CLAAP])).toBe(
+      'geolocation=(self), payment=()'
+    )
+  })
+
+  it('is a no-op without origins or without a value', () => {
+    expect(relaxPermissionsPolicy('camera=(self)', [])).toBe('camera=(self)')
+    expect(relaxPermissionsPolicy('', [CLAAP])).toBe('')
+  })
+
+  it('handles several origins and preserves segment spacing', () => {
+    const other = 'chrome-extension://kojhnafkiednagnljfgakalcbfbklbdk'
+    expect(relaxPermissionsPolicy('camera=(self)', [CLAAP, other])).toBe(
+      `camera=(self "${CLAAP}" "${other}")`
+    )
+  })
+})
+
+interface ShimOffscreen {
+  Reason: Record<string, string>
+  createDocument(params: unknown, callback?: (value?: unknown) => void): Promise<void>
+  closeDocument(callback?: () => void): Promise<void>
+  hasDocument(callback?: (value: boolean) => void): Promise<boolean>
+}
+
+interface ShimDesktopCapture {
+  chooseDesktopMedia(
+    sources: string[],
+    callback: (streamId: string, options: unknown) => void
+  ): number
+  cancelChooseDesktopMedia(requestId: number): void
+}
+
+interface ShimTabCapture {
+  capture(options: unknown, callback: (stream: unknown) => void): void
+}
+
+/** Run the offscreen shim's main world half against a fake global + bridge. */
+function runOffscreenShim(g: Record<string, unknown>, bridge: unknown): void {
+  new Function('globalThis', `(${OFFSCREEN_SHIM_MAIN_WORLD})(arguments[1])`)(g, bridge)
+}
+
+/** Run the capture shim's main world half against a fake global + bridge. */
+function runCaptureShim(g: Record<string, unknown>, bridge: unknown): void {
+  new Function('globalThis', `(${CAPTURE_SHIM_MAIN_WORLD})(arguments[1])`)(g, bridge)
+}
+
+describe('chrome.offscreen shim (main world)', () => {
+  it('ships valid, self-contained preload sources', () => {
+    expect(() => new Function(`(${OFFSCREEN_SHIM_MAIN_WORLD})`)).not.toThrow()
+    expect(() => new Function(OFFSCREEN_SHIM_SOURCE)).not.toThrow()
+    expect(OFFSCREEN_SHIM_SOURCE).toContain(OFFSCREEN_IPC_CHANNEL)
+    expect(OFFSCREEN_SHIM_SOURCE).toContain("process.type !== 'service-worker'")
+  })
+
+  it('installs chrome.offscreen with the Reason enum and bridges createDocument', async () => {
+    const bridge = {
+      create: vi.fn().mockResolvedValue({ ok: true }),
+      close: vi.fn().mockResolvedValue({ ok: true }),
+      has: vi.fn().mockResolvedValue({ ok: true, exists: true })
+    }
+    const g: Record<string, unknown> = { chrome: { runtime: {} } }
+    runOffscreenShim(g, bridge)
+    const offscreen = (g.chrome as { offscreen: ShimOffscreen }).offscreen
+    expect(offscreen.Reason.USER_MEDIA).toBe('USER_MEDIA')
+    await offscreen.createDocument({ url: 'offscreenDocument.html', reasons: ['USER_MEDIA'] })
+    expect(bridge.create).toHaveBeenCalledWith('offscreenDocument.html')
+    await expect(offscreen.hasDocument()).resolves.toBe(true)
+    await offscreen.closeDocument()
+    expect(bridge.close).toHaveBeenCalled()
+  })
+
+  it('rejects createDocument when the bridge refuses, and without a url', async () => {
+    const bridge = {
+      create: vi.fn().mockResolvedValue({ ok: false, error: 'extension not loaded' }),
+      close: vi.fn(),
+      has: vi.fn()
+    }
+    const g: Record<string, unknown> = { chrome: { runtime: {} } }
+    runOffscreenShim(g, bridge)
+    const offscreen = (g.chrome as { offscreen: ShimOffscreen }).offscreen
+    await expect(offscreen.createDocument({ url: 'x.html' })).rejects.toThrow(
+      'extension not loaded'
+    )
+    await expect(offscreen.createDocument({})).rejects.toThrow('url')
+  })
+
+  it('supports callback style and leaves a native chrome.offscreen alone', async () => {
+    const bridge = { create: vi.fn().mockResolvedValue({ ok: true }), close: vi.fn(), has: vi.fn() }
+    const g: Record<string, unknown> = { chrome: { runtime: {} } }
+    runOffscreenShim(g, bridge)
+    const offscreen = (g.chrome as { offscreen: ShimOffscreen }).offscreen
+    await new Promise<void>((resolve) =>
+      offscreen.createDocument({ url: 'x.html' }, () => resolve())
+    )
+    const native = { createDocument: () => {} }
+    const g2: Record<string, unknown> = { chrome: { runtime: {}, offscreen: native } }
+    runOffscreenShim(g2, bridge)
+    expect((g2.chrome as { offscreen: unknown }).offscreen).toBe(native)
+  })
+
+  it('fills in runtime.ContextType only when getContexts exists without it (Claap dereferences it)', () => {
+    const bridge = { create: vi.fn(), close: vi.fn(), has: vi.fn() }
+    const withGetContexts: Record<string, unknown> = {
+      chrome: { runtime: { getContexts: () => [] } }
+    }
+    runOffscreenShim(withGetContexts, bridge)
+    const runtime = (
+      withGetContexts.chrome as { runtime: { ContextType?: Record<string, string> } }
+    ).runtime
+    expect(runtime.ContextType?.OFFSCREEN_DOCUMENT).toBe('OFFSCREEN_DOCUMENT')
+    const without: Record<string, unknown> = { chrome: { runtime: {} } }
+    runOffscreenShim(without, bridge)
+    expect(
+      (without.chrome as { runtime: { ContextType?: unknown } }).runtime.ContextType
+    ).toBeUndefined()
+  })
+})
+
+describe('capture shims (main world)', () => {
+  it('ships valid, self-contained preload sources', () => {
+    expect(() => new Function(`(${CAPTURE_SHIM_MAIN_WORLD})`)).not.toThrow()
+    expect(() => new Function(CAPTURE_SHIM_FRAME_SOURCE)).not.toThrow()
+    expect(CAPTURE_SHIM_FRAME_SOURCE).toContain(CHOOSE_DESKTOP_MEDIA_IPC_CHANNEL)
+    expect(CAPTURE_SHIM_FRAME_SOURCE).toContain(BEGIN_TAB_CAPTURE_IPC_CHANNEL)
+    expect(CAPTURE_SHIM_FRAME_SOURCE).toContain('chrome-extension://')
+  })
+
+  it('chooseDesktopMedia returns a stream id and never advertises an audio track', async () => {
+    const bridge = { chooseDesktopMedia: vi.fn().mockResolvedValue({ streamId: 'screen:0:0' }) }
+    const g: Record<string, unknown> = { chrome: { runtime: {} } }
+    runCaptureShim(g, bridge)
+    const desktopCapture = (g.chrome as { desktopCapture: ShimDesktopCapture }).desktopCapture
+    const result = await new Promise<{ streamId: string; options: unknown }>((resolve) => {
+      const requestId = desktopCapture.chooseDesktopMedia(
+        ['screen', 'window', 'tab', 'audio'],
+        (streamId: string, options: unknown) => resolve({ streamId, options })
+      )
+      expect(requestId).toBeGreaterThan(0)
+    })
+    expect(result.streamId).toBe('screen:0:0')
+    expect(result.options).toEqual({ canRequestAudioTrack: false })
+    expect(bridge.chooseDesktopMedia).toHaveBeenCalledWith(['screen', 'window', 'tab', 'audio'])
+  })
+
+  it('cancelChooseDesktopMedia suppresses the pending callback', async () => {
+    let resolveBridge: (v: unknown) => void = () => {}
+    const bridge = {
+      chooseDesktopMedia: vi
+        .fn()
+        .mockReturnValue(new Promise((resolve) => (resolveBridge = resolve)))
+    }
+    const g: Record<string, unknown> = { chrome: { runtime: {} } }
+    runCaptureShim(g, bridge)
+    const desktopCapture = (g.chrome as { desktopCapture: ShimDesktopCapture }).desktopCapture
+    const callback = vi.fn()
+    const requestId = desktopCapture.chooseDesktopMedia(['screen'], callback)
+    desktopCapture.cancelChooseDesktopMedia(requestId)
+    resolveBridge({ streamId: 'screen:0:0' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(callback).not.toHaveBeenCalled()
+  })
+
+  it('tabCapture.capture surfaces failures through chrome.runtime.lastError', async () => {
+    const bridge = {
+      chooseDesktopMedia: vi.fn(),
+      beginTabCapture: vi.fn().mockResolvedValue({ ok: false, error: 'no active tab' })
+    }
+    const g: Record<string, unknown> = { chrome: { runtime: {} } }
+    runCaptureShim(g, bridge)
+    const tabCapture = (g.chrome as { tabCapture: ShimTabCapture }).tabCapture
+    const seen = await new Promise<{ stream: unknown; lastError: unknown }>((resolve) => {
+      tabCapture.capture({ audio: true, video: false }, (stream: unknown) =>
+        resolve({
+          stream,
+          lastError: (g.chrome as { runtime: { lastError?: unknown } }).runtime.lastError
+        })
+      )
+    })
+    expect(seen.stream).toBeNull()
+    expect(seen.lastError).toEqual({ message: 'no active tab' })
+    // lastError is scoped to the callback, Chrome-style.
+    expect((g.chrome as { runtime: { lastError?: unknown } }).runtime.lastError).toBeUndefined()
+  })
+
+  it('tabCapture.capture hands the getDisplayMedia stream to the callback, dropping video when not asked', async () => {
+    const stoppedTracks: string[] = []
+    const videoTrack = { kind: 'video', stop: () => stoppedTracks.push('video') }
+    const removed: unknown[] = []
+    const fakeStream = {
+      getVideoTracks: () => [videoTrack],
+      removeTrack: (t: unknown) => removed.push(t)
+    }
+    const bridge = {
+      chooseDesktopMedia: vi.fn(),
+      beginTabCapture: vi.fn().mockResolvedValue({ ok: true })
+    }
+    const getDisplayMedia = vi.fn().mockResolvedValue(fakeStream)
+    const g: Record<string, unknown> = {
+      chrome: { runtime: {} },
+      navigator: { mediaDevices: { getDisplayMedia } }
+    }
+    runCaptureShim(g, bridge)
+    const tabCapture = (g.chrome as { tabCapture: ShimTabCapture }).tabCapture
+    const stream = await new Promise<unknown>((resolve) => {
+      tabCapture.capture({ audio: true, video: false }, resolve)
+    })
+    expect(stream).toBe(fakeStream)
+    expect(getDisplayMedia).toHaveBeenCalledWith({ video: true, audio: true })
+    expect(stoppedTracks).toEqual(['video'])
+    expect(removed).toEqual([videoTrack])
   })
 })
 

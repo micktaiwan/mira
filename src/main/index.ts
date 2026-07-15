@@ -373,6 +373,10 @@ app.whenReady().then(async () => {
       const rss = metrics.reduce((sum, m) => sum + m.memory.workingSetSize * 1024, 0)
       return { rss, processes: metrics.length }
     },
+    // Per-process working set keyed by pid, for the Settings tab-memory analysis.
+    // workingSetSize is in KB (getAppMetrics), so scale to bytes like above.
+    getProcessMemory: () =>
+      app.getAppMetrics().map((m) => ({ pid: m.pid, bytes: m.memory.workingSetSize * 1024 })),
     extensions: extensionsService,
     onChange: () => {
       rebuildMenu()
@@ -435,10 +439,13 @@ app.whenReady().then(async () => {
       goBack: () => runDetached('back', {}, profiles.contextForFocused()),
       goForward: () => runDetached('forward', {}, profiles.contextForFocused()),
       reload: () => runDetached('reload', {}, profiles.contextForFocused()),
+      hardReload: () => runDetached('hard-reload', {}, profiles.contextForFocused()),
       newTab: () => runDetached('new-tab', {}, profiles.contextForFocused()),
+      duplicateTab: () => runDetached('duplicate-active-tab', {}, profiles.contextForFocused()),
       closeTab: () => runDetached('close-active-tab', {}, profiles.contextForFocused()),
       reopenTab: () => runDetached('reopen-closed-tab', {}, profiles.contextForFocused()),
       discardTab: () => runDetached('discard-active-tab', {}, profiles.contextForFocused()),
+      wakeAllTabs: () => runDetached('wake-all-tabs', {}, profiles.contextForFocused()),
       prevTab: () => runDetached('prev-tab', {}, profiles.contextForFocused()),
       nextTab: () => runDetached('next-tab', {}, profiles.contextForFocused()),
       addBookmark: () => runDetached('add-bookmark', {}, profiles.contextForFocused()),

@@ -20,6 +20,7 @@ import { cookieCommands } from './cookies'
 import { devtoolsCommands } from './devtools'
 import { extensionsCommands } from './extensions'
 import { findCommands } from './find'
+import { folderMenuCommands } from './folder-menu'
 import { historyCommands } from './history'
 import { magnifierCommands } from './magnifier'
 import { mediaCommands } from './media'
@@ -33,7 +34,12 @@ import { settingsCommands } from './settings'
 import { skillsCommands } from './skills'
 import { spacesCommands } from './spaces'
 import { statusCommands } from './status'
+import { tabFoldersCommands } from './tab-folders'
+import { tabDetachCommands } from './tab-detach'
+import { tabMemoryCommands } from './tab-memory'
+import { tabMenuCommands } from './tab-menu'
 import { tabsCommands } from './tabs'
+import { toastCommands } from './toast'
 import { tooltipCommands } from './tooltip'
 import { vaultCommands } from './vault'
 import { zenCommands } from './zen'
@@ -46,9 +52,25 @@ export type { BookmarkContext } from './bookmarks'
 export type { BookmarkNode, BookmarkUrl, BookmarkFolder, BookmarkTree } from '../bookmark-store'
 export type { CookieContext, CookieSink, ImportCookiesParams } from './cookies'
 export type { DevtoolsContext } from './devtools'
-export type { ExtensionsContext, ExtensionInfo } from './extensions'
-export { toExtensionInfo } from './extensions'
+export type {
+  ExtensionsContext,
+  ExtensionInfo,
+  ServiceWorkerLogEntry,
+  ServiceWorkerLogLevel,
+  ServiceWorkerConsoleQuery
+} from './extensions'
+export {
+  toExtensionInfo,
+  selectServiceWorkerLogs,
+  serviceWorkerLogLevel,
+  extensionIdFromUrl,
+  pickServiceWorkerExtensionId,
+  extensionPopoutBounds,
+  SW_LOG_LEVELS
+} from './extensions'
+export type { PopoutBounds } from './extensions'
 export type { FindContext, FindStopAction } from './find'
+export type { FolderMenuContext } from './folder-menu'
 export type { HistoryContext } from './history'
 export type { HistoryEntry } from '../history-store'
 export type { MagnifierContext } from './magnifier'
@@ -69,7 +91,14 @@ export type { Skill, SkillSource, SkillSink, SkillMatch } from '../skills'
 export type { SpacesContext, SpacesState } from './spaces'
 export type { DisplaySpaces, SpaceEntry, SpaceLocation } from '../spaces'
 export type { StatusContext, MemoryUsage, TabCounts } from './status'
+export type { TabFoldersContext } from './tab-folders'
+export type { TabFolder, TabFolders } from '../tab-folder-store'
+export type { TabMemoryContext, TabMemoryEntry, TabMemoryReport } from './tab-memory'
+export { formatBytes, rankTabMemory, totalDistinctMemory } from './tab-memory'
+export type { TabDetachContext, WindowInfo } from './tab-detach'
+export type { TabMenuContext } from './tab-menu'
 export type { TabsContext, TabInfo, TabKind } from './tabs'
+export type { ToastContext } from './toast'
 export type { TooltipContext } from './tooltip'
 export type { VaultContext } from './vault'
 export type { ZenContext, ZenState, PanelSnapshot } from './zen'
@@ -85,6 +114,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...devtoolsCommands,
     ...extensionsCommands,
     ...findCommands,
+    ...folderMenuCommands,
     ...historyCommands,
     ...magnifierCommands,
     ...mediaCommands,
@@ -98,7 +128,12 @@ export function createCommandRegistry(): CommandRegistry {
     ...skillsCommands,
     ...spacesCommands,
     ...statusCommands,
+    ...tabFoldersCommands,
+    ...tabMemoryCommands,
+    ...tabDetachCommands,
+    ...tabMenuCommands,
     ...tabsCommands,
+    ...toastCommands,
     ...tooltipCommands,
     ...vaultCommands,
     ...zenCommands

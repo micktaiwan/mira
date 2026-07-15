@@ -26,6 +26,114 @@ export interface ExtensionInfo {
   gaps?: CapabilityGap[]
 }
 
+/** The four console levels Chromium reports, in ascending severity. Electron's
+ * MessageDetails.level is the index into this array (0..3). */
+export const SW_LOG_LEVELS = ['verbose', 'info', 'warning', 'error'] as const
+export type ServiceWorkerLogLevel = (typeof SW_LOG_LEVELS)[number]
+
+/** One captured console line from an extension's service worker. Serializable
+ * (safe over socket/MCP) — this is what the extension-console command returns. */
+export interface ServiceWorkerLogEntry {
+  /** Extension id the worker belongs to, or '' if it couldn't be resolved. */
+  extensionId: string
+  /** Monotonic capture order, stable as the ring buffer drops old entries.
+   * Lets a caller poll for "what's new since seq N". */
+  seq: number
+  level: ServiceWorkerLogLevel
+  message: string
+  /** The chrome-extension:// URL the message came from. */
+  sourceUrl: string
+  lineNumber: number
+}
+
+/** Query over captured SW logs: filter by extension, by minimum severity, and
+ * cap to the most recent N. All optional. */
+export interface ServiceWorkerConsoleQuery {
+  id?: string
+  minLevel?: ServiceWorkerLogLevel
+  limit?: number
+  /** Which profile's session to read. Omitted = the target (focused) window's
+   * profile. Explicit because extensions are per profile (D2): a passkey flow
+   * failing in the "pro" profile leaves nothing in the "perso" Bitwarden's SW. */
+  profileId?: string
+}
+
+/** Map Electron's numeric console level (0..3) to its name; anything out of
+ * range falls back to 'info' rather than throwing. Pure. */
+export function serviceWorkerLogLevel(level: number): ServiceWorkerLogLevel {
+  return SW_LOG_LEVELS[level] ?? 'info'
+}
+
+/** True for a valid level name — the guard the command uses on socket input. */
+export function isServiceWorkerLogLevel(value: unknown): value is ServiceWorkerLogLevel {
+  return typeof value === 'string' && (SW_LOG_LEVELS as readonly string[]).includes(value)
+}
+
+/** Extract the extension id from a chrome-extension:// URL (or SW scope), '' if
+ * it isn't one. Web Store / unpacked ids are always 32 chars in a-p. Pure. */
+export function extensionIdFromUrl(url: string): string {
+  const match = /^chrome-extension:\/\/([a-p]{32})\b/.exec(url)
+  return match ? match[1] : ''
+}
+
+/** Resolve a SW console message to its extension id, trying in order: the
+ * message's own sourceUrl, a previously-cached id for that worker, then the
+ * worker's scope. Returns '' when the message isn't from an extension (e.g. a
+ * website's service worker) — those are dropped, not buffered. Pure, tested.
+ * Native capture must supply the cache/scope; sourceUrl alone is unreliable
+ * because Electron leaves it empty for most SW logs (runtime.lastError, etc.). */
+export function pickServiceWorkerExtensionId(
+  sourceUrl: string,
+  cachedId: string | undefined,
+  scope: string | undefined
+): string {
+  return extensionIdFromUrl(sourceUrl) || cachedId || (scope ? extensionIdFromUrl(scope) : '')
+}
+
+/** Filter and cap captured SW logs. Pure, tested. Returns matching entries
+ * oldest-first, keeping only the most recent `limit` of them. */
+export function selectServiceWorkerLogs(
+  entries: readonly ServiceWorkerLogEntry[],
+  query: ServiceWorkerConsoleQuery = {}
+): ServiceWorkerLogEntry[] {
+  const min = query.minLevel ? SW_LOG_LEVELS.indexOf(query.minLevel) : 0
+  const matched = entries.filter(
+    (entry) =>
+      (!query.id || entry.extensionId === query.id) &&
+      SW_LOG_LEVELS.indexOf(entry.level) >= min
+  )
+  const limit = query.limit && query.limit > 0 ? Math.floor(query.limit) : matched.length
+  return matched.slice(-limit)
+}
+
+/** Window bounds for an extension popout, from chrome.windows.create details.
+ * Only the fields BrowserWindow needs; x/y omitted when the caller gave none
+ * (Electron then centers). Clamped to sane minimums so a 0-sized request still
+ * shows something. Pure, tested. */
+export interface PopoutBounds {
+  width: number
+  height: number
+  x?: number
+  y?: number
+}
+
+/** Compute an extension popout window's bounds from chrome.windows.CreateData's
+ * width/height/left/top (all optional). Defaults match a Bitwarden-style popout. */
+export function extensionPopoutBounds(details: {
+  width?: number
+  height?: number
+  left?: number
+  top?: number
+}): PopoutBounds {
+  const bounds: PopoutBounds = {
+    width: Math.max(details.width ?? 380, 160),
+    height: Math.max(details.height ?? 630, 160)
+  }
+  if (typeof details.left === 'number') bounds.x = Math.round(details.left)
+  if (typeof details.top === 'number') bounds.y = Math.round(details.top)
+  return bounds
+}
+
 /** Shape an Electron Extension (or anything carrying the same fields) into the
  * serializable info commands return. Pure, tested. A live Extension object is
  * by definition loaded, hence the enabled default. */
@@ -67,6 +175,11 @@ export interface ExtensionsContext {
    * store directory if store-installed + forget any sideload record). Rejects
    * on an unknown id. */
   uninstallExtension: (id: string) => Promise<{ removed: boolean }>
+  /** Captured console output of an extension service worker, filtered/capped by
+   * the query, oldest-first. Reads `query.profileId`'s session when given, else
+   * the target (focused) window's profile. Empty if capture found nothing (e.g.
+   * no worker ever logged) — never throws for an unknown id. */
+  readServiceWorkerConsole: (query: ServiceWorkerConsoleQuery) => ServiceWorkerLogEntry[]
 }
 
 export const extensionsCommands: CommandMap<CommandContext> = {
@@ -146,6 +259,40 @@ export const extensionsCommands: CommandMap<CommandContext> = {
     }
     try {
       return { ok: true, ...(await ctx.uninstallExtension(id)) }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // Inspect an extension's service-worker (MV3 background) console. Mira can't
+  // open devtools on a headless SW, so instead it tails a ring buffer of the
+  // worker's console output captured since boot. Diagnoses "the SW threw / never
+  // ran" cases (e.g. a Bitwarden passkey popout hitting an unimplemented API)
+  // that are otherwise invisible. All params optional: { id, level, limit }.
+  'extension-console': (ctx, params) => {
+    const p = (params ?? {}) as {
+      id?: unknown
+      level?: unknown
+      limit?: unknown
+      profileId?: unknown
+    }
+    const query: ServiceWorkerConsoleQuery = {}
+    if (typeof p.id === 'string' && p.id.trim() !== '') query.id = p.id
+    if (typeof p.profileId === 'string' && p.profileId.trim() !== '') query.profileId = p.profileId
+    if (p.level !== undefined) {
+      if (!isServiceWorkerLogLevel(p.level)) {
+        return { ok: false, error: `"level" must be one of ${SW_LOG_LEVELS.join(', ')}` }
+      }
+      query.minLevel = p.level
+    }
+    if (p.limit !== undefined) {
+      if (typeof p.limit !== 'number' || !Number.isFinite(p.limit) || p.limit <= 0) {
+        return { ok: false, error: '"limit" must be a positive number' }
+      }
+      query.limit = p.limit
+    }
+    try {
+      return { ok: true, messages: ctx.readServiceWorkerConsole(query) }
     } catch (error) {
       return fail(error)
     }

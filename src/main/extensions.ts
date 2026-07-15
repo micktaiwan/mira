@@ -9,8 +9,25 @@
 // extension-store.ts (sideload registry) and commands/extensions.ts (the
 // pilotable command surface + ExtensionInfo shaping).
 
-import { app, dialog, session, type BaseWindow, type Session, type WebContents } from 'electron'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import {
+  app,
+  dialog,
+  session,
+  BrowserWindow,
+  type BaseWindow,
+  type Session,
+  type WebContents
+} from 'electron'
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync
+} from 'fs'
+import { createHash } from 'crypto'
 import { join } from 'path'
 import { ElectronChromeExtensions, setSessionPartitionResolver } from 'electron-chrome-extensions'
 import {
@@ -20,19 +37,34 @@ import {
   updateExtensions
 } from 'electron-chrome-web-store'
 import { DEFAULT_SESSION_ALIAS } from './chrome-session'
-import { toExtensionInfo, type ExtensionInfo } from './commands'
+import {
+  toExtensionInfo,
+  serviceWorkerLogLevel,
+  extensionIdFromUrl,
+  pickServiceWorkerExtensionId,
+  extensionPopoutBounds,
+  selectServiceWorkerLogs,
+  type ExtensionInfo,
+  type ServiceWorkerLogEntry,
+  type ServiceWorkerConsoleQuery
+} from './commands'
 import {
   ALARMS_POLYFILL_SOURCE,
   SERVICE_WORKER_BRIDGE_FRAME_SOURCE,
   detectCapabilityGaps,
   dnrMatches,
   recordWorkerRestart,
+  relaxPermissionsPolicy,
   stripUnsupportedPermissions,
   translateDnrRules,
+  WORKER_RESTART_WINDOW_MS,
   type CapabilityGap,
   type DnrModification,
   type DnrRule
 } from './extension-capabilities'
+import { ExtensionCaptureService } from './extension-capture'
+import { ExtensionCommandsService } from './extension-commands'
+import { OffscreenHostService } from './extension-offscreen'
 import {
   type DisabledExtensions,
   type SideloadedExtensions,
@@ -59,6 +91,14 @@ export interface ExtensionTabHooks {
   selectTab: (wc: WebContents) => void
   /** Close the Mira tab that owns `wc` (chrome.tabs.remove). */
   removeTab: (wc: WebContents) => void
+  /** The active tab's webContents, or null (asleep / Settings / window gone).
+   * Backs the chrome.tabCapture shim: "capture the active tab". */
+  activeTab: () => WebContents | null
+  /** The chrome (toolbar UI) webContents of the profile's current window, or
+   * null. Backs extension keyboard shortcuts: _execute_action clicks the
+   * extension's toolbar button there, and shortcuts must work while the
+   * address bar has focus. */
+  chromeWebContents: () => WebContents | null
 }
 
 export interface ExtensionsServiceDeps {
@@ -108,6 +148,12 @@ export class ExtensionsService {
   private alarmsShimPath: string | null = null
   /** Path of the nested extension-frame half of the service-worker bridge. */
   private workerBridgeFramePath: string | null = null
+  /** chrome.offscreen backend (hidden host windows) — lazy, needs userData. */
+  private offscreenHost: OffscreenHostService | null = null
+  /** chrome.desktopCapture / chrome.tabCapture backend — lazy, needs userData. */
+  private captureService: ExtensionCaptureService | null = null
+  /** Extension keyboard shortcuts (manifest `commands`). */
+  private readonly commandsService = new ExtensionCommandsService()
 
   constructor(private readonly deps: ExtensionsServiceDeps) {
     this.sideloaded = deps.initialSideloaded
@@ -129,10 +175,19 @@ export class ExtensionsService {
    * (frame + service-worker) on the session at construction. Idempotent. */
   ensureFor(ses: Session, hooks: ExtensionTabHooks): void {
     if (this.bySession.has(ses)) return
-    // The alarms shim MUST be registered before the lib: preloads run in
+    // The shims MUST be registered before the lib: preloads run in
     // registration order and the lib's SW preload ends with a main-world
-    // Object.freeze(chrome) — an alarms added after that is a silent no-op.
+    // Object.freeze(chrome) — an alarms/offscreen/capture surface added after
+    // that is a silent no-op.
     this.registerRuntimeShims(ses)
+    this.offscreenHost ??= new OffscreenHostService(app.getPath('userData'))
+    this.offscreenHost.attach(ses)
+    this.captureService ??= new ExtensionCaptureService(app.getPath('userData'))
+    this.captureService.attach(ses, { activeTab: hooks.activeTab })
+    this.commandsService.attach(ses, {
+      chromeWebContents: hooks.chromeWebContents,
+      sendCommand: (extensionId, command) => this.sendCommandEvent(ses, extensionId, command)
+    })
     const instance = new ElectronChromeExtensions({
       // Decision D1 (extensions-plan.md §7): GPL-3.0 — free, requires providing
       // sources if Mira is ever distributed (it isn't).
@@ -140,13 +195,65 @@ export class ExtensionsService {
       session: ses,
       createTab: (details) => hooks.createTab({ url: details.url }),
       selectTab: (wc) => hooks.selectTab(wc),
-      removeTab: (wc) => hooks.removeTab(wc)
-      // createWindow deliberately omitted: a window = a profile (posed decision),
-      // extensions don't get to open new ones. assignTabDetails omitted too — the
-      // lib only sees materialized tabs, so `discarded` would be constant.
+      removeTab: (wc) => hooks.removeTab(wc),
+      // A window = a profile normally, so extensions don't get to open profile
+      // windows — but a few flows genuinely need a transient popOUT window that
+      // hosts an extension page: Bitwarden's passkey/unlock picker (fido2) opens
+      // one via chrome.windows.create, and without this hook the lib throws
+      // "createWindow is not implemented", so the WebAuthn request hangs forever.
+      // This creates a bare, session-bound BrowserWindow (like the lib's own
+      // browser-action popup) that loads the extension URL — NOT a ProfileWindow.
+      createWindow: (details) => this.createExtensionPopout(ses, details)
+      // assignTabDetails omitted: the lib only sees materialized tabs, so
+      // `discarded` would be constant.
     })
     this.bySession.set(ses, instance)
     this.hookWorkerKeepalive(ses)
+  }
+
+  /** Open a transient popout window hosting an extension page, for the lib's
+   * chrome.windows.create hook. Mirrors the lib's own browser-action popup: a
+   * bare, session-bound BrowserWindow that loads the extension URL, so the page
+   * gets the extension's preload and chrome.* APIs. NOT a ProfileWindow — it's
+   * unknown to ProfileManager on purpose (findByWindow returns null for it).
+   * Used by Bitwarden's fido2 passkey/unlock picker. */
+  private async createExtensionPopout(
+    ses: Session,
+    details: {
+      url?: string | string[]
+      width?: number
+      height?: number
+      left?: number
+      top?: number
+      focused?: boolean
+    }
+  ): Promise<BrowserWindow> {
+    const win = new BrowserWindow({
+      ...extensionPopoutBounds(details),
+      show: false,
+      // A titlebar so the user can always dismiss it; popout, not a full chrome.
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      webPreferences: {
+        session: ses,
+        sandbox: true,
+        contextIsolation: true,
+        nodeIntegration: false,
+        enablePreferredSizeMode: true
+      }
+    })
+    const url = Array.isArray(details.url) ? details.url[0] : details.url
+    if (url) {
+      try {
+        await win.loadURL(url)
+      } catch (error) {
+        console.warn('[mira] extension popout failed to load:', error)
+      }
+    }
+    if (details.focused === false) win.showInactive()
+    else win.show()
+    return win
   }
 
   /** Write the chrome.alarms polyfill to disk once and register it as a
@@ -192,18 +299,56 @@ export class ExtensionsService {
   // stopped worker (electron#41613; fixed in 42.x, 41 backport abandoned) —
   // the cause of Kondo's "Browser extension stopped" loop once the DNR crash
   // is out of the way (extensions-plan.md §8). Official workaround: start the
-  // workers ourselves. Chromium still stops an idle SW after ~30s, and a
-  // stopped worker is unreachable again — so we also restart on stop, with a
-  // pure throttle (recordWorkerRestart) so a worker that crashes at eval
-  // cannot restart-loop. Net effect: extension SWs stay resident (acceptable
-  // RAM cost for a personal browser).
+  // workers ourselves.
+  //
+  // Primary keepalive: ServiceWorkerMain.startTask() holds each running worker
+  // alive so Chromium never idle-terminates it (its doc: "the service won't
+  // terminate while otherwise idle"). This keeps the SAME worker resident with
+  // its in-memory state intact — decisive for a stateful extension like a
+  // password manager, whose unlocked vault key lives in SW memory. Without it,
+  // the old restart-on-stop approach let Chromium kill the SW after ~30s and
+  // then re-created it from a COLD eval: the vault re-locked every ~30s and any
+  // in-flight popup->SW unlock message was dropped mid-request ("The message
+  // port closed before a response was received"), so unlock never took.
+  //
+  // Fallback: we still restart on stop (a genuine crash can stop a held
+  // worker), with a pure throttle (recordWorkerRestart) so a worker that
+  // crashes at eval cannot restart-loop. Net effect: extension SWs stay
+  // resident (acceptable RAM cost for a personal browser).
 
   /** versionId -> scope, per session: 'stopped' events carry only a versionId
    * whose info is no longer queryable, so remember scopes while they run. */
   private readonly workerScopes = new Map<Session, Map<number, string>>()
 
+  /** Ring buffer of extension-SW console output per session, tailed by the
+   * extension-console command. Mira can't open devtools on a headless MV3
+   * worker, so capturing its console is the only way to see it throw/log.
+   * Mirrored to disk (swConsoleFile) so it survives a main-process reload — in
+   * dev, every HMR restart would otherwise wipe it mid-debug. */
+  private readonly swConsole = new Map<Session, ServiceWorkerLogEntry[]>()
+
+  /** versionId -> extension id, per session, NEVER pruned. Electron leaves the
+   * sourceUrl empty on most SW logs (runtime.lastError, port-closed, …), so the
+   * only way to attribute them is a durable id learned from an earlier message
+   * or the worker's scope. Pruning on 'stopped' (like workerScopes) would lose
+   * exactly the attribution we need. */
+  private readonly swWorkerIds = new Map<Session, Map<number, string>>()
+
+  /** Resolved on-disk JSONL path per session for the SW console mirror. */
+  private readonly swConsoleFile = new Map<Session, string>()
+
+  /** Monotonic sequence for captured SW log entries — lets a caller poll for
+   * "what's new since seq N" even as old entries drop out of the buffer. Seeded
+   * from disk on attach so it keeps climbing across reloads. */
+  private swConsoleSeq = 0
+
   /** Restart history per session+scope, pruned by recordWorkerRestart. */
   private readonly workerRestarts = new Map<Session, Map<string, number[]>>()
+
+  /** Live keepalive task per session+versionId. Holding a StartTask is what
+   * prevents idle termination; the handle is kept so it is not GC'd and can be
+   * released when the worker version goes away. */
+  private readonly workerTasks = new Map<Session, Map<number, Electron.StartTask>>()
 
   /** Start the SW of every loaded MV3 service-worker extension of `ses`.
    * Idempotent (startWorkerForScope is a no-op on a running worker); failures
@@ -216,6 +361,7 @@ export class ExtensionsService {
         background?: { service_worker?: string }
       }
       if (manifest?.manifest_version !== 3 || !manifest.background?.service_worker) continue
+      console.log(`[mira-sw] launch ${ext.id}`)
       ses.serviceWorkers.startWorkerForScope(ext.url).catch((error) => {
         console.warn(`[mira] failed to start extension SW ${ext.id}:`, error)
       })
@@ -227,22 +373,181 @@ export class ExtensionsService {
     if (this.workerScopes.has(ses)) return
     const scopes = new Map<number, string>()
     this.workerScopes.set(ses, scopes)
+    this.hookServiceWorkerConsole(ses, scopes)
     ses.serviceWorkers.on('running-status-changed', ({ versionId, runningStatus }) => {
       if (runningStatus === 'starting' || runningStatus === 'running') {
         try {
           const scope = ses.serviceWorkers.getInfoFromVersionID(versionId).scope
-          if (scope.startsWith('chrome-extension://')) scopes.set(versionId, scope)
+          if (scope.startsWith('chrome-extension://')) {
+            scopes.set(versionId, scope)
+            this.rememberSwId(ses, versionId, extensionIdFromUrl(scope))
+            console.log(`[mira-sw] ${runningStatus} ${idFromScope(scope)} (v${versionId})`)
+            // Hold the worker alive only once it is actually running (startTask
+            // needs a live worker); 'starting' is too early.
+            if (runningStatus === 'running') this.holdWorkerAlive(ses, versionId, scope)
+          }
         } catch {
           // no queryable info (already gone) — nothing to remember
         }
         return
       }
       if (runningStatus !== 'stopped') return
+      // Drop the stale keepalive handle so a same-versionId restart re-holds.
+      this.releaseWorkerTask(ses, versionId)
       const scope = scopes.get(versionId)
       if (!scope) return // not an extension worker of ours
       scopes.delete(versionId)
+      console.log(`[mira-sw] stopped ${idFromScope(scope)} (v${versionId})`)
       this.restartWorker(ses, scope)
     })
+  }
+
+  /** Tail the console of every EXTENSION service worker in `ses` into a ring
+   * buffer (read back by the extension-console command), mirrored to disk so it
+   * survives a main reload. Website service workers are dropped — only messages
+   * attributable to a chrome-extension are kept. Once per session. */
+  private hookServiceWorkerConsole(ses: Session, scopes: Map<number, string>): void {
+    const buffer = this.loadSwConsole(ses)
+    this.swConsole.set(ses, buffer)
+    ses.serviceWorkers.on('console-message', (_event, details) => {
+      const extensionId = this.resolveSwId(ses, details.versionId, details.sourceUrl, scopes)
+      if (!extensionId) return // website SW (or unattributable) — not our concern
+      const entry: ServiceWorkerLogEntry = {
+        extensionId,
+        seq: ++this.swConsoleSeq,
+        level: serviceWorkerLogLevel(details.level),
+        message: details.message,
+        sourceUrl: details.sourceUrl,
+        lineNumber: details.lineNumber
+      }
+      buffer.push(entry)
+      if (buffer.length > SW_CONSOLE_BUFFER_LIMIT) {
+        buffer.splice(0, buffer.length - SW_CONSOLE_BUFFER_LIMIT)
+      }
+      this.appendSwConsole(ses, entry)
+    })
+  }
+
+  /** Resolve a SW message to its extension id and cache the mapping. '' means
+   * the message isn't from an extension we track (dropped by the caller). */
+  private resolveSwId(
+    ses: Session,
+    versionId: number,
+    sourceUrl: string,
+    scopes: Map<number, string>
+  ): string {
+    const cached = this.swWorkerIds.get(ses)?.get(versionId)
+    let scope = scopes.get(versionId)
+    if (!scope && !cached && !sourceUrl) {
+      // No hint at all — ask Electron for the worker's scope while it's alive.
+      try {
+        scope = ses.serviceWorkers.getInfoFromVersionID(versionId).scope
+      } catch {
+        // worker already gone — leave scope undefined
+      }
+    }
+    const id = pickServiceWorkerExtensionId(sourceUrl, cached, scope)
+    if (id) this.rememberSwId(ses, versionId, id)
+    return id
+  }
+
+  /** Cache versionId -> extension id for `ses` (no-op on empty id). */
+  private rememberSwId(ses: Session, versionId: number, id: string): void {
+    if (!id) return
+    const ids = this.swWorkerIds.get(ses) ?? new Map<number, string>()
+    this.swWorkerIds.set(ses, ids)
+    ids.set(versionId, id)
+  }
+
+  /** Captured console output of `ses`'s extension service workers, filtered and
+   * capped by `query`. Empty when nothing was captured — never throws. */
+  serviceWorkerConsole(ses: Session, query: ServiceWorkerConsoleQuery): ServiceWorkerLogEntry[] {
+    return selectServiceWorkerLogs(this.swConsole.get(ses) ?? [], query)
+  }
+
+  /** On-disk JSONL mirror path for `ses`'s SW console. Keyed by a hash of the
+   * session's storage path so it is stable across reloads and unique per
+   * profile (an in-memory session with no storage path shares one bucket). */
+  private swConsoleFilePath(ses: Session): string {
+    const cached = this.swConsoleFile.get(ses)
+    if (cached) return cached
+    const key = createHash('sha1')
+      .update(ses.getStoragePath() ?? 'in-memory')
+      .digest('hex')
+      .slice(0, 16)
+    const dir = join(app.getPath('userData'), 'sw-console')
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    const path = join(dir, `${key}.jsonl`)
+    this.swConsoleFile.set(ses, path)
+    return path
+  }
+
+  /** Load the disk mirror into a fresh ring buffer (last SW_CONSOLE_BUFFER_LIMIT
+   * entries), rewrite the file to that tail so it stays bounded, seed the seq
+   * counter, and rebuild the versionId->id cache from it. Best-effort. */
+  private loadSwConsole(ses: Session): ServiceWorkerLogEntry[] {
+    const path = this.swConsoleFilePath(ses)
+    let buffer: ServiceWorkerLogEntry[] = []
+    try {
+      if (existsSync(path)) {
+        buffer = readFileSync(path, 'utf8')
+          .split('\n')
+          .filter((line) => line.trim() !== '')
+          .map((line) => JSON.parse(line) as ServiceWorkerLogEntry)
+      }
+    } catch {
+      buffer = [] // corrupt file — start clean
+    }
+    if (buffer.length > SW_CONSOLE_BUFFER_LIMIT) buffer = buffer.slice(-SW_CONSOLE_BUFFER_LIMIT)
+    for (const entry of buffer) {
+      this.swConsoleSeq = Math.max(this.swConsoleSeq, entry.seq)
+    }
+    try {
+      writeFileSync(path, buffer.map((e) => JSON.stringify(e)).join('\n') + (buffer.length ? '\n' : ''))
+    } catch {
+      // can't rewrite — harmless, the in-memory ring still works
+    }
+    return buffer
+  }
+
+  /** Append one captured entry to `ses`'s disk mirror. Best-effort. */
+  private appendSwConsole(ses: Session, entry: ServiceWorkerLogEntry): void {
+    try {
+      appendFileSync(this.swConsoleFilePath(ses), JSON.stringify(entry) + '\n')
+    } catch {
+      // disk hiccup — the in-memory ring is the source of truth for reads
+    }
+  }
+
+  /** Hold a running extension worker alive with ServiceWorkerMain.startTask, so
+   * Chromium never idle-terminates it and its in-memory state survives.
+   * Idempotent per versionId; best-effort (the API is experimental). */
+  private holdWorkerAlive(ses: Session, versionId: number, scope: string): void {
+    const tasks = this.workerTasks.get(ses) ?? new Map<number, Electron.StartTask>()
+    this.workerTasks.set(ses, tasks)
+    if (tasks.has(versionId)) return // already held
+    try {
+      const worker = ses.serviceWorkers.getWorkerFromVersionID(versionId)
+      if (!worker) return
+      tasks.set(versionId, worker.startTask())
+      console.log(`[mira-sw] hold ${idFromScope(scope)} (v${versionId})`)
+    } catch (error) {
+      console.warn(`[mira] failed to hold extension SW ${scope} alive:`, error)
+    }
+  }
+
+  /** Release the keepalive handle of a worker version (on stop/crash). */
+  private releaseWorkerTask(ses: Session, versionId: number): void {
+    const tasks = this.workerTasks.get(ses)
+    if (!tasks) return
+    const task = tasks.get(versionId)
+    if (!task) return
+    tasks.delete(versionId)
+    try {
+      task.end()
+    } catch {
+      // The worker is already gone — ending its task is moot.
+    }
   }
 
   /** Restart one stopped extension worker, unless its extension was unloaded
@@ -258,6 +563,9 @@ export class ExtensionsService {
       console.warn(`[mira] extension SW ${scope} keeps dying — giving up on restarts for now`)
       return
     }
+    console.log(
+      `[mira-sw] restart ${idFromScope(scope)} (${history.length} in ${WORKER_RESTART_WINDOW_MS / 1000}s)`
+    )
     ses.serviceWorkers.startWorkerForScope(scope).catch((error) => {
       console.warn(`[mira] failed to restart extension SW ${scope}:`, error)
     })
@@ -325,13 +633,23 @@ export class ExtensionsService {
     }
     const mods = translateDnrRules(rules).filter((m) => m.action !== 'unsupported')
     this.dnrBySession.set(ses, mods)
-    if (mods.length === 0 && !this.dnrHooked.has(ses)) return // nothing to enforce yet
+    // Always installed once extensions exist: onHeadersReceived also carries
+    // the Permissions-Policy relaxing (Chrome exempts extension frames from
+    // the page's policy; Blink under Electron does not — Claap's webcam bubble
+    // on app.claap.io, extensions-plan.md §9).
+    if (mods.length === 0 && !this.dnrHooked.has(ses) && !this.hasExtensions(ses)) return
     this.installWebRequest(ses)
   }
 
-  /** Install the three webRequest listeners that enforce this session's DNR mods.
-   * Once per session (only one listener per event is allowed); they read the live
-   * mod list, so a later applyDnr just updates the map. */
+  /** Any extension currently loaded in `ses`? */
+  private hasExtensions(ses: Session): boolean {
+    return ses.extensions.getAllExtensions().length > 0
+  }
+
+  /** Install the three webRequest listeners that enforce this session's DNR mods
+   * and the extension-frame Permissions-Policy relaxing. Once per session (only
+   * one listener per event is allowed); they read the live state, so a later
+   * applyDnr / extension load just updates it. */
   private installWebRequest(ses: Session): void {
     if (this.dnrHooked.has(ses)) return
     this.dnrHooked.add(ses)
@@ -352,8 +670,31 @@ export class ExtensionsService {
     ses.webRequest.onHeadersReceived((details, cb) => {
       const headers = details.responseHeaders
       if (!headers) return cb({})
-      cb({ responseHeaders: applyResponseHeaderMods(headers, this.matchingDnr(ses, details)) })
+      let out = applyResponseHeaderMods(headers, this.matchingDnr(ses, details))
+      out = this.relaxDocumentPolicies(ses, details.resourceType, out)
+      cb({ responseHeaders: out })
     })
+  }
+
+  /** Emulate Chrome's extension exemption from permissions policy: on document
+   * responses, append the loaded extensions' origins to the media allowlists of
+   * a Permissions-Policy header (relaxPermissionsPolicy). Responses without the
+   * header — the common case — pass through untouched. */
+  private relaxDocumentPolicies(
+    ses: Session,
+    resourceType: string,
+    headers: Record<string, string[]>
+  ): Record<string, string[]> {
+    if (resourceType !== 'mainFrame' && resourceType !== 'subFrame') return headers
+    const policyKeys = Object.keys(headers).filter((k) => k.toLowerCase() === 'permissions-policy')
+    if (!policyKeys.length) return headers
+    const origins = ses.extensions.getAllExtensions().map((ext) => `chrome-extension://${ext.id}`)
+    if (!origins.length) return headers
+    const out = { ...headers }
+    for (const key of policyKeys) {
+      out[key] = out[key].map((value) => relaxPermissionsPolicy(value, origins))
+    }
+    return out
   }
 
   /** The DNR mods that apply to one request on `ses`. */
@@ -713,6 +1054,42 @@ export class ExtensionsService {
   contextMenuItems(wc: WebContents, params: Electron.ContextMenuParams): Electron.MenuItem[] {
     return this.bySession.get(wc.session)?.getContextMenuItems(wc, params) ?? []
   }
+
+  /** Deliver a named keyboard command to chrome.commands.onCommand listeners.
+   * The lib overrides chrome.commands.onCommand with its own routed event (its
+   * SW preload wins over ours), so the ONLY way to reach the listeners an
+   * extension registered is the lib's internal router — reached through the
+   * undocumented `ctx` of the instance, guarded so a lib upgrade that moves it
+   * degrades to a warning, not a crash. Its sendEvent wakes a stopped service
+   * worker before sending. */
+  private sendCommandEvent(ses: Session, extensionId: string, command: string): void {
+    const instance = this.bySession.get(ses) as unknown as
+      | {
+          ctx?: {
+            router?: {
+              sendEvent: (target: string | undefined, event: string, ...args: unknown[]) => void
+            }
+          }
+        }
+      | undefined
+    const router = instance?.ctx?.router
+    if (!router || typeof router.sendEvent !== 'function') {
+      console.warn('[mira-commands] extensions lib router unavailable — command dropped:', command)
+      return
+    }
+    router.sendEvent(extensionId, 'commands.onCommand', command)
+  }
+}
+
+/** Max SW console lines kept per session in the ring buffer. Enough to hold a
+ * boot's worth of an extension's chatter plus a reproduced action, small enough
+ * to stay cheap in memory. */
+const SW_CONSOLE_BUFFER_LIMIT = 2000
+
+/** Short extension id from a service-worker scope (chrome-extension://<id>/),
+ * for readable [mira-sw] lifecycle logs. */
+function idFromScope(scope: string): string {
+  return scope.replace(/^chrome-extension:\/\//, '').replace(/\/$/, '')
 }
 
 // --- DNR enforcement helpers (pure, module scope) --------------------------

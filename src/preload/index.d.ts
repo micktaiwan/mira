@@ -12,6 +12,18 @@ export interface TabInfo {
   kind: 'web' | 'settings'
   /** Pinned: rendered as a compact square in the grid at the head of the strip. */
   pinned: boolean
+  /** Id of the tab folder this tab is in, or null when loose (in no folder). */
+  folderId: string | null
+}
+
+/** A tab folder (metadata): the sidebar groups tabs by folderId; this carries the
+ * label, collapse state, and order. */
+export interface TabFolder {
+  id: string
+  title: string
+  collapsed: boolean
+  /** Accent color (a CSS color string), or absent for the default look. */
+  color?: string
 }
 
 /** The tab strip main pushes to a profile window's chrome. */
@@ -19,6 +31,8 @@ export interface TabsState {
   tabs: TabInfo[]
   activeId: string | null
   panelCollapsed: boolean
+  /** The window's tab folders (metadata, in sidebar order). */
+  folders: TabFolder[]
   /** Zen (focus) mode: true while the toolbar, status bar, and both side panels
    * are hidden. Rides this channel because it is a chrome layout bit like
    * panelCollapsed. */

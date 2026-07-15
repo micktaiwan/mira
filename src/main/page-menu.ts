@@ -45,6 +45,11 @@ export type PageMenuItem =
   // permalink resolved in-page at the click point, so the popup (not this pure
   // function) does the resolving and routes to `download-video-url`.
   | { type: 'download-stream'; label: string }
+  // Chrome-style "Inspect": open the docked DevTools Elements panel and select
+  // the right-clicked element. Needs the click coordinates (params.x/y), which
+  // only the popup has, so like `download-stream` this pure function just emits
+  // the intent and the popup resolves it against the live webContents.
+  | { type: 'inspect-element'; label: string }
 
 /** Decide the menu for a right-click. Always offers navigation (back / forward /
  * reload); adds a link group when on a link, and a clipboard group when in an
@@ -86,6 +91,9 @@ export function buildPageMenu(ctx: PageContext): PageMenuItem[] {
   } else if (ctx.selectionText) {
     items.push({ type: 'separator' }, { type: 'role', role: 'copy', label: 'Copy' })
   }
+
+  // Always last, Chrome-style: inspect the element under the cursor.
+  items.push({ type: 'separator' }, { type: 'inspect-element', label: 'Inspect Element' })
 
   return items
 }

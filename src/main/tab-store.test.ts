@@ -11,6 +11,7 @@ import {
   moveTab,
   pinTab,
   unpinTab,
+  setKeepAwake,
   closeActiveDecision,
   nextLoadedTab,
   adjacentTab,
@@ -318,6 +319,34 @@ describe('pinTab / unpinTab', () => {
     const s = pinTab(abcd(), 'a')
     expect(unpinTab(s, 'b')).toEqual(s)
     expect(unpinTab(s, 'nope')).toEqual(s)
+  })
+})
+
+describe('setKeepAwake', () => {
+  it('flags a tab keepAwake without touching order or focus', () => {
+    let s = addTab(addTab(emptyTabState(), tab('a')), tab('b'))
+    s = setKeepAwake(s, 'a', true)
+    expect(s.tabs.find((t) => t.id === 'a')?.keepAwake).toBe(true)
+    expect(s.tabs.map((t) => t.id)).toEqual(['a', 'b'])
+    expect(s.activeId).toBe('b')
+  })
+
+  it('clears the flag entirely (absent, not false) when set to false', () => {
+    let s = setKeepAwake(addTab(emptyTabState(), tab('a')), 'a', true)
+    s = setKeepAwake(s, 'a', false)
+    expect(s.tabs[0]).not.toHaveProperty('keepAwake')
+  })
+
+  it('is a no-op on an unknown id', () => {
+    const s = addTab(emptyTabState(), tab('a'))
+    expect(setKeepAwake(s, 'zzz', true)).toBe(s)
+  })
+
+  it('is independent of pinned (a tab can be both)', () => {
+    let s = pinTab(addTab(addTab(emptyTabState(), tab('a')), tab('b')), 'a')
+    s = setKeepAwake(s, 'a', true)
+    const a = s.tabs.find((t) => t.id === 'a')
+    expect(a).toMatchObject({ pinned: true, keepAwake: true })
   })
 })
 
