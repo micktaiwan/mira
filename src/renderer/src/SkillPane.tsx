@@ -191,7 +191,7 @@ function SkillPane({
             {options.provider === 'claude-cli' && (
               <label
                 className="skill-pane-opt skill-pane-mcp"
-                title="Agent mode: let the chat use tools (Bash, WebFetch) and your MCP servers to ACT — not just answer. Off = a plain, page-only chat."
+                title="Agent mode: let the chat use tools (Bash, files) and your MCP servers to ACT — not just answer. Off = a page chat that can still search the web (WebSearch + WebFetch)."
               >
                 <input
                   type="checkbox"

@@ -109,19 +109,40 @@ export function parseAnthropicResponse(json: unknown): string {
  * fed on stdin (not argv) to sidestep shell escaping and arg-length limits. Pure. */
 export function buildClaudeCliArgs(config: LlmConfig): string[] {
   const args = ['-p']
-  // Not agent mode (the default): lock `claude -p` down to a pure chat about the
-  // page. `claude -p` is the full Claude Code AGENT — it will otherwise use Bash,
-  // WebFetch, MCP servers, etc. and try to *act* (run nc against Mira's socket,
-  // drive chrome-devtools…) when asked to "control the page". Two clamps:
-  //   --strict-mcp-config (no --mcp-config) → ZERO MCP servers (also cuts the
-  //       full-session boot cost/latency).
-  //   --tools "" → disable the whole built-in tool set, so it can only answer.
-  //   --append-system-prompt → stop the phantom tool-call markup it emits anyway.
-  if (!config.loadMcp) {
-    args.push('--strict-mcp-config', '--tools', '', '--append-system-prompt', CHAT_NO_AGENCY_PROMPT)
-  }
+  if (!config.loadMcp) args.push(...chatClampArgs())
   if (config.model && config.model.trim() !== '') args.push('--model', config.model.trim())
   return args
+}
+
+/** The built-in tools the non-agent chat is allowed to use. WebSearch + WebFetch
+ * are pure lookups (they read the web, they don't touch the machine or the
+ * browser), so a plain page chat can still look things up — the floor Mickael
+ * wants. Everything else (Bash, Edit, MCP…) stays off unless the user flips the
+ * Agent toggle (loadMcp). */
+export const CHAT_WEB_TOOLS = 'WebSearch,WebFetch'
+
+/** The argv clamp for the non-agent (default) chat. `claude -p` is the full Claude
+ * Code AGENT; left alone it uses Bash, MCP servers, etc. and tries to *act*. This
+ * pins it to a lookup-only chat:
+ *   --strict-mcp-config (no --mcp-config) → ZERO MCP servers (also cuts the
+ *       full-session boot cost/latency).
+ *   --tools WebSearch,WebFetch → only the two web-lookup tools from the built-in
+ *       set; the rest of the agent tool surface stays disabled.
+ *   --allowedTools WebSearch,WebFetch → pre-approve them, else in non-interactive
+ *       `-p` mode WebFetch's per-domain permission prompt would deny the call.
+ *   --append-system-prompt → tell it plainly what it can and can't do, so it uses
+ *       the web tools when useful and doesn't emit phantom calls for the rest.
+ * Shared by the plain and stream-json paths so they stay in lockstep. Pure. */
+export function chatClampArgs(): string[] {
+  return [
+    '--strict-mcp-config',
+    '--tools',
+    CHAT_WEB_TOOLS,
+    '--allowedTools',
+    CHAT_WEB_TOOLS,
+    '--append-system-prompt',
+    CHAT_WEB_ONLY_PROMPT
+  ]
 }
 
 // --- Chat (multi-turn) --------------------------------------------------------
@@ -156,17 +177,20 @@ export const CHAT_SYSTEM_PROMPT =
   'questions clearly and concisely. Use the current page (its URL and its text) ' +
   'as the context for the conversation.'
 
-/** Appended to `claude -p`'s own system prompt in non-agent (pure chat) mode.
- * `--tools ""` already blocks tool EXECUTION, but `claude -p` is still Claude Code
- * under the hood: when asked to act it otherwise emits phantom tool-call markup and
- * hallucinates a result. This tells it plainly it has no tools, so it just answers
- * (or says it can't) instead. Verified: turns "<function_calls>…Glob…" + a made-up
- * answer into "I don't have access to tools, so I can't do that." */
-export const CHAT_NO_AGENCY_PROMPT =
-  'You are a chat assistant embedded in a web browser, with NO tools and NO ability ' +
-  'to run commands or take any action. You cannot access the filesystem, the network, ' +
-  'or control the browser. Answer only from the conversation and the provided page ' +
-  'context; if asked to do something you cannot, say so plainly in one sentence.'
+/** Appended to `claude -p`'s own system prompt in non-agent (default) mode. The
+ * chat has EXACTLY two tools — WebSearch and WebFetch (see chatClampArgs) — and no
+ * other agency: no shell, no filesystem, no control over the browser. Left to its
+ * own devices `claude -p` (full Claude Code under the hood) emits phantom tool-call
+ * markup for things it can't do; this tells it plainly what it has, so it uses the
+ * web tools when a question needs current/external facts and says so in one
+ * sentence when asked for anything else. */
+export const CHAT_WEB_ONLY_PROMPT =
+  'You are a chat assistant embedded in a web browser. You have exactly two tools: ' +
+  'WebSearch (to search the web) and WebFetch (to read a URL). Use them when a ' +
+  'question needs current or external information beyond the conversation and the ' +
+  'provided page context. You have NO other tools: no shell, no filesystem, and no ' +
+  'ability to control the browser. If asked to do something outside answering and ' +
+  'web lookups, say so plainly in one sentence.'
 
 /** The system prompt for a chat turn: the base instruction plus the current
  * page's URL and text as context (each omitted when absent). Pure. */
@@ -257,11 +281,9 @@ export function buildClaudeStreamArgs(config: LlmConfig): string[] {
     'stream-json',
     '--verbose'
   ]
-  // Same lock-down as the plain path (see buildClaudeCliArgs): no MCP, no tools,
-  // no phantom agency.
-  if (!config.loadMcp) {
-    args.push('--strict-mcp-config', '--tools', '', '--append-system-prompt', CHAT_NO_AGENCY_PROMPT)
-  }
+  // Same clamp as the plain path (see buildClaudeCliArgs / chatClampArgs): no MCP,
+  // web-lookup tools only.
+  if (!config.loadMcp) args.push(...chatClampArgs())
   if (config.model && config.model.trim() !== '') args.push('--model', config.model.trim())
   return args
 }
