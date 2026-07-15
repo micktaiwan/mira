@@ -12,7 +12,8 @@ import {
   buildClaudeStreamInput,
   parseClaudeStreamResult,
   CHAT_SYSTEM_PROMPT,
-  CHAT_NO_AGENCY_PROMPT,
+  CHAT_WEB_ONLY_PROMPT,
+  CHAT_WEB_TOOLS,
   DEFAULT_ANTHROPIC_MODEL,
   MODEL_CHOICES,
   type LlmConfig,
@@ -77,14 +78,16 @@ describe('parseAnthropicResponse', () => {
 })
 
 describe('buildClaudeCliArgs', () => {
-  it('locks down to a pure chat by default: no MCP, no tools, no phantom agency', () => {
+  it('clamps to a lookup-only chat by default: no MCP, web tools only, no phantom agency', () => {
     expect(buildClaudeCliArgs({ provider: 'claude-cli' })).toEqual([
       '-p',
       '--strict-mcp-config',
       '--tools',
-      '',
+      CHAT_WEB_TOOLS,
+      '--allowedTools',
+      CHAT_WEB_TOOLS,
       '--append-system-prompt',
-      CHAT_NO_AGENCY_PROMPT
+      CHAT_WEB_ONLY_PROMPT
     ])
   })
 
@@ -92,14 +95,16 @@ describe('buildClaudeCliArgs', () => {
     expect(buildClaudeCliArgs({ provider: 'claude-cli', loadMcp: true })).toEqual(['-p'])
   })
 
-  it('passes an explicit model through, still locked down by default', () => {
+  it('passes an explicit model through, still clamped by default', () => {
     expect(buildClaudeCliArgs({ provider: 'claude-cli', model: 'claude-sonnet-5' })).toEqual([
       '-p',
       '--strict-mcp-config',
       '--tools',
-      '',
+      CHAT_WEB_TOOLS,
+      '--allowedTools',
+      CHAT_WEB_TOOLS,
       '--append-system-prompt',
-      CHAT_NO_AGENCY_PROMPT,
+      CHAT_WEB_ONLY_PROMPT,
       '--model',
       'claude-sonnet-5'
     ])
@@ -201,7 +206,7 @@ describe('parseDataUrl', () => {
 })
 
 describe('buildClaudeStreamArgs', () => {
-  it('runs print mode with stream-json in/out, --verbose, and locked down by default', () => {
+  it('runs print mode with stream-json in/out, --verbose, and clamped by default', () => {
     expect(buildClaudeStreamArgs({ provider: 'claude-cli' })).toEqual([
       '-p',
       '--input-format',
@@ -211,9 +216,11 @@ describe('buildClaudeStreamArgs', () => {
       '--verbose',
       '--strict-mcp-config',
       '--tools',
-      '',
+      CHAT_WEB_TOOLS,
+      '--allowedTools',
+      CHAT_WEB_TOOLS,
       '--append-system-prompt',
-      CHAT_NO_AGENCY_PROMPT
+      CHAT_WEB_ONLY_PROMPT
     ])
   })
 

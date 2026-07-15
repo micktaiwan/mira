@@ -44,6 +44,11 @@ import {
   type PickerSource
 } from './extension-capture-picker'
 
+/** The resolve callback Electron hands to setDisplayMediaRequestHandler. */
+type DisplayMediaCallback = Parameters<
+  NonNullable<Parameters<Session['setDisplayMediaRequestHandler']>[0]>
+>[1]
+
 /** A desktop source reduced to what selection needs. */
 export interface DesktopSourceLike {
   id: string
@@ -145,8 +150,11 @@ export class ExtensionCaptureService {
         callback({ video: target.mainFrame, audio: target.mainFrame, enableLocalEcho: true })
         return
       }
-      // Not an armed extension capture: deny, as the handler-less session did.
-      callback({})
+      // A normal web page called getDisplayMedia (screen share on Meet, Slack
+      // huddles, etc.). Mira is the browser here, so it draws the desktop-source
+      // picker and hands back the chosen screen/window. Async: the callback is
+      // resolved once the user picks (or cancels).
+      void this.chooseDesktopForPage(callback)
     })
   }
 
@@ -189,6 +197,34 @@ export class ExtensionCaptureService {
       armFrame(this.pendingTabCapture, frameKey(frame.processId, frame.routingId), Date.now())
       return { ok: true }
     })
+  }
+
+  /** Backend for a plain web page's getDisplayMedia (Meet, Slack huddles…):
+   * enumerate desktop sources, let the user pick one through Mira's own picker,
+   * and resolve the request with the chosen screen/window. Cancel, an empty
+   * source list, or a picker already up all resolve to a denied request
+   * (callback({})) — the same outcome the page would get if it clicked Cancel in
+   * Chrome. Video-only: system-audio loopback is not offered for screen shares
+   * (Meet mixes mic audio itself). */
+  private async chooseDesktopForPage(callback: DisplayMediaCallback): Promise<void> {
+    if (this.pickerOpen) return callback({})
+    try {
+      const sources = await desktopCapturer.getSources({
+        types: ['screen', 'window'],
+        thumbnailSize: { width: 320, height: 180 },
+        fetchWindowIcons: true
+      })
+      const streamId = await this.chooseSource(sources)
+      const chosen = streamId ? sources.find((s) => s.id === streamId) : undefined
+      if (!chosen) {
+        console.warn('[mira-capture] getDisplayMedia: no source chosen (cancelled or none)')
+        return callback({})
+      }
+      callback({ video: chosen })
+    } catch (error) {
+      console.warn('[mira-capture] getDisplayMedia getSources failed:', error)
+      callback({})
+    }
   }
 
   /** Show the desktop-source picker for `sources` and resolve to the chosen
