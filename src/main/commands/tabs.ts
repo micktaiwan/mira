@@ -27,6 +27,14 @@ export interface TabInfo {
   /** Pinned tabs render as compact squares in a wrapping grid at the head of
    * the strip (pin-tab / unpin-tab). Persisted with the session. */
   pinned: boolean
+  /** Keep-awake tabs never sleep: woken in the background on restore and immune to
+   * discard (set-tab-awake). Persisted with the session. Lifecycle only — the
+   * sidebar adds no marker for it; the tab context menu is the sole surface. */
+  keepAwake: boolean
+  /** Id of the tab folder this tab is in, or null when loose. The sidebar groups
+   * tabs by this; folder metadata (title, collapsed, order) rides a separate
+   * channel (list-tab-folders + the tabs-changed push). */
+  folderId: string | null
 }
 
 /** Tabs capability slice: create / close / select / list tabs of the target
@@ -41,6 +49,12 @@ export interface TabsContext {
   /** Close a tab. Closing the last one leaves the window empty but open (the
    * window never closes here). Throws on an unknown id. */
   closeTab: (id: string) => { closed: boolean }
+  /** Duplicate the currently active web tab (the Cmd+Shift+D target): open a new
+   * tab right under it, loading the active tab's LIVE url, and focus it. Uses the
+   * live page url (post-redirect, current SPA location) rather than the last
+   * address-bar url. No-op on the internal Settings tab or when nothing is active.
+   * Returns the new tab's id + url, or duplicated:false with a null id. */
+  duplicateActiveTab: () => { duplicated: boolean; id: string | null; url?: string }
   /** Close the currently active tab (the Cmd+W target). A pinned tab must be
    * asked twice: the first press only arms it (closed:false, armed:true) and a
    * second consecutive press closes it — switching tabs in between disarms.
@@ -55,6 +69,12 @@ export interface TabsContext {
    * sleeping one (that would reload a page). If no other tab is loaded, a fresh
    * tab is opened to land on. Returns the discarded id, or null if none active. */
   discardActiveTab: () => { discarded: boolean; id: string | null }
+  /** Wake (reload) every tab that was awake, not asleep, when Mira last quit — the
+   * Cmd+Shift+A target. Restore only wakes the active tab; this re-materializes the
+   * rest of that saved set on demand, leaving the truly-asleep tabs asleep and the
+   * active tab untouched. Returns how many tabs it woke this call (0 when the set is
+   * already fully awake, or the window was opened fresh). */
+  wakeAllTabs: () => { woken: number }
   /** Focus an existing tab. Throws on an unknown id. */
   selectTab: (id: string) => { id: string }
   /** Select the previous tab in the strip (arrow up): the one above the active
@@ -74,6 +94,11 @@ export interface TabsContext {
   /** Unpin a tab: it returns to the head of the regular tabs, right under the
    * pinned block. Throws on an unknown id. */
   unpinTab: (id: string) => { id: string; pinned: boolean }
+  /** Set or clear a tab's keep-awake flag. Turning it on wakes the tab if asleep
+   * (a kept-awake tab is always live) and makes it survive restarts alive and
+   * immune to discard; turning it off just drops the flag. Throws on an unknown
+   * id. */
+  setTabKeepAwake: (id: string, keepAwake: boolean) => { id: string; keepAwake: boolean }
   /** Reopen the most recently closed tab of this window (Cmd+Shift+T). Pops the
    * per-window closed-tab stack, restoring the tab at its former position (and
    * pinned state) and focusing it. Returns the new tab id + url, or reopened:false
@@ -100,6 +125,11 @@ export interface TabIdParams {
 export interface MoveTabParams {
   id: string
   toIndex: number
+}
+
+export interface SetTabAwakeParams {
+  id: string
+  keepAwake: boolean
 }
 
 export interface ToggleTabsPanelParams {
@@ -131,6 +161,17 @@ export const tabsCommands: CommandMap<CommandContext> = {
     try {
       ctx.closeTab(id.trim())
       return { ok: true, id: id.trim() }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // The Cmd+Shift+D target: duplicate the active web tab in place, no id needed.
+  // A no-op (duplicated:false) on the Settings tab or when nothing is active.
+  'duplicate-active-tab': (ctx) => {
+    try {
+      const result = ctx.duplicateActiveTab()
+      return { ok: true, ...result }
     } catch (error) {
       return fail(error)
     }
@@ -168,6 +209,18 @@ export const tabsCommands: CommandMap<CommandContext> = {
     try {
       const { discarded, id } = ctx.discardActiveTab()
       return { ok: true, discarded, id }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // The Cmd+Shift+A target: re-open every tab that was awake when Mira last quit
+  // (restore only wakes the active one). A no-op (woken:0) when they are already
+  // all awake or the window was opened fresh.
+  'wake-all-tabs': (ctx) => {
+    try {
+      const { woken } = ctx.wakeAllTabs()
+      return { ok: true, woken }
     } catch (error) {
       return fail(error)
     }
@@ -236,6 +289,26 @@ export const tabsCommands: CommandMap<CommandContext> = {
     }
   },
 
+  // The tab context-menu "Keep Awake" / "Stop Keeping Awake" toggle: mark a tab so
+  // it never sleeps — woken in the background on restore, immune to discard. The
+  // caller passes the target state explicitly (the menu already knows it), so this
+  // is idempotent and pilotable from the socket / MCP.
+  'set-tab-awake': (ctx, params) => {
+    const { id, keepAwake } = (params ?? {}) as Partial<SetTabAwakeParams>
+    if (typeof id !== 'string' || id.trim() === '') {
+      return { ok: false, error: 'missing "id"' }
+    }
+    if (typeof keepAwake !== 'boolean') {
+      return { ok: false, error: '"keepAwake" must be a boolean' }
+    }
+    try {
+      const result = ctx.setTabKeepAwake(id.trim(), keepAwake)
+      return { ok: true, ...result }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
   'move-tab': (ctx, params) => {
     const { id, toIndex } = (params ?? {}) as Partial<MoveTabParams>
     if (typeof id !== 'string' || id.trim() === '') {
@@ -258,6 +331,23 @@ export const tabsCommands: CommandMap<CommandContext> = {
     try {
       const result = ctx.reopenClosedTab()
       return { ok: true, ...result }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // Copy a tab's id to the OS clipboard (the tab context-menu "Copy Tab ID"): the
+  // id is what every id-taking command / exec-js needs, so this hands it straight
+  // to a shell or agent piloting Mira. Pilotable too — the socket can grab an id.
+  'copy-tab-id': (ctx, params) => {
+    const { id } = (params ?? {}) as Partial<TabIdParams>
+    if (typeof id !== 'string' || id.trim() === '') {
+      return { ok: false, error: 'missing "id"' }
+    }
+    try {
+      ctx.writeClipboard(id.trim())
+      ctx.showToast('Copied!')
+      return { ok: true, id: id.trim() }
     } catch (error) {
       return fail(error)
     }

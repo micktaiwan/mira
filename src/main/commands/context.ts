@@ -12,6 +12,7 @@ import type { CookieContext } from './cookies'
 import type { DevtoolsContext } from './devtools'
 import type { ExtensionsContext } from './extensions'
 import type { FindContext } from './find'
+import type { FolderMenuContext } from './folder-menu'
 import type { HistoryContext } from './history'
 import type { MagnifierContext } from './magnifier'
 import type { MediaContext } from './media'
@@ -25,7 +26,12 @@ import type { SettingsContext } from './settings'
 import type { SkillsContext } from './skills'
 import type { SpacesContext } from './spaces'
 import type { StatusContext } from './status'
+import type { TabDetachContext } from './tab-detach'
+import type { TabFoldersContext } from './tab-folders'
+import type { TabMemoryContext } from './tab-memory'
+import type { TabMenuContext } from './tab-menu'
 import type { TabsContext } from './tabs'
+import type { ToastContext } from './toast'
 import type { TooltipContext } from './tooltip'
 import type { VaultContext } from './vault'
 import type { ZenContext } from './zen'
@@ -36,6 +42,7 @@ export type CommandContext = AppContext &
   DevtoolsContext &
   ExtensionsContext &
   FindContext &
+  FolderMenuContext &
   HistoryContext &
   MagnifierContext &
   MediaContext &
@@ -49,7 +56,12 @@ export type CommandContext = AppContext &
   SkillsContext &
   SpacesContext &
   StatusContext &
+  TabDetachContext &
+  TabFoldersContext &
+  TabMemoryContext &
+  TabMenuContext &
   TabsContext &
+  ToastContext &
   TooltipContext &
   VaultContext &
   ZenContext

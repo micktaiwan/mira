@@ -3,7 +3,15 @@
 // stable id and a renamable label) without spinning up Electron or real windows.
 // Not a *.test.ts file, so Vitest does not treat it as a suite.
 
-import type { CommandContext, ExtensionInfo, FindStopAction, ProfileInfo, SkillPaneState } from '.'
+import type {
+  CommandContext,
+  ExtensionInfo,
+  FindStopAction,
+  ProfileInfo,
+  ServiceWorkerLogEntry,
+  SkillPaneState
+} from '.'
+import { rankTabMemory, selectServiceWorkerLogs, totalDistinctMemory } from '.'
 import type { CookieSetDetails } from '../chrome-import'
 import type { TooltipRect } from '../tooltip'
 import type { SkillSource } from '../skills'
@@ -12,17 +20,30 @@ import { nextZen, type PanelSnapshot } from './zen'
 import {
   emptyTabState,
   addTab,
+  addTabAfter,
   addTabInactive,
   selectTab as selectTabPure,
   closeTab as closeTabPure,
   moveTab as moveTabPure,
   pinTab as pinTabPure,
   unpinTab as unpinTabPure,
+  setKeepAwake as setKeepAwakePure,
   closeActiveDecision,
   nextLoadedTab,
   adjacentTab,
   type TabState
 } from '../tab-store'
+import {
+  addFolder as addFolderPure,
+  renameFolder as renameFolderPure,
+  setFolderCollapsed as setFolderCollapsedPure,
+  setFolderColor as setFolderColorPure,
+  removeFolder as removeFolderPure,
+  setTabFolder as setTabFolderPure,
+  clearFolderMembership,
+  hasFolder,
+  type TabFolders
+} from '../tab-folder-store'
 import {
   insertNode,
   removeNode,
@@ -54,8 +75,16 @@ export interface FakeContext {
   focused: string | null
   /** Live view of the fake window's tabs (reassigned by tab commands). */
   tabState: () => TabState
+  /** Mutable set of tab ids with a live view — the fake's lazy-load model for
+   * wake-all-tabs. A test seeds/reads it directly (the fake has no WebContentsView). */
+  loadedTabIds: Set<string>
+  /** Mutable set of tab ids that were awake at the previous quit (wake-all-tabs's
+   * saved set). A test seeds it to drive which tabs wake. */
+  restoredLoadedIds: Set<string>
   /** Live view of the fake window's tab-panel collapsed flag. */
   panelCollapsed: () => boolean
+  /** Live view of the fake window's tab folders (metadata). */
+  folders: () => TabFolders
   /** Live view of the fake window's zen-mode flag (toggle-zen spy): true while the
    * toolbar, status bar, and both panels are hidden. */
   chromeHidden: () => boolean
@@ -99,12 +128,16 @@ export interface FakeContext {
   skillPaneStates: SkillPaneState[]
   /** Text written to the clipboard via writeClipboard (copy-chat spy). */
   clipboardWrites: string[]
+  /** Messages flashed via showToast (show-toast / copy-tab-id spy). */
+  toasts: string[]
   /** Live view of the fake app's LLM config (set-llm-config spy). */
   llm: () => LlmConfig
   /** Live view of the active tab's DevTools open flag (toggle-devtools spy). */
   devToolsOpen: () => boolean
   /** Live view of one profile's loaded extensions (extensions-domain spy). */
   extensionsFor: (profileId: string) => ExtensionInfo[]
+  /** Seed a captured SW console line, as ExtensionsService's ring buffer would. */
+  seedServiceWorkerLog: (entry: ServiceWorkerLogEntry) => void
   /** One entry per focusApp call (focus-app spy). */
   focusCalls: boolean[]
   /** URLs passed to openExternalUrl (open-url / open-file handoff spy). */
@@ -144,6 +177,7 @@ export function makeContext(
   const captureCalls: boolean[] = []
   const skillPaneStates: SkillPaneState[] = []
   const clipboardWrites: string[] = []
+  const toasts: string[] = []
   const focusCalls: boolean[] = []
   const externalOpens: string[] = []
   const externalOpenTargets: (string | undefined)[] = []
@@ -164,6 +198,10 @@ export function makeContext(
     // A window always starts with one tab, like the real ProfileManager.
     tabs: addTab(emptyTabState(), { id: 'tab-1', title: '', url: 'home', favicon: null }),
     panelCollapsed: false,
+    // Tab folders (metadata); membership is on each tab's folderId. folderSeq
+    // gives created folders a unique id in tests.
+    folders: [] as TabFolders,
+    folderSeq: 0,
     // Zen (focus) mode: true while the toolbar, status bar, and both panels are
     // hidden. zenSnapshot holds the pre-zen panel state to restore on exit.
     chromeHidden: false,
@@ -219,6 +257,10 @@ export function makeContext(
     // session/profile — D2). Grown by load-extension, shrunk by uninstall.
     extensions: new Map<string, ExtensionInfo[]>(),
     extensionSeq: 0,
+    // Captured extension service-worker console lines (mirrors the ring buffer
+    // in ExtensionsService), read back by extension-console. Seeded by tests
+    // via the `seedServiceWorkerLog` handle.
+    swLogs: [] as ServiceWorkerLogEntry[],
     // Per-window closed-tab stack (newest last), for reopen-closed-tab.
     closedTabs: [] as Array<{
       url: string
@@ -226,7 +268,12 @@ export function makeContext(
       favicon: string | null
       pinned: boolean
       index: number
-    }>
+    }>,
+    // Lazy-load model for wake-all-tabs: which tabs currently have a live view,
+    // and the set that was awake at the previous quit (keyed by current id). The
+    // fake has no real WebContentsView, so a test seeds these directly.
+    loadedTabIds: new Set<string>(),
+    restoredLoadedIds: new Set<string>()
   }
   // Record a visit like the manager does: only real web urls, dedup by url.
   const recordVisit = (url: string, title: string): void => {
@@ -310,6 +357,9 @@ export function makeContext(
       },
       reload: () => {
         nav.push('reload')
+      },
+      reloadIgnoringCache: () => {
+        nav.push('hard-reload')
       },
       getZoomLevel: () => state.zoomLevel,
       setZoomLevel: (level: number) => {
@@ -458,6 +508,24 @@ export function makeContext(
       return Promise.resolve({ host: new URL(site).host, cookiesRemoved })
     },
     getMemoryUsage: () => ({ rss: 123 * 1024 * 1024, processes: 4 }),
+    // The fake has no real renderer processes: give each tab a distinct canned
+    // footprint (heavier the further down the strip) on its own pid, then run the
+    // same pure rank/total the manager uses — enough to exercise list-tab-memory.
+    listTabMemory: () => {
+      const raw = state.tabs.tabs.map((t, i) => ({
+        tabId: t.id,
+        profileId: state.focused ?? 'default',
+        profileLabel: state.focused ?? 'default',
+        title: t.title || t.url || 'Untitled',
+        url: t.url,
+        favicon: t.favicon,
+        pid: 1000 + i,
+        processMemoryBytes: (i + 1) * 10 * 1024 * 1024,
+        shared: 1,
+        active: state.tabs.activeId === t.id
+      }))
+      return { entries: rankTabMemory(raw), totalBytes: totalDistinctMemory(raw) }
+    },
     getTabCounts: () => {
       // The fake has no lazy-load, so every tab counts as loaded.
       const total = state.tabs.tabs.length
@@ -501,6 +569,9 @@ export function makeContext(
     showTooltip: (text: string, anchor: TooltipRect) => {
       tooltipShown.push({ text, anchor })
       return { shown: true }
+    },
+    showToast: (message: string) => {
+      toasts.push(message)
     },
     // Magnifier slice: the active web tab is the target (Settings / empty window
     // are not magnifiable); a fixed surface size stands in for the view bounds.
@@ -597,7 +668,14 @@ export function makeContext(
       state.tabs = background ? addTabInactive(state.tabs, tab) : addTab(state.tabs, tab)
       state.closeArmedId = null
       recordVisit(tab.url, '')
-      return { ...tab, loaded: true, kind: 'web' as const, pinned: false }
+      return {
+        ...tab,
+        loaded: true,
+        kind: 'web' as const,
+        pinned: false,
+        keepAwake: false,
+        folderId: null
+      }
     },
     closeTab: (id: string) => {
       if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
@@ -618,6 +696,16 @@ export function makeContext(
       rememberClosed(decision.id)
       state.tabs = closeTabPure(state.tabs, decision.id)
       return { closed: true, id: decision.id }
+    },
+    duplicateActiveTab: () => {
+      const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
+      if (!active || active.id === state.settingsTabId) return { duplicated: false, id: null }
+      const id = `tab-${++state.tabSeq}`
+      const url = active.url
+      state.tabs = addTabAfter(state.tabs, { id, title: '', url, favicon: null }, active.id)
+      state.closeArmedId = null
+      recordVisit(url, '')
+      return { duplicated: true, id, url }
     },
     reopenClosedTab: () => {
       const closed = state.closedTabs.pop()
@@ -650,6 +738,18 @@ export function makeContext(
         state.tabs = addTab(state.tabs, { id: freshId, title: '', url: 'home', favicon: null })
       }
       return { discarded: true, id }
+    },
+    // Wake the tabs that were awake at the previous quit and are still asleep:
+    // mirrors wakeAllTabsIn — restoredLoadedIds ∩ present ∩ not-already-loaded.
+    wakeAllTabs: () => {
+      let woken = 0
+      for (const tab of state.tabs.tabs) {
+        if (!state.restoredLoadedIds.has(tab.id)) continue
+        if (state.loadedTabIds.has(tab.id)) continue
+        state.loadedTabIds.add(tab.id)
+        woken++
+      }
+      return { woken }
     },
     discardTab: (id: string) => {
       if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
@@ -685,6 +785,26 @@ export function makeContext(
       state.tabs = moveTabPure(state.tabs, id, toIndex)
       return { id }
     },
+    // The fake models a single window, so a detach just drops the tab from the strip
+    // and reports a synthetic destination window; a re-attach by id echoes it back.
+    detachTab: async (id: string) => {
+      if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
+      state.tabs = closeTabPure(state.tabs, id)
+      return { windowId: 'fake-detached-window', created: true }
+    },
+    moveTabToWindow: (id: string, windowId: string) => {
+      if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
+      return { windowId }
+    },
+    listWindows: () => [
+      {
+        windowId: 'fake-window',
+        profileId: 'default',
+        tabCount: state.tabs.tabs.length,
+        bounds: { x: 0, y: 0, width: 1000, height: 720 },
+        focused: true
+      }
+    ],
     pinTab: (id: string) => {
       if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
       state.tabs = pinTabPure(state.tabs, id)
@@ -695,6 +815,11 @@ export function makeContext(
       state.tabs = unpinTabPure(state.tabs, id)
       return { id, pinned: false }
     },
+    setTabKeepAwake: (id: string, keepAwake: boolean) => {
+      if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
+      state.tabs = setKeepAwakePure(state.tabs, id, keepAwake)
+      return { id, keepAwake }
+    },
     listTabs: () => ({
       // The fake doesn't model lazy-load; every tab reports loaded. `kind` marks
       // the settings tab so navigation's settings-branch is exercisable.
@@ -702,7 +827,9 @@ export function makeContext(
         ...t,
         loaded: true,
         kind: (t.id === state.settingsTabId ? 'settings' : 'web') as 'web' | 'settings',
-        pinned: t.pinned === true
+        pinned: t.pinned === true,
+        keepAwake: t.keepAwake === true,
+        folderId: t.folderId ?? null
       })),
       activeId: state.tabs.activeId,
       panelCollapsed: state.panelCollapsed
@@ -710,6 +837,51 @@ export function makeContext(
     toggleTabsPanel: (collapsed?: boolean) => {
       state.panelCollapsed = collapsed ?? !state.panelCollapsed
       return { collapsed: state.panelCollapsed }
+    },
+    // Native tab context menu (show-tab-menu): a no-op in tests — the item list is
+    // covered by tab-menu.test.ts, so the command test only checks validation.
+    showTabMenu: () => {},
+    // Tab folders: real in-memory mutations so the tab-folders command tests can
+    // observe them (mirrors ProfileManager, minus the native re-layout).
+    listTabFolders: () => ({ folders: state.folders }),
+    createTabFolder: (title: string, tabId?: string) => {
+      const id = `folder-${++state.folderSeq}`
+      state.folders = addFolderPure(state.folders, { id, title, collapsed: false })
+      if (tabId) {
+        const tab = state.tabs.tabs.find((t) => t.id === tabId)
+        if (tab && tab.pinned !== true) state.tabs = setTabFolderPure(state.tabs, tabId, id)
+      }
+      return { id }
+    },
+    renameTabFolder: (id: string, title: string) => {
+      if (!hasFolder(state.folders, id)) return { renamed: false }
+      state.folders = renameFolderPure(state.folders, id, title)
+      return { renamed: true }
+    },
+    removeTabFolder: (id: string) => {
+      if (!hasFolder(state.folders, id)) return { removed: false }
+      state.folders = removeFolderPure(state.folders, id)
+      state.tabs = clearFolderMembership(state.tabs, id)
+      return { removed: true }
+    },
+    toggleTabFolder: (id: string, collapsed?: boolean) => {
+      if (!hasFolder(state.folders, id)) throw new Error(`unknown folder: ${id}`)
+      state.folders = setFolderCollapsedPure(state.folders, id, collapsed)
+      return { collapsed: state.folders.find((f) => f.id === id)!.collapsed }
+    },
+    setTabFolderColor: (id: string, color: string | null) => {
+      if (!hasFolder(state.folders, id)) return { updated: false }
+      state.folders = setFolderColorPure(state.folders, id, color)
+      return { updated: true }
+    },
+    showFolderMenu: () => {},
+    moveTabToFolder: (tabId: string, folderId: string | null) => {
+      const tab = state.tabs.tabs.find((t) => t.id === tabId)
+      if (!tab) return { moved: false }
+      if (folderId !== null && !hasFolder(state.folders, folderId)) return { moved: false }
+      if (tab.pinned === true && folderId !== null) return { moved: false }
+      state.tabs = setTabFolderPure(state.tabs, tabId, folderId)
+      return { moved: true }
     },
     toggleZen: (hidden?: boolean) => {
       const live = { tabsCollapsed: state.panelCollapsed, skillPaneOpen: state.skillPane.open }
@@ -909,6 +1081,12 @@ export function makeContext(
       )
       return Promise.resolve({ removed: true })
     },
+    readServiceWorkerConsole: (query) => {
+      // Explicit profileId works with no focused window (mirrors ProfileManager);
+      // the fake keeps a single log store, so profileId only lifts that guard.
+      if (!query.profileId && !state.focused) throw new Error('no target window')
+      return selectServiceWorkerLogs(state.swLogs, query)
+    },
     listBookmarks: () => ({ tree: state.bookmarks }),
     openBookmark: (id: string) => {
       const node = findNode(state.bookmarks, id)
@@ -928,7 +1106,10 @@ export function makeContext(
     profiles: state.profiles,
     focused: state.focused,
     tabState: () => state.tabs,
+    loadedTabIds: state.loadedTabIds,
+    restoredLoadedIds: state.restoredLoadedIds,
     panelCollapsed: () => state.panelCollapsed,
+    folders: () => state.folders,
     chromeHidden: () => state.chromeHidden,
     zoomLevel: () => state.zoomLevel,
     paletteOpen: () => state.paletteOpen,
@@ -950,9 +1131,12 @@ export function makeContext(
     captureCalls,
     skillPaneStates,
     clipboardWrites,
+    toasts,
     llm: () => state.llm,
     devToolsOpen: () => state.devToolsOpen,
     extensionsFor: (profileId: string) => (state.extensions.get(profileId) ?? []).slice(),
+    // Push a captured SW console line, as ExtensionsService's ring buffer would.
+    seedServiceWorkerLog: (entry: ServiceWorkerLogEntry) => state.swLogs.push(entry),
     focusCalls,
     externalOpens,
     externalOpenTargets,

@@ -104,6 +104,13 @@ export const navigationCommands: CommandMap<CommandContext> = {
     return { ok: true }
   },
 
+  // Hard reload: re-fetch the page bypassing the HTTP cache (Cmd+Shift+R),
+  // for when a plain reload serves a stale cached response.
+  'hard-reload': (ctx) => {
+    ctx.getTargetWebContents().reloadIgnoringCache()
+    return { ok: true }
+  },
+
   // Zoom the active tab's page. Chrome's zoom is per-webContents and log-scaled
   // (factor = 1.2^level); we step the level and clamp it (see nextZoomLevel).
   'zoom-in': (ctx) => {

@@ -4,6 +4,24 @@ Mira is fully drivable from outside (the "tout pilotable" principle, see CLAUDE.
 unix-domain socket dispatches to the SAME command registry as the UI's IPC. This doc is
 the API reference for that surface — what an agent or a shell needs to pilot Mira.
 
+## The `mira` CLI (preferred over raw socket)
+
+For shell/agent use, reach for **`bin/mira`** first — a thin client over this socket
+that removes the hand-built JSON, the `nc` async-read trap, and the manual
+list-tabs → filter → tabId dance:
+
+```bash
+bin/mira tabs                                # list tabs, * = active
+eval "$(bin/mira use --url localhost:8000)"  # pin a tab → export MIRA_TAB=<uuid> (this shell only)
+bin/mira exec "document.title"               # exec-js on the pinned/active tab
+bin/mira reload                              # reload the pinned tab (via exec-js) or the active one
+bin/mira call <command> --params '<json>'    # generic passthrough to any command below
+```
+
+Tab targeting is stateful via the environment (`--tab <id>` > `$MIRA_TAB` > active
+tab); a stale `MIRA_TAB` fails loudly rather than silently hitting the active tab.
+Pure logic + tests: `src/cli/mira-core.mjs`. The raw protocol below still underlies it.
+
 ## Protocol
 
 - Path: `/tmp/mira.sock` (override with the `MIRA_SOCKET` env var).
@@ -14,7 +32,9 @@ printf '%s\n' '{"command":"navigate","params":{"url":"example.com"}}' | nc -U /t
 # {"ok":true,"url":"https://example.com"}
 ```
 
-- Request: `{"command":"<name>","params":{...}}` (`params` optional).
+- Request: `{"command":"<name>","params":{...}}` (`params` optional). `cmd` is a
+  tolerated alias for `command` (Kova's socket uses `cmd`, so requests copy-paste
+  across both); `command` stays the canonical form and wins if both are present.
 - Response: `{"ok":true, ...result}` or `{"ok":false,"error":"..."}`.
 - **Discovery**: `{"command":"list-commands"}` returns every command name the running
   build knows — always trust it over this doc if they disagree (this doc can lag).
@@ -42,6 +62,7 @@ commands that can take an explicit target id should be preferred:
 | --------------- | ------ | --------------------------------------------------- |
 | `list-commands` | —      | `{commands: string[]}` — every command name, sorted |
 | `get-status`    | —      | memory usage + tab counts (total / loaded / asleep) |
+| `list-tab-memory` | —    | cross-profile: every loaded tab ranked by its renderer-process memory; `{entries, totalBytes}` |
 | `whoami`        | —      | id of the profile owning the target window          |
 
 ### Navigation (active tab of the target window)
@@ -97,11 +118,17 @@ clicks are swallowed (they'd land wrong), so it is a "look only" mode.
 | `select-tab`            | `id`                  | activate a tab (wakes it if asleep)                                                                                                                                                                                       |
 | `close-tab`             | `id`                  | close a tab                                                                                                                                                                                                               |
 | `close-active-tab`      | —                     | close the active tab (Cmd+W semantics, pinned tabs are guarded)                                                                                                                                                           |
+| `duplicate-active-tab`  | —                     | duplicate the active web tab (Cmd+Shift+D): open a copy of its live url right under it and focus it. No-op on the Settings tab or when nothing is active                                                                   |
 | `discard-tab`           | `id`                  | unload a tab's page, keep the tab (frees RAM)                                                                                                                                                                             |
 | `discard-active-tab`    | —                     | same, for the active tab                                                                                                                                                                                                  |
+| `wake-all-tabs`         | —                     | re-open every tab that was awake (not asleep) at the previous quit; returns `woken` (Cmd+Shift+A)                                                                                                                          |
 | `prev-tab` / `next-tab` | —                     | cycle the strip                                                                                                                                                                                                           |
 | `pin-tab` / `unpin-tab` | `id`                  | pin state                                                                                                                                                                                                                 |
+| `set-tab-awake`         | `id`, `keepAwake`     | keep a tab awake (never sleeps): woken in the background on restore, immune to discard. `keepAwake:false` clears it                                                                                                         |
 | `move-tab`              | `id`, `toIndex`       | reorder the strip                                                                                                                                                                                                         |
+| `detach-tab`            | `id`, `x?`, `y?`      | tear a tab off into its own window of the SAME profile (keeps the live page — no reload). With screen coords `x`/`y` (both or neither): if they fall inside another same-profile window, the tab RE-ATTACHES there; otherwise a new window opens at the point. Without coords, always a new window. `{windowId, created}`. No-op (`created:false`) when it is the source window's only tab and there is nowhere else to land. The sidebar's drag-out gesture drives this. |
+| `move-tab-to-window`    | `id`, `windowId`      | move a tab into a specific existing window (same profile) — the deterministic counterpart to `detach-tab`. `{windowId}`. Errors: `unknown tab`, `unknown window`, cross-profile move                                       |
+| `list-windows`          | —                     | `{windows}` — every open window: `{windowId, profileId, tabCount, bounds, focused}`. A profile can have several windows (a tear-off)                                                                                        |
 | `reopen-closed-tab`     | —                     | restore the most recently closed tab                                                                                                                                                                                      |
 | `toggle-tabs-panel`     | `collapsed?`          | collapse/expand the tab sidebar                                                                                                                                                                                           |
 | `toggle-zen`            | `hidden?`             | zen (focus) mode: hide/show the toolbar, status bar, and both side panels at once. `hidden` omitted flips it; a boolean forces it. Exiting restores the panels to their pre-zen state. Cmd+Shift+H.                        |
@@ -213,6 +240,9 @@ A profile marked `encrypted` keeps its data (browsing trails + session partition
 | `load-extension`                                                 | `path` | load an unpacked extension              |
 | `enable-extension` / `disable-extension` / `uninstall-extension` | `id`   | lifecycle                               |
 | `update-extensions`                                              | —      | update all                              |
+| `extension-console`                                              | `id?`, `level?`, `limit?`, `profileId?` | tail an extension service-worker's captured console (`messages[]`) |
+
+`extension-console` reads a ring buffer of an MV3 service-worker's console output, captured since boot (Mira can't open devtools on a headless SW). All params optional: `id` filters to one extension, `level` is a minimum severity (`verbose` \| `info` \| `warning` \| `error`), `limit` caps to the most recent N (oldest-first), `profileId` picks which profile's session to read (default: the focused window's profile). The `profileId` matters because extensions are per profile: a passkey flow failing in the "pro" profile leaves nothing in the "perso" Bitwarden's worker. Each message is `{ extensionId, seq, level, message, sourceUrl, lineNumber }`; `seq` is monotonic so you can poll for what's new. Use it to see a background worker throw or never run (e.g. a passkey popout hitting an unimplemented `chrome.windows.create`).
 
 ### Permissions
 

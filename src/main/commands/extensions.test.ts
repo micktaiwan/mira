@@ -1,7 +1,29 @@
 import { describe, it, expect } from 'vitest'
 import { createCommandRegistry } from '.'
-import { toExtensionInfo } from './extensions'
+import {
+  toExtensionInfo,
+  extensionIdFromUrl,
+  pickServiceWorkerExtensionId,
+  extensionPopoutBounds,
+  serviceWorkerLogLevel,
+  selectServiceWorkerLogs,
+  type ServiceWorkerLogEntry
+} from './extensions'
 import { makeContext } from './fake-context'
+
+/** A captured SW log line, with sensible defaults for the fields a test doesn't
+ * care about. */
+function log(partial: Partial<ServiceWorkerLogEntry>): ServiceWorkerLogEntry {
+  return {
+    extensionId: 'nngceckbapebfimnlniiiahkandclblb',
+    seq: 1,
+    level: 'info',
+    message: 'hello',
+    sourceUrl: 'chrome-extension://nngceckbapebfimnlniiiahkandclblb/background.js',
+    lineNumber: 1,
+    ...partial
+  }
+}
 
 describe('toExtensionInfo', () => {
   it('keeps only the serializable subset of an Electron Extension', () => {
@@ -178,5 +200,132 @@ describe('extensions commands', () => {
       ok: false
     })
     expect(fake.extensionsFor('default')).toHaveLength(1)
+  })
+})
+
+describe('service-worker console helpers (pure)', () => {
+  it('extracts the extension id from a chrome-extension URL', () => {
+    expect(
+      extensionIdFromUrl('chrome-extension://nngceckbapebfimnlniiiahkandclblb/background.js')
+    ).toBe('nngceckbapebfimnlniiiahkandclblb')
+  })
+
+  it('returns empty for a non-extension URL', () => {
+    expect(extensionIdFromUrl('https://npmjs.com/foo')).toBe('')
+    expect(extensionIdFromUrl('chrome-extension://short/x.js')).toBe('')
+  })
+
+  it('resolves a SW id: sourceUrl wins, then cache, then scope', () => {
+    const bw = 'nngceckbapebfimnlniiiahkandclblb'
+    // sourceUrl present → use it
+    expect(
+      pickServiceWorkerExtensionId(`chrome-extension://${bw}/background.js`, undefined, undefined)
+    ).toBe(bw)
+    // empty sourceUrl (the common case) → fall back to the cached id
+    expect(pickServiceWorkerExtensionId('', bw, undefined)).toBe(bw)
+    // no cache either → derive from the worker scope
+    expect(pickServiceWorkerExtensionId('', undefined, `chrome-extension://${bw}/`)).toBe(bw)
+    // a website SW attributable to nothing → '' (caller drops it)
+    expect(pickServiceWorkerExtensionId('https://gstatic.com/sw.js', undefined, undefined)).toBe('')
+  })
+
+  it('maps Electron numeric levels to names, clamping the unknown', () => {
+    expect(serviceWorkerLogLevel(0)).toBe('verbose')
+    expect(serviceWorkerLogLevel(3)).toBe('error')
+    expect(serviceWorkerLogLevel(99)).toBe('info')
+  })
+
+  it('filters by extension id', () => {
+    const entries = [log({ seq: 1, extensionId: 'a' }), log({ seq: 2, extensionId: 'b' })]
+    expect(selectServiceWorkerLogs(entries, { id: 'b' }).map((e) => e.seq)).toEqual([2])
+  })
+
+  it('filters by minimum level', () => {
+    const entries = [
+      log({ seq: 1, level: 'info' }),
+      log({ seq: 2, level: 'warning' }),
+      log({ seq: 3, level: 'error' })
+    ]
+    expect(selectServiceWorkerLogs(entries, { minLevel: 'warning' }).map((e) => e.seq)).toEqual([
+      2, 3
+    ])
+  })
+
+  it('caps to the most recent limit, oldest-first', () => {
+    const entries = [log({ seq: 1 }), log({ seq: 2 }), log({ seq: 3 })]
+    expect(selectServiceWorkerLogs(entries, { limit: 2 }).map((e) => e.seq)).toEqual([2, 3])
+  })
+
+  it('returns everything when no query is given', () => {
+    const entries = [log({ seq: 1 }), log({ seq: 2 })]
+    expect(selectServiceWorkerLogs(entries)).toHaveLength(2)
+  })
+})
+
+describe('extensionPopoutBounds (pure)', () => {
+  it('uses given bounds, rounding position', () => {
+    expect(extensionPopoutBounds({ width: 400, height: 600, left: 10.6, top: 20.2 })).toEqual({
+      width: 400,
+      height: 600,
+      x: 11,
+      y: 20
+    })
+  })
+
+  it('falls back to popout defaults and omits x/y when absent', () => {
+    expect(extensionPopoutBounds({})).toEqual({ width: 380, height: 630 })
+  })
+
+  it('clamps tiny/zero sizes to a visible minimum', () => {
+    expect(extensionPopoutBounds({ width: 0, height: 5 })).toEqual({ width: 160, height: 160 })
+  })
+})
+
+describe('extension-console command', () => {
+  it('returns captured SW logs, filtered by the params', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    fake.seedServiceWorkerLog(log({ seq: 1, level: 'info', message: 'boot' }))
+    fake.seedServiceWorkerLog(
+      log({ seq: 2, level: 'error', message: 'createWindow is not implemented' })
+    )
+    const res = registry.execute('extension-console', { level: 'error' }, fake.ctx) as {
+      ok: boolean
+      messages: ServiceWorkerLogEntry[]
+    }
+    expect(res.ok).toBe(true)
+    expect(res.messages).toHaveLength(1)
+    expect(res.messages[0].message).toBe('createWindow is not implemented')
+  })
+
+  it('starts empty and never throws for an unknown id', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('extension-console', { id: 'whatever' }, ctx)).toEqual({
+      ok: true,
+      messages: []
+    })
+  })
+
+  it('accepts a profileId to target another profile session', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    fake.seedServiceWorkerLog(log({ seq: 1, message: 'from default' }))
+    const res = registry.execute(
+      'extension-console',
+      { profileId: 'default', id: 'nngceckbapebfimnlniiiahkandclblb' },
+      fake.ctx
+    ) as { ok: boolean; messages: ServiceWorkerLogEntry[] }
+    expect(res.ok).toBe(true)
+    expect(res.messages).toHaveLength(1)
+  })
+
+  it('rejects a bad level or limit', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('extension-console', { level: 'loud' }, ctx)).toMatchObject({
+      ok: false
+    })
+    expect(registry.execute('extension-console', { limit: -1 }, ctx)).toMatchObject({ ok: false })
   })
 })

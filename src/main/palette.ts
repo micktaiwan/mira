@@ -83,6 +83,13 @@ const STATIC_COMMANDS: ReadonlyArray<Omit<PaletteEntry, 'group'>> = [
     shortcut: '⌘R'
   },
   {
+    id: 'cmd:hard-reload',
+    title: 'Hard Reload Page',
+    command: 'hard-reload',
+    keywords: 'refresh cache bypass stale force',
+    shortcut: '⇧⌘R'
+  },
+  {
     id: 'cmd:find',
     title: 'Find in Page',
     command: 'find-open',

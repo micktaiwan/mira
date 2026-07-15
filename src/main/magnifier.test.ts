@@ -10,6 +10,7 @@ import {
   CLEAR_MAGNIFIER_JS,
   MAGNIFIER_SHIM,
   MAG_BINDING,
+  magnifierFrameJs,
   setShimFlags
 } from './magnifier'
 
@@ -153,10 +154,55 @@ describe('input shim', () => {
   it('gates wheel on captureWheel and clicks on swallowClicks independently', () => {
     expect(MAGNIFIER_SHIM).toContain("addEventListener('wheel'")
     expect(MAGNIFIER_SHIM).toContain("addEventListener('click'")
-    expect(MAGNIFIER_SHIM).toContain('if (!state.captureWheel) return')
     expect(MAGNIFIER_SHIM).toContain('if (!state.swallowClicks) return')
-    // Cmd held but not zoomed: capture wheel, but let clicks (Cmd+click) through.
+    // The two flags stay independently settable (they gate different events).
     expect(setShimFlags(true, false)).toContain('captureWheel = true')
     expect(setShimFlags(true, false)).toContain('swallowClicks = false')
+  })
+
+  it('captures Cmd+wheel on e.metaKey read off the event, not a flag from main', () => {
+    // Cmd detection must NOT come from a main-pushed flag: armed too late it let
+    // the first Cmd+scroll leak to native scroll; stuck true (its keyUp landing
+    // on the chrome / another tab / another app) it swallowed ALL wheel events on
+    // freshly loaded pages ("page refuses to scroll after load" bug).
+    expect(MAGNIFIER_SHIM).toContain('if (!state.captureWheel && !e.metaKey) return')
+  })
+
+  it('freezes the scrollable ancestor chain on every captured wheel', () => {
+    // preventDefault is a no-op on a gesture already latched to a scroller
+    // (Cmd pressed mid-gesture / momentum → cancelable=false): an inner
+    // scrollable div kept scrolling under a Cmd+wheel zoom, shifting the content
+    // under the cursor. The shim must unlatch it the same way applyMagnifierJs
+    // already unlatches the root: overflow:hidden, restored after the burst.
+    expect(MAGNIFIER_SHIM).toContain('freeze(e.target)')
+    expect(MAGNIFIER_SHIM).toContain("el.style.overflow = 'hidden'")
+    expect(MAGNIFIER_SHIM).toContain('setTimeout(unfreeze, 250)')
+    // The root/body are the magnifier's own to freeze — never the shim's (the
+    // shim restore would otherwise undo applyMagnifierJs's overflow:hidden).
+    expect(MAGNIFIER_SHIM).toContain('el !== document.documentElement && el !== document.body')
+  })
+
+  it('is syntactically valid JS (it is injected as a raw string)', () => {
+    expect(() => new Function(MAGNIFIER_SHIM)).not.toThrow()
+  })
+})
+
+describe('magnifierFrameJs', () => {
+  it('shows a top-layer popover frame (not a plain fixed div) when on', () => {
+    const js = magnifierFrameJs(true)
+    // Must be a popover: the page root carries the zoom transform, so a plain
+    // position:fixed frame would be scaled/offset with the page.
+    expect(js).toContain("setAttribute('popover', 'manual')")
+    expect(js).toContain('showPopover')
+    expect(js).toContain('pointer-events:none')
+    // Idempotent: only opens the popover if not already open.
+    expect(js).toContain(":popover-open")
+  })
+
+  it('hides and removes the frame when off', () => {
+    const js = magnifierFrameJs(false)
+    expect(js).toContain('hidePopover')
+    expect(js).toContain('.remove()')
+    expect(js).not.toContain('showPopover')
   })
 })

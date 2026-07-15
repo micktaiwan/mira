@@ -33,7 +33,7 @@ async function run(name: string, params?: unknown): Promise<Record<string, unkno
   return (await window.mira.command(name, params)) as Record<string, unknown>
 }
 
-type Section = 'general' | 'ai' | 'profiles' | 'extensions' | 'permissions' | 'data'
+type Section = 'general' | 'ai' | 'profiles' | 'tabs' | 'extensions' | 'permissions' | 'data'
 
 type LlmProvider = 'claude-cli' | 'anthropic-api' | 'extractive'
 
@@ -738,10 +738,161 @@ function PermissionsSection(): React.JSX.Element {
   )
 }
 
+interface TabMemoryEntry {
+  tabId: string
+  profileId: string
+  profileLabel: string
+  title: string
+  url: string
+  favicon: string | null
+  pid: number
+  processMemoryBytes: number
+  shared: number
+  active: boolean
+}
+
+/** Client-side byte formatter (main has its own; the command returns raw bytes so
+ * the table can format for display). "142.5 MB", "1.83 GB" past a gigabyte. */
+function formatBytes(bytes: number): string {
+  const mb = bytes / (1024 * 1024)
+  if (mb >= 1024) return `${(mb / 1024).toFixed(2)} GB`
+  return `${mb.toFixed(1)} MB`
+}
+
+/** Host of a url for a compact secondary line (bare host, no scheme/path), or the
+ * raw string when it is not a parseable http(s) url (e.g. a blank/home tab). */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host || url
+  } catch {
+    return url
+  }
+}
+
+/** The "Tabs" sub-section: a cross-profile analysis of every loaded tab, ranked by
+ * the memory of its renderer process (heaviest first) so the memory hogs surface
+ * at the top. Memory is a live snapshot — a manual Refresh re-reads it (no polling,
+ * to keep it cheap). Asleep tabs never appear: they hold no process, hence no RAM.
+ * Because Chromium reuses one renderer for several same-site pages, a process can
+ * back more than one tab — those rows show a "shared" note and the total counts
+ * each process once. */
+function TabsMemorySection(): React.JSX.Element {
+  const [entries, setEntries] = useState<TabMemoryEntry[]>([])
+  const [totalBytes, setTotalBytes] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = async (): Promise<void> => {
+    setLoading(true)
+    const res = await run('list-tab-memory')
+    setLoading(false)
+    if (res.ok) {
+      setEntries((res.entries as TabMemoryEntry[]) ?? [])
+      setTotalBytes(Number(res.totalBytes ?? 0))
+      setError(null)
+    } else {
+      setError(String(res.error))
+    }
+  }
+
+  // Put a tab to sleep (Cmd+S): frees its renderer process, keeps the tab. Reuses
+  // the existing discard-tab command (resolves the tab by its global id, any
+  // window). The tab then drops out of this list (only loaded tabs appear), so
+  // refetch after.
+  const sleep = async (tabId: string): Promise<void> => {
+    const res = await run('discard-tab', { id: tabId })
+    if (!res.ok) {
+      setError(String(res.error))
+      return
+    }
+    await load()
+  }
+
+  useEffect(() => {
+    void load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  return (
+    <div className="settings-section">
+      <p className="settings-hint">
+        Every loaded tab across all open profiles, ranked by the memory of its renderer process
+        (heaviest first). Sleeping tabs are not shown — they hold no process. When several same-site
+        tabs share one process, each row notes it and the total counts that process once.
+      </p>
+      <div className="settings-section-head">
+        <button className="btn btn-ghost" onClick={() => void load()} disabled={loading}>
+          {loading ? 'Reading…' : 'Refresh'}
+        </button>
+        <span className="settings-hint tab-mem-total">
+          {entries.length} loaded {entries.length === 1 ? 'tab' : 'tabs'} · {formatBytes(totalBytes)}{' '}
+          total
+        </span>
+      </div>
+      {error && <p className="settings-error">{error}</p>}
+      {entries.length === 0 ? (
+        <p className="settings-hint">No loaded tabs.</p>
+      ) : (
+        <table className="tab-mem-table">
+          <thead>
+            <tr>
+              <th className="tab-mem-rank">#</th>
+              <th>Tab</th>
+              <th>Profile</th>
+              <th className="tab-mem-size">Memory</th>
+              <th className="tab-mem-actions" aria-label="Actions" />
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((e, i) => (
+              <tr key={e.tabId}>
+                <td className="tab-mem-rank">{i + 1}</td>
+                <td className="tab-mem-tab">
+                  <div className="tab-mem-title-row">
+                    {e.favicon ? (
+                      <img className="tab-mem-favicon" src={e.favicon} alt="" />
+                    ) : (
+                      <span className="tab-mem-favicon tab-mem-favicon-blank" />
+                    )}
+                    <span className="tab-mem-title" title={e.title}>
+                      {e.title || 'Untitled'}
+                    </span>
+                    {e.active && <span className="tab-mem-badge tab-mem-active">active</span>}
+                  </div>
+                  <span className="tab-mem-host">{hostOf(e.url)}</span>
+                </td>
+                <td className="tab-mem-profile">{e.profileLabel}</td>
+                <td className="tab-mem-size">
+                  {formatBytes(e.processMemoryBytes)}
+                  {e.shared > 1 && (
+                    <span className="tab-mem-shared" title={`Shared by ${e.shared} tabs`}>
+                      shared ×{e.shared}
+                    </span>
+                  )}
+                </td>
+                <td className="tab-mem-actions">
+                  <button
+                    className="btn btn-ghost"
+                    onClick={() => void sleep(e.tabId)}
+                    title="Put this tab to sleep (Cmd+S): frees its memory, keeps the tab"
+                  >
+                    Sleep
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  )
+}
+
 const SECTIONS: Array<{ key: Section; label: string }> = [
   { key: 'general', label: 'General' },
   { key: 'ai', label: 'AI' },
   { key: 'profiles', label: 'Profiles' },
+  { key: 'tabs', label: 'Tabs' },
   { key: 'extensions', label: 'Extensions' },
   { key: 'permissions', label: 'Permissions' },
   { key: 'data', label: 'Data' }
@@ -779,6 +930,7 @@ function Settings({ section: requested }: { section?: string }): React.JSX.Eleme
       {section === 'general' && <GeneralSection />}
       {section === 'ai' && <AiSection />}
       {section === 'profiles' && <ProfilesSection />}
+      {section === 'tabs' && <TabsMemorySection />}
       {section === 'extensions' && <ExtensionsSection />}
       {section === 'permissions' && <PermissionsSection />}
       {section === 'data' && <DataSection />}

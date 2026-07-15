@@ -19,6 +19,8 @@ export interface NavigableContents {
   goForward: () => unknown
   /** Reload the current page (re-fetch and re-render). */
   reload: () => unknown
+  /** Hard reload: reload the page bypassing the HTTP cache (Cmd+Shift+R). */
+  reloadIgnoringCache: () => unknown
   /** Current zoom level (Chrome's log scale: 0 = 100%, factor = 1.2^level). */
   getZoomLevel: () => number
   /** Set the zoom level (same log scale as getZoomLevel). */

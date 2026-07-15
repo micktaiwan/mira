@@ -180,23 +180,79 @@ export const MAG_BINDING = '__miraMagnifier'
 
 /** The input shim, injected into every content page via the CDP debugger
  * (`Page.addScriptToEvaluateOnNewDocument`, like the stealth shim). Two
- * independent flags, so we never swallow a click we shouldn't:
+ * independent flags, both on ONLY while magnified, so we never swallow input we
+ * shouldn't:
  *  - `captureWheel`: preventDefault + forward `wheel` (main turns Cmd+wheel into
- *    zoom, plain wheel into pan). On while Cmd is held OR while magnified.
+ *    zoom, plain wheel into pan). Needed so pan keeps working after Cmd is
+ *    released while zoomed.
  *  - `swallowClicks`: preventDefault `click` (magnified clicks land on the wrong
- *    element — verified). On ONLY while magnified, so Cmd+click to open a link in
- *    a background tab keeps working when NOT zoomed.
+ *    element — verified). Off when not zoomed, so Cmd+click to open a link in a
+ *    background tab keeps working.
  * Both default off (the page behaves normally). Forwarding goes through the
  * addBinding function, which emits `Runtime.bindingCalled` to main. Verified
- * live (shim probe, 2026-07-11). */
+ * live (shim probe, 2026-07-11).
+ *
+ * Cmd+wheel is captured on `e.metaKey` directly, read off the wheel event
+ * itself — never via a "Cmd is held" flag pushed from main. Both alternatives
+ * were tried and lost a race each:
+ *  - flag armed on Cmd keyDown (before-input-event): async and focus-dependent,
+ *    the FIRST Cmd+scroll from 100% leaked to the native page scroll before the
+ *    flag arrived (the "Chromium steals the scroll while Cmd is held" bug);
+ *  - the same flag going stale the OTHER way: its keyUp could land on the
+ *    chrome, another tab or another app, leaving it stuck true — re-pushed into
+ *    every freshly loaded page, whose shim then swallowed ALL plain wheel
+ *    events (the "page refuses to scroll after load" bug).
+ * There is no legit plain Cmd+wheel on a page besides zoom, so keying capture
+ * on `e.metaKey` alone is always correct.
+ *
+ * Scroll-chain freeze: preventDefault alone CANNOT stop a wheel whose gesture is
+ * already latched to a scroller (Cmd pressed mid-gesture, or during momentum) —
+ * Chromium keeps scrolling on the compositor and delivers those events with
+ * cancelable=false. The page ROOT is already covered: applyMagnifierJs puts
+ * overflow:hidden on documentElement at the first zoom apply, which kills the
+ * latched gesture there. But an INNER scrollable element (split layouts, chat
+ * panes…) kept scrolling under a Cmd+wheel zoom, shifting the content under the
+ * cursor so the zoom looked mis-anchored. So every captured wheel also freezes
+ * the target's scrollable ancestor chain the same way (overflow:hidden unlatches
+ * the gesture), then restores style + scroll offsets once the burst goes idle. */
 export const MAGNIFIER_SHIM = `(() => {
   if (window.__miraMag) return;
   const state = { captureWheel: false, swallowClicks: false };
   window.__miraMag = state;
   const send = (o) => { try { window.${MAG_BINDING}(JSON.stringify(o)); } catch (e) {} };
+  const frozen = [];
+  let idleTimer = 0;
+  const unfreeze = () => {
+    for (const f of frozen) {
+      f.el.style.overflowX = f.ox; f.el.style.overflowY = f.oy;
+      f.el.scrollLeft = f.x; f.el.scrollTop = f.y;
+    }
+    frozen.length = 0;
+  };
+  const scrolls = (ov, extra) => (ov === 'auto' || ov === 'scroll') && extra > 0;
+  const freeze = (start) => {
+    if (!frozen.length) {
+      // Walk up from the wheel target (escaping shadow roots via the host),
+      // stopping at the root/body: those belong to the magnifier's own freeze.
+      for (let el = start; el && el !== document.documentElement && el !== document.body;
+           el = el.parentElement || el.getRootNode()?.host) {
+        if (!(el instanceof Element)) break;
+        const s = getComputedStyle(el);
+        if (scrolls(s.overflowY, el.scrollHeight - el.clientHeight) ||
+            scrolls(s.overflowX, el.scrollWidth - el.clientWidth)) {
+          frozen.push({ el, ox: el.style.overflowX, oy: el.style.overflowY,
+            x: el.scrollLeft, y: el.scrollTop });
+          el.style.overflow = 'hidden';
+        }
+      }
+    }
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(unfreeze, 250);
+  };
   window.addEventListener('wheel', (e) => {
-    if (!state.captureWheel) return;
+    if (!state.captureWheel && !e.metaKey) return;
     e.preventDefault();
+    freeze(e.target);
     send({ t: 'wheel', dy: e.deltaY, dx: e.deltaX, meta: e.metaKey, x: e.clientX, y: e.clientY });
   }, { capture: true, passive: false });
   window.addEventListener('click', (e) => {
@@ -210,6 +266,39 @@ export function setShimFlags(captureWheel: boolean, swallowClicks: boolean): str
   return (
     `window.__miraMag && (window.__miraMag.captureWheel = ${captureWheel ? 'true' : 'false'}, ` +
     `window.__miraMag.swallowClicks = ${swallowClicks ? 'true' : 'false'});`
+  )
+}
+
+/** JS (run via the debugger) that shows or hides a PERSISTENT red frame around
+ * the viewport while the magnifier is on, so the user always knows the page is
+ * zoomed (and hence why the wheel pans instead of scrolling) — the flash alone
+ * was only an exit blip and too easy to miss.
+ *
+ * It must be a top-layer element (`popover`), NOT a plain fixed div: the page
+ * root carries the magnifier's `transform: scale()`, which makes it the
+ * containing block for `position:fixed` descendants, so a fixed frame gets
+ * scaled and offset with the page (verified live: a fixed inset:0 child rendered
+ * at 2× size, off-screen). A popover renders in the browser top layer, anchored
+ * to the viewport regardless of ancestor transforms (verified live: inset:0
+ * popover measured exactly the viewport width under a 2× transform). Idempotent;
+ * `pointer-events:none` so it never eats input. */
+export function magnifierFrameJs(on: boolean): string {
+  const id = '__miraMagFrame'
+  if (!on) {
+    return (
+      `(() => { const el = document.getElementById('${id}');` +
+      ` if (el) { try { el.hidePopover(); } catch (e) {} el.remove(); } })();`
+    )
+  }
+  return (
+    `(() => { let el = document.getElementById('${id}');` +
+    ` if (!el) { el = document.createElement('div'); el.id = '${id}';` +
+    ` el.setAttribute('popover', 'manual');` +
+    ` el.style.cssText = 'margin:0;padding:0;inset:0;width:auto;height:auto;' +` +
+    ` 'background:transparent;border:3px solid rgba(255,60,60,0.9);box-sizing:border-box;' +` +
+    ` 'pointer-events:none;';` +
+    ` document.documentElement.appendChild(el); }` +
+    ` if (!el.matches(':popover-open')) { try { el.showPopover(); } catch (e) {} } })();`
   )
 }
 

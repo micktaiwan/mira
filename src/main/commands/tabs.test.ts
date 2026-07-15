@@ -72,6 +72,23 @@ describe('select-tab', () => {
   })
 })
 
+describe('copy-tab-id', () => {
+  it('writes the tab id to the clipboard and flashes a toast', () => {
+    const { ctx, clipboardWrites, toasts } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('copy-tab-id', { id: 'tab-1' }, ctx)).toEqual({ ok: true, id: 'tab-1' })
+    expect(clipboardWrites).toEqual(['tab-1'])
+    expect(toasts).toEqual(['Copied!'])
+  })
+
+  it('fails on a missing id', () => {
+    const { ctx, clipboardWrites } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('copy-tab-id', {}, ctx)).toEqual({ ok: false, error: 'missing "id"' })
+    expect(clipboardWrites).toEqual([])
+  })
+})
+
 describe('close-tab', () => {
   it('closes the active tab and activates its neighbor', () => {
     const { ctx, tabState } = makeContext()
@@ -204,6 +221,88 @@ describe('pin-tab / unpin-tab', () => {
     expect(registry.execute('pin-tab', {}, ctx)).toEqual({ ok: false, error: 'missing "id"' })
     expect(registry.execute('unpin-tab', { id: 'nope' }, ctx).ok).toBe(false)
     expect(registry.execute('unpin-tab', {}, ctx)).toEqual({ ok: false, error: 'missing "id"' })
+  })
+})
+
+describe('set-tab-awake', () => {
+  it('sets and clears the keepAwake flag, reported by list-tabs', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // tab-2
+    expect(registry.execute('set-tab-awake', { id: 'tab-2', keepAwake: true }, ctx)).toEqual({
+      ok: true,
+      id: 'tab-2',
+      keepAwake: true
+    })
+    const listed = registry.execute('list-tabs', {}, ctx) as {
+      ok: true
+      tabs: Array<{ id: string; keepAwake: boolean }>
+    }
+    expect(listed.tabs.find((t) => t.id === 'tab-2')?.keepAwake).toBe(true)
+    expect(registry.execute('set-tab-awake', { id: 'tab-2', keepAwake: false }, ctx)).toEqual({
+      ok: true,
+      id: 'tab-2',
+      keepAwake: false
+    })
+    const relisted = registry.execute('list-tabs', {}, ctx) as {
+      ok: true
+      tabs: Array<{ id: string; keepAwake: boolean }>
+    }
+    expect(relisted.tabs.find((t) => t.id === 'tab-2')?.keepAwake).toBe(false)
+  })
+
+  it('rejects a missing id or a non-boolean keepAwake', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('set-tab-awake', { keepAwake: true }, ctx)).toEqual({
+      ok: false,
+      error: 'missing "id"'
+    })
+    expect(registry.execute('set-tab-awake', { id: 'tab-1' }, ctx)).toEqual({
+      ok: false,
+      error: '"keepAwake" must be a boolean'
+    })
+  })
+
+  it('fails on an unknown id', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('set-tab-awake', { id: 'nope', keepAwake: true }, ctx).ok).toBe(false)
+  })
+})
+
+describe('duplicate-active-tab', () => {
+  it('opens a copy of the active tab right under it and focuses it', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', { url: 'example.com' }, ctx) // tab-2, active
+    const result = registry.execute('duplicate-active-tab', {}, ctx)
+    expect(result).toMatchObject({ ok: true, duplicated: true, id: 'tab-3', url: 'example.com' })
+    // The copy slots right under its source and becomes active.
+    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-1', 'tab-2', 'tab-3'])
+    expect(tabState().activeId).toBe('tab-3')
+  })
+
+  it('reports nothing to duplicate when the window is empty', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('close-tab', { id: 'tab-1' }, ctx) // now empty
+    expect(registry.execute('duplicate-active-tab', {}, ctx)).toEqual({
+      ok: true,
+      duplicated: false,
+      id: null
+    })
+  })
+
+  it('does not duplicate the internal Settings tab', async () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    await registry.execute('open-settings', {}, ctx) // settings tab now active
+    expect(registry.execute('duplicate-active-tab', {}, ctx)).toEqual({
+      ok: true,
+      duplicated: false,
+      id: null
+    })
   })
 })
 
@@ -346,6 +445,40 @@ describe('discard-tab', () => {
     const { ctx } = makeContext()
     const registry = createCommandRegistry()
     expect(registry.execute('discard-tab', {}, ctx)).toEqual({ ok: false, error: 'missing "id"' })
+  })
+})
+
+describe('wake-all-tabs', () => {
+  it('wakes the tabs that were awake at the previous quit and are still asleep', () => {
+    const { ctx, tabState, loadedTabIds, restoredLoadedIds } = makeContext()
+    const registry = createCommandRegistry()
+    // Strip: tab-1 (home), tab-2, tab-3. Say tab-1 and tab-3 were awake at quit;
+    // tab-1 is already loaded (the active tab restore woke), tab-3 is still asleep.
+    registry.execute('new-tab', { url: 'https://a.test' }, ctx) // tab-2
+    registry.execute('new-tab', { url: 'https://b.test' }, ctx) // tab-3
+    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-1', 'tab-2', 'tab-3'])
+    restoredLoadedIds.add('tab-1')
+    restoredLoadedIds.add('tab-3')
+    loadedTabIds.add('tab-1')
+
+    expect(registry.execute('wake-all-tabs', {}, ctx)).toEqual({ ok: true, woken: 1 })
+    // tab-3 is now awake; tab-2 (never in the saved set) stays asleep.
+    expect(loadedTabIds.has('tab-3')).toBe(true)
+    expect(loadedTabIds.has('tab-2')).toBe(false)
+  })
+
+  it('is a no-op when the saved set is already fully awake', () => {
+    const { ctx, restoredLoadedIds, loadedTabIds } = makeContext()
+    const registry = createCommandRegistry()
+    restoredLoadedIds.add('tab-1')
+    loadedTabIds.add('tab-1')
+    expect(registry.execute('wake-all-tabs', {}, ctx)).toEqual({ ok: true, woken: 0 })
+  })
+
+  it('wakes nothing on a window opened fresh (empty saved set)', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('wake-all-tabs', {}, ctx)).toEqual({ ok: true, woken: 0 })
   })
 })
 

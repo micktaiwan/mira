@@ -17,8 +17,15 @@ describe('buildPageMenu', () => {
     expect(items).toEqual([
       { type: 'command', command: 'back', label: 'Back', enabled: true },
       { type: 'command', command: 'forward', label: 'Forward', enabled: false },
-      { type: 'command', command: 'reload', label: 'Reload', enabled: true }
+      { type: 'command', command: 'reload', label: 'Reload', enabled: true },
+      { type: 'separator' },
+      { type: 'inspect-element', label: 'Inspect Element' }
     ])
+  })
+
+  it('always ends with an "Inspect Element" item', () => {
+    const items = buildPageMenu(base)
+    expect(items.at(-1)).toEqual({ type: 'inspect-element', label: 'Inspect Element' })
   })
 
   it('adds an "open link in new tab" command when on a link', () => {
@@ -47,7 +54,8 @@ describe('buildPageMenu', () => {
   it('shows no clipboard items when there is neither a selection nor an editable field', () => {
     const items = buildPageMenu(base)
     expect(items.some((i) => i.type === 'role')).toBe(false)
-    expect(items.some((i) => i.type === 'separator')).toBe(false)
+    // The only separator is the one before the always-present Inspect item.
+    expect(items.filter((i) => i.type === 'separator')).toHaveLength(1)
   })
 
   it('adds a direct "Download Image" command over an image', () => {

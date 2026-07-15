@@ -39,9 +39,17 @@ import type {
   PanelSnapshot,
   ProfileInfo,
   SkillPaneState,
-  TabInfo
+  TabInfo,
+  TabMemoryEntry,
+  TabMemoryReport
 } from './commands'
-import { closedSkillPane, formatMemory, nextZen } from './commands'
+import {
+  closedSkillPane,
+  formatMemory,
+  nextZen,
+  rankTabMemory,
+  totalDistinctMemory
+} from './commands'
 import { MediaBuffer, captureStats, fileNameFor, mergeMedia } from './media-capture'
 import { MEDIA_COLLECT_SOURCE, nearestVideoPermalinkSource, parseDomMedia } from './media-collect'
 import { ytdlpDownload } from './ytdlp'
@@ -76,9 +84,9 @@ import {
   moveTab as moveTabPure,
   pinTab as pinTabPure,
   unpinTab as unpinTabPure,
+  setKeepAwake as setKeepAwakePure,
   closeActiveDecision,
   nextLoadedTab,
-  adjacentTab,
   updateTab
 } from './tab-store'
 import {
@@ -93,7 +101,23 @@ import { type PermissionGrant } from './permission-store'
 import { ProfileData } from './profile-data'
 import { shouldGrantPermission } from './permissions'
 import { ensureTooltip, showTooltip, hideTooltip, destroyTooltip } from './tooltip-controller'
+import { ensureToast, showToast, destroyToast } from './toast-controller'
 import { buildPageMenu } from './page-menu'
+import { buildTabMenu, type TabMenuItem } from './tab-menu'
+import { buildFolderMenu, type FolderMenuItem } from './folder-menu'
+import {
+  addFolder as addFolderPure,
+  renameFolder as renameFolderPure,
+  setFolderCollapsed as setFolderCollapsedPure,
+  setFolderColor as setFolderColorPure,
+  removeFolder as removeFolderPure,
+  setTabFolder as setTabFolderPure,
+  clearFolderMembership,
+  pruneFolderMembership,
+  nextNavigableTabId,
+  hasFolder,
+  type TabFolders
+} from './tab-folder-store'
 import { dockRight } from './devtools-layout'
 import { decideWindowOpen } from './window-open'
 import { installHoverReporter, reduceHover, hoverText, EMPTY_HOVER, type HoverEvent } from './hover'
@@ -107,6 +131,7 @@ import {
   MAG_BINDING,
   MAGNIFIER_SHIM,
   MAGNIFIER_FLASH,
+  magnifierFrameJs,
   setShimFlags
 } from './magnifier'
 import {
@@ -184,6 +209,7 @@ interface ClosedTab {
   title: string
   favicon: string | null
   pinned: boolean
+  keepAwake: boolean
   /** The tab's index in the strip when it was closed, to restore its position. */
   index: number
 }
@@ -212,7 +238,20 @@ function uniqueFileName(name: string, dir: string, used: Set<string>): string {
 
 interface ProfileWindow {
   window: BrowserWindow
+  /** The profile this window belongs to. A profile can own SEVERAL windows at once
+   * (a tab torn off into its own window), so this is NOT unique across windows —
+   * `windowId` is. Most per-profile state (session partition, history, favorites)
+   * keys off this. */
   id: string
+  /** Stable, unique id for THIS window (a profile may have several). The key into
+   * `openById` and the correlation to the persisted PersistedWindow.windowId, so a
+   * multi-window profile updates the right saved entry. Minted at create, reused
+   * from the saved entry on a restore so the correlation survives restarts. */
+  windowId: string
+  /** Resolves once this window's tabs have been restored (or its first/detached
+   * tab attached) — i.e. once `restored` flips true. Lets an async caller (the
+   * detach path creating a fresh window) await readiness before driving it. */
+  ready: Promise<void>
   views: Map<string, WebContentsView>
   /** Docked DevTools host view per tab, keyed by tab id — a DevTools inspector is
    * bound to ONE tab's webContents, so each tab owns its own (Chrome-like: every
@@ -223,6 +262,9 @@ interface ProfileWindow {
   devtools: Map<string, WebContentsView>
   state: TabState
   panelCollapsed: boolean
+  /** Tab folders (metadata: title, collapsed, order) for this window. Membership
+   * is on each tab (TabMeta.folderId). Persisted with the session. */
+  folders: TabFolders
   /** Zen (focus) mode: while true, layout() hides the toolbar + status bar (the
    * active view fills the whole window height) and both side panels are collapsed.
    * Set only through toggleZenIn. */
@@ -243,6 +285,11 @@ interface ProfileWindow {
    * (reopen-closed-tab) pops the top. In-memory only — cleared when the window
    * closes, like a browser session's reopen history. */
   closedTabs: ClosedTab[]
+  /** Tab ids (the NEW ids minted at restore) of the tabs that were awake, not
+   * asleep, when Mira last quit — read from each PersistedTab.loaded. Populated
+   * once by restoreSession; `wake-all-tabs` (Cmd+Shift+A) materializes exactly
+   * these. Empty for a window opened fresh (never restored). */
+  restoredLoadedIds: Set<string>
   /** True while the Cmd+K command palette overlay is open. The active web view is
    * hidden meanwhile so the chrome overlay is visible (a WebContentsView composites
    * ABOVE the chrome DOM — CLAUDE.md "les deux pièges"). layout() reads this. */
@@ -283,6 +330,16 @@ interface ProfileWindow {
   /** Bumped on every show/hide so a slow async measure from a stale hover can
    * detect it lost the race and bail instead of flashing an old bubble. */
   tooltipSeq: number
+  /** Transparent, non-focusable child window that draws the transient toast pill
+   * ABOVE the tab's WebContentsView (same native-layer reason as the tooltip).
+   * Pre-warmed in create(); null once destroyed. */
+  toast: BrowserWindow | null
+  /** Resolves once the toast window's document has loaded. */
+  toastReady: Promise<void>
+  /** Bumped on every show so a stale async render / auto-hide timer can bail. */
+  toastSeq: number
+  /** Pending auto-hide timer for the current toast, or null when none is showing. */
+  toastTimer: ReturnType<typeof setTimeout> | null
   /** Live HTML fullscreen episode (a video fullscreened inside the active tab's
    * page), or null. While set, both side panels are hidden and layout() gives the
    * fullscreen tab the WHOLE window (Chromium only fills the view's own bounds —
@@ -354,6 +411,11 @@ export interface ProfileManagerDeps {
   /** App-wide memory footprint (all Electron processes). Owned by index.ts,
    * which has `app`; exposed on the context so `get-status` stays pilotable. */
   getMemoryUsage: () => MemoryUsage
+  /** Per-process resident memory: one entry per Electron process (main, GPU, each
+   * tab renderer), keyed by OS pid. Owned by index.ts (which has `app`). Used by
+   * listTabMemory to attribute a working set to each loaded tab via its view's
+   * pid. `bytes` is the working set in bytes (getAppMetrics reports KB). */
+  getProcessMemory: () => Array<{ pid: number; bytes: number }>
   /** Chrome-extensions support: one extension system per profile session (D2,
    * extensions-plan.md). Owned by index.ts (which persists the sideload
    * registry); the manager wires it to windows/tabs and the command context. */
@@ -423,7 +485,10 @@ export class ProfileManager {
    * a second unlock — the cookie-loss bug). Absent = locked (falls back to the
    * canonical partition). Set on unlock, cleared on lock. See noncePartitionDir. */
   private readonly unlockedPartition = new Map<string, string>()
-  /** Only the currently open profiles, keyed by stable id. */
+  /** Every currently open window, keyed by its unique windowId. A profile may have
+   * several entries here (a torn-off tab lives in its own window of the same
+   * profile), so this is NOT keyed by profile id — use windowsForProfile /
+   * aWindowForProfile to resolve a profile's window(s). */
   private readonly openById = new Map<string, ProfileWindow>()
   /** yt-dlp video downloads in flight, keyed by a unique id, with when each
    * started. A download runs in a background process (independent of any UI), so
@@ -458,9 +523,6 @@ export class ProfileManager {
    * Not in tab-store: it is native view state (a CDP clip), rebuilt from scratch
    * on navigation, never persisted. See magnifier.ts. */
   private readonly magnifierStates = new Map<string, MagnifierState>()
-  /** True while the Cmd key is physically held (from before-input-event). Gates
-   * the shim's wheel capture so the FIRST Cmd+scroll (from 100%) is caught. */
-  private cmdHeld = false
   /** Last shim flags pushed per tab id, to avoid re-evaluating JS every wheel. */
   private readonly shimFlags = new Map<string, string>()
 
@@ -486,10 +548,10 @@ export class ProfileManager {
       persistHistory: (history) => this.deps.persistProfileHistory(id, history),
       initialPermissions: this.deps.loadProfilePermissions(id),
       persistPermissions: (permissions) => this.deps.persistProfilePermissions(id, permissions),
-      // Ping this profile's window so an open Settings tab refetches the grant list.
+      // Ping this profile's window(s) so an open Settings tab refetches the grant
+      // list — a profile may have several windows, so fan out to all of them.
       onPermissionsChanged: () => {
-        const pw = this.openById.get(id)
-        if (pw && !pw.window.isDestroyed()) pw.window.webContents.send('mira:permissions-changed')
+        this.broadcastToProfile(id, 'mira:permissions-changed')
       },
       debounceMs: ProfileManager.SAVE_DEBOUNCE_MS
     })
@@ -508,10 +570,8 @@ export class ProfileManager {
       initial: this.deps.loadProfileBookmarks(id),
       persist: (tree) => this.deps.persistProfileBookmarks(id, tree),
       onChange: (tree) => {
-        const pw = this.openById.get(id)
-        if (pw && !pw.window.isDestroyed()) {
-          pw.window.webContents.send('mira:bookmarks-changed', { tree })
-        }
+        // Refresh the favorites star in every window of this profile.
+        this.broadcastToProfile(id, 'mira:bookmarks-changed', { tree })
         this.deps.onBookmarksChange?.()
       }
     })
@@ -534,7 +594,8 @@ export class ProfileManager {
     const profile = findById(this.profiles, id)
     if (!profile) throw new Error(`unknown profile: ${id}`)
     if (profile.encrypted) throw new Error(`already encrypted: ${id}`)
-    if (this.openById.has(id)) throw new Error('close the profile window before encrypting it')
+    if (this.windowsForProfile(id).length > 0)
+      throw new Error('close the profile window before encrypting it')
     // Land freshly-set cookies/storage on disk BEFORE the vault captures them:
     // Chromium buffers recent cookies in memory and only writes them to the SQLite
     // DB on a timer, so an unflushed capture silently drops recent logins.
@@ -580,7 +641,8 @@ export class ProfileManager {
     if (!profile.encrypted) throw new Error(`not encrypted: ${id}`)
     const password = this.unlockedVaults.get(id)
     if (password === undefined) return { id, locked: false }
-    if (this.openById.has(id)) throw new Error('close the profile window before locking it')
+    if (this.windowsForProfile(id).length > 0)
+      throw new Error('close the profile window before locking it')
     await this.performVaultLock(id, password)
     return { id, locked: true }
   }
@@ -646,27 +708,33 @@ export class ProfileManager {
     return { locked }
   }
 
-  /** Close a profile's window (if open) and resolve once it is gone. Prefers a
-   * graceful close() (fires the 'close'/'closed' bookkeeping, e.g. geometry save),
-   * with a forced destroy() fallback if a page's beforeunload stalls it. The
-   * lockingAll flag keeps the 'closed' handler from double-locking underneath us. */
+  /** Close ALL windows of a profile (a profile may have several after a tear-off)
+   * and resolve once every one is gone. Prefers a graceful close() (fires the
+   * 'close'/'closed' bookkeeping, e.g. geometry save), with a forced destroy()
+   * fallback if a page's beforeunload stalls it. The lockingAll flag keeps the
+   * 'closed' handler from double-locking underneath us. */
   private closeWindowAndWait(id: string): Promise<void> {
-    const pw = this.openById.get(id)
-    if (!pw || pw.window.isDestroyed()) return Promise.resolve()
-    return new Promise<void>((resolve) => {
-      let done = false
-      const finish = (): void => {
-        if (done) return
-        done = true
-        resolve()
-      }
-      pw.window.once('closed', finish)
-      pw.window.close()
-      setTimeout(() => {
-        if (!pw.window.isDestroyed()) pw.window.destroy()
-        finish()
-      }, 2000)
-    })
+    const windows = this.windowsForProfile(id)
+    if (windows.length === 0) return Promise.resolve()
+    return Promise.all(
+      windows.map(
+        (pw) =>
+          new Promise<void>((resolve) => {
+            let done = false
+            const finish = (): void => {
+              if (done) return
+              done = true
+              resolve()
+            }
+            pw.window.once('closed', finish)
+            pw.window.close()
+            setTimeout(() => {
+              if (!pw.window.isDestroyed()) pw.window.destroy()
+              finish()
+            }, 2000)
+          })
+      )
+    ).then(() => undefined)
   }
 
   /** Drop a profile's cached history/permissions and bookmarks readers, cancelling
@@ -733,14 +801,22 @@ export class ProfileManager {
       // hand. unlockedVaults is empty at startup, so needsUnlock is true for every
       // encrypted profile here.
       const unlocked = new Set(this.unlockedVaults.keys())
+      // Reopen EVERY window a profile had open at quit (a profile may have several
+      // after a tear-off), not just one — each saved entry with open:true becomes a
+      // window restoring its own tabs + geometry.
       const toOpen = this.profiles.filter(
-        (p) => this.sessions[p.id]?.open === true && !needsUnlock(p, unlocked)
+        (p) => this.savedWindows(p.id).some((w) => w.open === true) && !needsUnlock(p, unlocked)
       )
       if (toOpen.length === 0) {
         this.openProfile(DEFAULT_PROFILE_ID)
         return
       }
-      for (const p of toOpen) this.openProfile(p.id)
+      for (const p of toOpen) {
+        for (const saved of this.savedWindows(p.id)) {
+          if (saved.open === true) this.create(p, { saved, content: 'restore' })
+        }
+      }
+      this.deps.onChange?.()
     } finally {
       this.restoringStartup = false
     }
@@ -753,9 +829,13 @@ export class ProfileManager {
     this.quitting = true
   }
 
-  /** Open the window for an existing profile id, or focus it if already open. */
+  /** Open a window for an existing profile id, or focus one if the profile already
+   * has a window open. A profile may have several windows (a tear-off); this focuses
+   * one and never opens a second. When none are open it creates one, restoring the
+   * profile's primary saved window (its first entry) so the user lands where they
+   * left off. */
   openProfile(id: string): { id: string; created: boolean } {
-    const existing = this.openById.get(id)
+    const existing = this.aWindowForProfile(id)
     if (existing && !existing.window.isDestroyed()) {
       if (existing.window.isMinimized()) existing.window.restore()
       existing.window.focus()
@@ -774,24 +854,28 @@ export class ProfileManager {
     if (needsUnlock(profile, new Set(this.unlockedVaults.keys()))) {
       throw new Error(`profile is locked: unlock it first (unlock-profile)`)
     }
-    this.create(profile)
+    // Restore the profile's primary (first-known) saved window, or a fresh home tab
+    // if it has never been open.
+    const primary = this.savedWindows(id)[0]
+    this.create(profile, primary ? { saved: primary, content: 'restore' } : { content: 'home' })
     this.deps.onChange?.()
     return { id, created: true }
   }
 
-  /** Close the open window of a profile, exactly like a user close: the window's
-   * 'close'/'closed' handlers snapshot its geometry, mark the profile not-open
-   * (so it won't reopen next launch), and auto-lock it if it was an unlocked
-   * vault. The other profiles' windows are untouched, and on macOS the app keeps
-   * running with no window (window-all-closed does not quit). `closed` is false
-   * when the id is known but not currently open. Throws on an unknown id. */
+  /** Close the profile's window(s), exactly like a user close: each window's
+   * 'close'/'closed' handlers snapshot geometry and do the bookkeeping, and the
+   * profile auto-locks if it was an unlocked vault (once its LAST window is gone).
+   * A profile may have several windows (a tear-off) — all are closed. Other
+   * profiles' windows are untouched, and on macOS the app keeps running with no
+   * window (window-all-closed does not quit). `closed` is false when the id is
+   * known but not currently open. Throws on an unknown id. */
   closeProfile(id: string): { id: string; closed: boolean } {
     if (!findById(this.profiles, id)) throw new Error(`unknown profile: ${id}`)
-    const open = this.openById.get(id)
-    if (!open || open.window.isDestroyed()) return { id, closed: false }
+    const windows = this.windowsForProfile(id)
+    if (windows.length === 0) return { id, closed: false }
     // window.close() drives the same path as clicking the red button / Cmd+Shift+W:
     // the 'closed' handler (see create) does the not-open bookkeeping and auto-lock.
-    open.window.close()
+    for (const pw of windows) pw.window.close()
     return { id, closed: true }
   }
 
@@ -810,7 +894,7 @@ export class ProfileManager {
       // Deterministic — no dependency on the flaky OS focus state, which the
       // last-focused fallback below can't control when Mira is a background app.
       this.openProfile(profileId)
-      target = this.openById.get(profileId) ?? null
+      target = this.aWindowForProfile(profileId)
     } else {
       // A link/file opened from ANOTHER app (a terminal `open foo.html`, a chat
       // client) leaves Mira unfocused, so getFocusedWindow() is null. Fall back to
@@ -818,13 +902,14 @@ export class ProfileManager {
       // then to any open one.
       target =
         this.findByWindow(BrowserWindow.getFocusedWindow()) ??
-        (this.menuFocusId ? (this.openById.get(this.menuFocusId) ?? null) : null) ??
+        (this.menuFocusId ? this.aWindowForProfile(this.menuFocusId) : null) ??
         this.openById.values().next().value ??
         null
     }
     if (!target || target.window.isDestroyed()) {
       this.openProfile(DEFAULT_PROFILE_ID)
-      target = this.openById.get(DEFAULT_PROFILE_ID) ?? this.openById.values().next().value ?? null
+      target =
+        this.aWindowForProfile(DEFAULT_PROFILE_ID) ?? this.openById.values().next().value ?? null
     }
     if (!target || target.window.isDestroyed()) return
     this.newTabIn(target, trimmed, false)
@@ -850,12 +935,9 @@ export class ProfileManager {
     this.profiles = renameProfile(this.profiles, id, label)
     this.deps.persist(this.profiles)
     const updated = findById(this.profiles, id)!
-    // Live-update the badge of the open window, if any: the chrome read its
-    // label once from the URL at load, so it needs a push to refresh.
-    const open = this.openById.get(id)
-    if (open && !open.window.isDestroyed()) {
-      open.window.webContents.send('mira:profile-renamed', updated.label)
-    }
+    // Live-update the badge of every open window of this profile: the chrome read
+    // its label once from the URL at load, so it needs a push to refresh.
+    this.broadcastToProfile(id, 'mira:profile-renamed', updated.label)
     this.deps.onChange?.()
     return { id: updated.id, label: updated.label }
   }
@@ -867,10 +949,9 @@ export class ProfileManager {
     this.profiles = setProfileColorPure(this.profiles, id, color)
     this.deps.persist(this.profiles)
     const updated = findById(this.profiles, id)!
-    const open = this.openById.get(id)
-    if (open && !open.window.isDestroyed()) {
-      open.window.webContents.send('mira:profile-theme', updated.color ?? null)
-    }
+    // Re-tint every open window of this profile (the chrome read the color once at
+    // load).
+    this.broadcastToProfile(id, 'mira:profile-theme', updated.color ?? null)
     // Other windows' open Settings tabs refetch so their swatches stay in sync.
     this.broadcastProfilesChanged()
     return {
@@ -890,13 +971,32 @@ export class ProfileManager {
     }
   }
 
-  private create(profile: Profile): ProfileWindow {
+  /** Create one window for a profile. `opts.saved` is the specific persisted
+   * window to restore (its geometry + tabs) — a profile may have several, so the
+   * caller picks which; without it the window starts on the home page. `opts.bounds`
+   * forces the geometry (the detach path, which drops the new window at the tear-off
+   * point). `opts.content` selects what fills the strip once extensions have loaded:
+   * 'restore' the saved tabs, 'home' a fresh home tab, or 'empty' nothing (the detach
+   * path attaches the torn-off tab itself). */
+  private create(
+    profile: Profile,
+    opts: {
+      saved?: PersistedWindow
+      bounds?: PersistedBounds
+      content?: 'restore' | 'home' | 'empty'
+    } = {}
+  ): ProfileWindow {
+    const content = opts.content ?? (opts.saved ? 'restore' : 'home')
+    // Reuse the saved entry's windowId on a restore so saveSession updates that
+    // entry in place (a fresh id would append a duplicate, doubling the window at
+    // the next restart); mint one for a brand-new / detached window.
+    const windowId = opts.saved?.windowId ?? randomUUID()
     // Restore the window's last geometry, unless it would land off every current
     // display (monitor unplugged / resolution changed) — then fall back to the
     // default size. maximized / fullscreen and the position are applied after
-    // creation (below).
+    // creation (below). A detach passes explicit bounds (the drop point) that win.
     const displays = screen.getAllDisplays()
-    const savedBounds = this.sessions[profile.id]?.bounds
+    const savedBounds = opts.bounds ?? opts.saved?.bounds
     // Keep the geometry only when a large-enough corner still overlaps some display
     // (monitor unplugged / resolution changed → fall back to the default size). We
     // do NOT hard-reject on a missing displayId: macOS can reassign a monitor's id
@@ -980,18 +1080,28 @@ export class ProfileManager {
         window.once('show', () => this.applySavedSpace(window, bounds))
       }
     }
+    // A deferred resolved once the async restore/attach lands, exposed as pw.ready
+    // (the detach path awaits it before driving a freshly created window).
+    let resolveReady!: () => void
+    const ready = new Promise<void>((resolve) => {
+      resolveReady = resolve
+    })
     const profileWindow: ProfileWindow = {
       window,
       id: profile.id,
+      windowId,
+      ready,
       views: new Map(),
       devtools: new Map(),
       state: emptyTabState(),
       panelCollapsed: false,
+      folders: [],
       chromeHidden: false,
       zenSnapshot: null,
       settingsTabId: null,
       closeArmedId: null,
       closedTabs: [],
+      restoredLoadedIds: new Set(),
       paletteOpen: false,
       mediaGalleryOpen: false,
       media: new Map(),
@@ -1003,12 +1113,18 @@ export class ProfileManager {
       tooltip: null,
       tooltipReady: Promise.resolve(),
       tooltipSeq: 0,
+      toast: null,
+      toastReady: Promise.resolve(),
+      toastSeq: 0,
+      toastTimer: null,
       htmlFullScreen: null,
       restored: false
     }
-    this.openById.set(profile.id, profileWindow)
-    // Pre-warm the transparent tooltip overlay so the first hover has no latency.
+    this.openById.set(windowId, profileWindow)
+    // Pre-warm the transparent tooltip + toast overlays so the first use has no
+    // latency (both composite above the WebContentsView).
     ensureTooltip(profileWindow)
+    ensureToast(profileWindow)
 
     // Reposition the active view by hand on every resize — a WebContentsView is
     // a native layer, not a DOM element (see CLAUDE.md, "les deux pièges").
@@ -1046,25 +1162,42 @@ export class ProfileManager {
     // destroyed. 'closed' then persists tabs and drops it from the open map.
     window.on('close', () => this.saveSession(profileWindow))
     window.on('closed', () => {
-      // A user closing this window records it not-open (won't reopen next launch);
-      // the same event during app quit leaves the open flag untouched (default),
-      // so a window open at quit reopens. See the `quitting` flag.
-      this.saveSession(profileWindow, this.quitting ? undefined : { open: false })
-      // Electron auto-destroys child windows with the parent, but drop our ref so
-      // nothing tries to drive a dead tooltip window.
+      // Drop this window from the open map FIRST, so the "does the profile still
+      // have other windows?" check below excludes the one that just closed.
+      this.openById.delete(windowId)
+      const othersRemain = this.windowsForProfile(profile.id).length > 0
+      if (this.quitting) {
+        // App quit: leave the open flag alone (the 'close' snapshot recorded it
+        // open:true), so this window reopens next launch. See the `quitting` flag.
+      } else if (othersRemain) {
+        // The user closed ONE of a profile's several windows (a torn-off window):
+        // forget it entirely — an explicitly dismissed extra window should not
+        // resurrect, and the profile's other windows carry its saved state.
+        this.removeSessionEntry(profileWindow)
+        this.scheduleFlush()
+      } else {
+        // The profile's LAST window: keep its tabs but mark it not-open, so a menu
+        // reopen restores where the user left off without auto-reopening at launch.
+        this.saveSession(profileWindow, { open: false })
+      }
+      // Electron auto-destroys child windows with the parent, but drop our refs so
+      // nothing tries to drive a dead tooltip / toast window.
       destroyTooltip(profileWindow)
-      this.openById.delete(profile.id)
+      destroyToast(profileWindow)
       this.deps.onChange?.()
-      // Auto-lock an encrypted profile when the user closes its window: the window
-      // is gone now (handles released), so it's safe to copy the live data back into
-      // the vault and wipe the plaintext. Skipped during app quit — locking is async
-      // and can't reliably finish before exit; a quit-while-unlocked session's
-      // leftover plaintext is discarded at next startup (reconcileVaults), which is
-      // acceptable (losing an unclean session is fine — CONFIRMED). Fire-and-forget.
-      // Skipped during a bulk lockAllVaults() (it locks this profile explicitly —
-      // see lockingAll) and during app quit (before-quit re-locks via lockAllVaults
-      // instead, so the close here must not race it).
-      if (!this.quitting && !this.lockingAll && this.unlockedVaults.has(profile.id)) {
+      // Auto-lock an encrypted profile when the user closes its LAST window: the
+      // window is gone now (handles released), so it's safe to copy the live data
+      // back into the vault and wipe the plaintext. Skipped while another window of
+      // the profile is still open (they share the live session), during app quit
+      // (locking is async and can't reliably finish before exit; the leftover
+      // plaintext is discarded at next startup — CONFIRMED), and during a bulk
+      // lockAllVaults() (it locks this profile explicitly — see lockingAll).
+      if (
+        !this.quitting &&
+        !this.lockingAll &&
+        !othersRemain &&
+        this.unlockedVaults.has(profile.id)
+      ) {
         this.lockProfileVault(profile.id).catch((error) =>
           console.error(`[mira] auto-lock of profile ${profile.id} failed`, error)
         )
@@ -1090,16 +1223,20 @@ export class ProfileManager {
       .catch((error) => console.error('[mira] failed to load extensions', error))
       .then(() => {
         if (profileWindow.window.isDestroyed()) return
-        // Reopen the profile's saved tabs, or start on the home page if none.
-        const saved = this.sessions[profile.id]
-        if (saved && saved.tabs.length > 0) {
-          this.restoreSession(profileWindow, saved)
-        } else {
+        // Fill the strip per `content`: restore the specific saved window's tabs,
+        // open a fresh home tab, or leave it empty (the detach path attaches the
+        // torn-off tab itself once this resolves — see detachTabTo). An 'empty'
+        // window whose saved entry has tabs still falls back to a home tab if
+        // nothing attaches (defensive — should not happen).
+        if (content === 'restore' && opts.saved && opts.saved.tabs.length > 0) {
+          this.restoreSession(profileWindow, opts.saved)
+        } else if (content === 'home') {
           this.newTabIn(profileWindow, this.appSettings.homeUrl)
         }
         // Only from here on may saveSession snapshot the live tab state.
         profileWindow.restored = true
       })
+      .finally(() => resolveReady())
     return profileWindow
   }
 
@@ -1132,10 +1269,7 @@ export class ProfileManager {
     // Hooks resolve the profile's CURRENT window at call time (not `pw`): the
     // extension system outlives the window (sessions are never destroyed), so a
     // background script can call chrome.tabs.create after a close/reopen cycle.
-    const live = (): ProfileWindow | null => {
-      const target = this.openById.get(profileId)
-      return target && !target.window.isDestroyed() ? target : null
-    }
+    const live = (): ProfileWindow | null => this.aWindowForProfile(profileId)
     this.deps.extensions.ensureFor(ses, {
       createTab: async ({ url }) => {
         const target = live()
@@ -1154,6 +1288,16 @@ export class ProfileManager {
         const target = live()
         const id = target ? this.tabIdForWebContents(target, wc) : null
         if (target && id) this.closeTabIn(target, id)
+      },
+      activeTab: () => {
+        const target = live()
+        const id = target?.state.activeId
+        const view = target && id ? target.views.get(id) : undefined
+        return view ? view.webContents : null
+      },
+      chromeWebContents: () => {
+        const target = live()
+        return target ? target.window.webContents : null
       }
     })
     // Web Store support first — it also loads the profile's store-installed
@@ -1232,6 +1376,8 @@ export class ProfileManager {
     // Reuses `partition` (the profile's session) computed above.
     view.webContents.setWindowOpenHandler((details) => {
       const decision = decideWindowOpen(details)
+      // The tab may have been torn off into another window — target its CURRENT one.
+      const host = this.ownerOf(tab.id) ?? pw
       if (decision.kind === 'popup') {
         // Let Electron create the native popup, on the SAME session as this profile
         // so the provider sees the same login state (the account chooser showed the
@@ -1239,7 +1385,7 @@ export class ProfileManager {
         return {
           action: 'allow',
           overrideBrowserWindowOptions: {
-            parent: pw.window,
+            parent: host.window,
             width: 520,
             height: 640,
             // Same flag as the tab views: extension iframes (password managers…)
@@ -1253,7 +1399,7 @@ export class ProfileManager {
       }
       // Slot the new tab right under the opener (this view's tab) instead of at
       // the end of the strip — the child sits next to its parent.
-      this.newTabIn(pw, decision.url, false, tab.id)
+      this.newTabIn(host, decision.url, false, tab.id)
       return { action: 'deny' }
     })
     // A blank tab (empty stored url) shows Mira's home page — the session summary —
@@ -1367,21 +1513,41 @@ export class ProfileManager {
    * its WebContentsView now — the rest materialize when first selected. */
   private restoreSession(pw: ProfileWindow, saved: PersistedWindow): void {
     for (const t of saved.tabs) {
+      const id = randomUUID()
       pw.state = addTab(pw.state, {
-        id: randomUUID(),
+        id,
         title: t.title,
         url: t.url,
         favicon: t.favicon,
         // Saved order already has the pinned block at the head of the strip.
-        ...(t.pinned === true ? { pinned: true } : {})
+        ...(t.pinned === true ? { pinned: true } : {}),
+        // Folder membership rides on the tab (ids are new, but folderId is stable).
+        ...(t.folderId ? { folderId: t.folderId } : {}),
+        // Keep-awake is durable tab state: it comes back set so the tab is woken
+        // below and stays immune to discard.
+        ...(t.keepAwake === true ? { keepAwake: true } : {})
       })
+      // Remember which tabs were awake at quit, keyed by the fresh id, so
+      // wake-all-tabs (Cmd+Shift+A) can re-open exactly that set on demand.
+      if (t.loaded === true) pw.restoredLoadedIds.add(id)
     }
+    // Restore the folder metadata, then drop any membership pointing at a folder
+    // that did not survive normalization (defensive — normalizeWindow already did
+    // this, but a folder-less restore keeps tabs loose regardless).
+    pw.folders = saved.folders ?? []
+    pw.state = pruneFolderMembership(pw.state, pw.folders)
     // normalizeSessions already clamped activeIndex into range.
     const activeTab = pw.state.tabs[saved.activeIndex]
     if (activeTab) {
       pw.state = selectTabPure(pw.state, activeTab.id)
       this.materializeTab(pw, activeTab)
       this.notifyExtensionsActiveTab(pw)
+    }
+    // Keep-awake tabs never sleep: unlike the rest (metadata-only until first
+    // selected), they are materialized now so they come back alive. materializeTab
+    // loads them hidden — layout() below keeps only the active view visible.
+    for (const tab of pw.state.tabs) {
+      if (tab.keepAwake === true) this.materializeTab(pw, tab)
     }
     pw.panelCollapsed = saved.panelCollapsed
     this.layout(pw)
@@ -1412,15 +1578,28 @@ export class ProfileManager {
     // it would wipe the saved tabs (an early resize/focus/close during a slow
     // extension load). Refresh only geometry + openness on the saved entry.
     if (!pw.restored) {
-      const prev = this.sessions[pw.id]
+      const prev = this.savedEntry(pw)
       if (prev) {
         const bounds = this.currentBounds(pw)
-        this.sessions[pw.id] = { ...prev, ...(bounds ? { bounds } : {}), open }
+        this.upsertSession(pw, { ...prev, ...(bounds ? { bounds } : {}), open })
         this.scheduleFlush()
       }
       return
     }
-    this.sessions[pw.id] = toPersisted(persistable, pw.panelCollapsed, this.currentBounds(pw), open)
+    this.upsertSession(
+      pw,
+      toPersisted(
+        persistable,
+        pw.panelCollapsed,
+        this.currentBounds(pw),
+        open,
+        pw.folders,
+        // The awake set = tabs with a live view. Settings never has a view, and it
+        // was already filtered out of `persistable` above.
+        new Set(pw.views.keys()),
+        pw.windowId
+      )
+    )
     this.scheduleFlush()
   }
 
@@ -1525,7 +1704,7 @@ export class ProfileManager {
    * (the 'closed' path can no longer read the native window). Uses getNormalBounds
    * so a maximized/fullscreen window still records the rectangle to restore to. */
   private currentBounds(pw: ProfileWindow): PersistedBounds | undefined {
-    if (pw.window.isDestroyed()) return this.sessions[pw.id]?.bounds
+    if (pw.window.isDestroyed()) return this.savedEntry(pw)?.bounds
     // x/y/width/height are the NORMAL (un-maximized) rectangle, so restore lands the
     // window back at its restore size. But the DISPLAY is detected from the CURRENT
     // visible bounds, not the normal rect: Mira is frameless, so dragging a maximized
@@ -1542,7 +1721,7 @@ export class ProfileManager {
     const wid = parseWindowNumber(pw.window.getMediaSourceId())
     const location =
       wid === undefined ? undefined : windowSpaceLocation(spacesLayout(), windowSpaces(wid))
-    const spaceIndex = location?.spaceIndex ?? this.sessions[pw.id]?.bounds?.spaceIndex
+    const spaceIndex = location?.spaceIndex ?? this.savedEntry(pw)?.bounds?.spaceIndex
     return {
       x: b.x,
       y: b.y,
@@ -1557,8 +1736,14 @@ export class ProfileManager {
 
   /** Mirror a tab's live page state (title / url / favicon) into its metadata and
    * push the refreshed strip to the chrome. */
-  private wireView(pw: ProfileWindow, tabId: string, wc: WebContents): void {
+  private wireView(initialPw: ProfileWindow, tabId: string, wc: WebContents): void {
+    // Resolve the window that OWNS this tab at event time, not the one it was born
+    // in: a torn-off tab keeps these handlers but now lives in another window (see
+    // detach-tab / ownerOf). Falls back to the birth window while the strip is
+    // momentarily inconsistent (mid-attach).
+    const owner = (): ProfileWindow => this.ownerOf(tabId) ?? initialPw
     const patch = (p: Partial<Omit<TabMeta, 'id'>>): void => {
+      const pw = owner()
       pw.state = updateTab(pw.state, tabId, p)
       // Page events (title / favicon / in-page nav) fire in bursts. Coalesce the
       // strip push and the disk write so a page load is one push + one write,
@@ -1602,6 +1787,7 @@ export class ProfileManager {
     let hover = EMPTY_HOVER
     const pushHover = (ev: HoverEvent): void => {
       hover = reduceHover(hover, ev)
+      const pw = owner()
       if (!pw.window.isDestroyed()) pw.window.webContents.send('mira:hover-url', hoverText(hover))
     }
     wc.on('update-target-url', (_e, url) => pushHover({ type: 'target', url }))
@@ -1610,6 +1796,7 @@ export class ProfileManager {
     // this event; forward the final tally to the chrome so the find bar can show
     // "n/m". Only the active tab is ever searched, so no tab filter is needed.
     wc.on('found-in-page', (_e, result) => {
+      const pw = owner()
       if (!result.finalUpdate || pw.window.isDestroyed()) return
       pw.window.webContents.send('mira:find-result', {
         matches: result.matches,
@@ -1620,10 +1807,11 @@ export class ProfileManager {
     // fullscreen: hide both side panels and stretch the view over the whole window
     // — Chromium only fills the view's own bounds (piège #1), so without this the
     // toolbar / status bar / panels would frame the "fullscreen" video.
-    wc.on('enter-html-full-screen', () => this.enterHtmlFullScreenIn(pw, tabId))
-    wc.on('leave-html-full-screen', () => this.leaveHtmlFullScreenIn(pw))
+    wc.on('enter-html-full-screen', () => this.enterHtmlFullScreenIn(owner(), tabId))
+    wc.on('leave-html-full-screen', () => this.leaveHtmlFullScreenIn(owner()))
     // A tab closed or discarded mid-fullscreen never emits leave: restore then too.
     wc.on('destroyed', () => {
+      const pw = owner()
       if (pw.htmlFullScreen?.tabId === tabId) this.leaveHtmlFullScreenIn(pw)
     })
   }
@@ -1786,7 +1974,9 @@ export class ProfileManager {
       ...t,
       loaded: pw.views.has(t.id),
       kind: t.id === pw.settingsTabId ? 'settings' : 'web',
-      pinned: t.pinned === true
+      pinned: t.pinned === true,
+      keepAwake: t.keepAwake === true,
+      folderId: t.folderId ?? null
     }))
   }
 
@@ -1806,7 +1996,10 @@ export class ProfileManager {
       panelCollapsed: pw.panelCollapsed,
       // Zen mode rides the tabs channel (like panelCollapsed): both are chrome
       // layout bits, so the renderer learns to hide/show the bars for free.
-      chromeHidden: pw.chromeHidden
+      chromeHidden: pw.chromeHidden,
+      // Folder metadata rides the same channel so the sidebar groups tabs by
+      // folder and reflects collapse/rename without a separate poll.
+      folders: pw.folders
     })
   }
 
@@ -1853,6 +2046,7 @@ export class ProfileManager {
         title: closing.title,
         favicon: closing.favicon,
         pinned: closing.pinned === true,
+        keepAwake: closing.keepAwake === true,
         index
       })
       if (pw.closedTabs.length > CLOSED_TAB_STACK_LIMIT) pw.closedTabs.shift()
@@ -1886,10 +2080,25 @@ export class ProfileManager {
       if (next) this.materializeTab(pw, next)
       this.notifyExtensionsActiveTab(pw)
     }
-    // Closing the last tab leaves the window open on an empty home (it never
-    // closes here — Cmd+W closes tabs, not windows). Force the panel open so the
-    // New tab entry point stays reachable. (Favorites will enrich this later.)
-    if (pw.state.tabs.length === 0) pw.panelCollapsed = false
+    // Closing the last tab: if this is a SECONDARY window of the profile (a
+    // torn-off window, others remain), close the window itself. An empty
+    // torn-off window has no reason to linger, and being frameless it offers no
+    // visible way to dismiss it — its state lives in the profile's other windows,
+    // and the 'closed' handler forgets it (the othersRemain path). The profile's
+    // SOLE window instead stays open on an empty home: Cmd+W closes tabs, never
+    // the last window (which would take the profile down with it).
+    if (pw.state.tabs.length === 0) {
+      if (this.windowsForProfile(pw.id).length > 1) {
+        pw.window.close()
+        return { closed: true }
+      }
+      // Force the panel open so the New tab entry point stays reachable.
+      // (Favorites will enrich this later.)
+      pw.panelCollapsed = false
+    }
+    // The closed tab leaves no dangling folder membership; an emptied folder keeps
+    // its metadata (the user can still see and remove it).
+    pw.state = pruneFolderMembership(pw.state, pw.folders)
     this.layout(pw)
     this.pushTabs(pw)
     this.saveSession(pw)
@@ -1916,6 +2125,7 @@ export class ProfileManager {
     // where it was (moveTab clamps into range and the pinned/regular zone).
     pw.state = addTab(pw.state, tab)
     if (closed.pinned) pw.state = pinTabPure(pw.state, tab.id)
+    if (closed.keepAwake) pw.state = setKeepAwakePure(pw.state, tab.id, true)
     pw.state = moveTabPure(pw.state, tab.id, closed.index)
     pw.closeArmedId = null
     this.materializeTab(pw, tab)
@@ -1947,6 +2157,28 @@ export class ProfileManager {
     return { closed: true, id: decision.id }
   }
 
+  /** Duplicate the active web tab: open a copy right under it, loading the live
+   * page url, and focus it. No-op (id:null) when nothing is active or the active
+   * tab is the internal Settings tab (it carries no web view). */
+  private duplicateActiveTabIn(pw: ProfileWindow): {
+    duplicated: boolean
+    id: string | null
+    url?: string
+  } {
+    const activeId = pw.state.activeId
+    if (!activeId || activeId === pw.settingsTabId) return { duplicated: false, id: null }
+    const source = pw.state.tabs.find((t) => t.id === activeId)
+    if (!source) return { duplicated: false, id: null }
+    // Prefer the live url (post-redirect / current SPA location); fall back to the
+    // stored url when the tab is asleep (no view).
+    const view = pw.views.get(activeId)
+    const url = view?.webContents.getURL() || source.url
+    // afterId=activeId slots the copy right under the source; no focusChrome — a
+    // duplicate lands on the page, not the address bar.
+    const tab = this.newTabIn(pw, url, false, activeId)
+    return { duplicated: true, id: tab.id, url }
+  }
+
   /** Tear down a tab's WebContentsView (freeing its renderer process) while
    * leaving the tab in the strip — the discard primitive. No-op if the tab is
    * already asleep. Does not touch the active tab or re-layout; callers do. */
@@ -1967,6 +2199,270 @@ export class ProfileManager {
     this.deps.extensions.removeTab(view.webContents)
     pw.window.contentView.removeChildView(view)
     view.webContents.close()
+  }
+
+  // --- Detach / re-attach a tab across windows ---
+  // A tab can be torn off into its own window (or dropped onto another window of
+  // the same profile) WITHOUT reloading its page: its live WebContentsView is
+  // reparented from one window's contentView to another's, and its once-wired
+  // event handlers follow it via ownerOf/ownerByWebContents (they resolve the
+  // owning window at event time). Only same-profile windows can receive a tab —
+  // the view is bound to the profile's session partition.
+
+  /** Move a tab out of `source` and into a window at screen `point`: onto an
+   * existing same-profile window whose frame contains the point (a re-attach), or
+   * into a fresh window created there (a tear-off). Without a point, always a fresh
+   * window. Returns the target windowId and whether it was new. A no-op (returns the
+   * source) when the tab is the source's only tab and there is no other window to
+   * land on — a "new window" would be identical to the current one. */
+  private async detachTabTo(
+    source: ProfileWindow,
+    tabId: string,
+    point?: { x: number; y: number }
+  ): Promise<{ windowId: string; created: boolean }> {
+    const tab = source.state.tabs.find((t) => t.id === tabId)
+    if (!tab) throw new Error(`unknown tab: ${tabId}`)
+    if (tabId === source.settingsTabId) throw new Error('cannot detach the Settings tab')
+
+    // A same-profile window (not the source) whose frame contains the drop point is
+    // a re-attach target; else we create a new window.
+    let target: ProfileWindow | null = null
+    if (point) {
+      for (const pw of this.windowsForProfile(source.id)) {
+        if (pw === source) continue
+        const b = pw.window.getBounds()
+        if (
+          point.x >= b.x &&
+          point.x < b.x + b.width &&
+          point.y >= b.y &&
+          point.y < b.y + b.height
+        ) {
+          target = pw
+          break
+        }
+      }
+    }
+
+    let created = false
+    if (!target) {
+      // Only tab, nowhere else to go: a fresh window equals the current one — no-op.
+      if (source.state.tabs.length <= 1) {
+        return { windowId: source.windowId, created: false }
+      }
+      const profile = findById(this.profiles, source.id)
+      if (!profile) throw new Error(`unknown profile: ${source.id}`)
+      target = this.create(profile, { bounds: this.detachBounds(source, point), content: 'empty' })
+      created = true
+      // Wait for the fresh window's chrome + extensions to be ready before driving it.
+      await target.ready
+      if (target.window.isDestroyed()) throw new Error('detach target window was closed')
+    }
+
+    // For a re-attach onto an EXISTING window, hit-test the drop point against that
+    // window's tab rows so the tab lands exactly where it was dropped (a fresh
+    // window has no rows — the tab is its only one). HTML5 drag doesn't cross OS
+    // windows, so the target renderer never saw a dragover; we measure its DOM from
+    // main instead. Best-effort: a failed hit-test just appends.
+    const insertion = !created && point ? await this.hitTestTabDrop(target, point) : undefined
+    this.attachTab(source, target, tabId, insertion)
+    if (!target.window.isDestroyed()) {
+      if (target.window.isMinimized()) target.window.restore()
+      target.window.show()
+      target.window.focus()
+    }
+    return { windowId: target.windowId, created }
+  }
+
+  /** Ask a window's chrome which tab row a screen point falls on, so a cross-window
+   * re-attach can insert the dropped tab there. Runs in the target renderer (it
+   * alone knows its row geometry), converting the screen point to client coords via
+   * window.screenX/Y. Returns the row under the point and whether the point is in its
+   * top or bottom half (before/after), or null when below the last row (append) or on
+   * any failure. Only the vertical `.tab-row`s are tested — a dropped tab becomes a
+   * regular row, never a pinned square. */
+  private async hitTestTabDrop(
+    pw: ProfileWindow,
+    point: { x: number; y: number }
+  ): Promise<{ overTabId: string; pos: 'before' | 'after' } | undefined> {
+    if (pw.window.isDestroyed()) return undefined
+    const script = `(() => {
+      const y = ${point.y} - window.screenY;
+      const rows = Array.from(document.querySelectorAll('.tab-row[data-tab-id]'));
+      for (const el of rows) {
+        const r = el.getBoundingClientRect();
+        if (y < r.top) continue;
+        if (y < r.top + r.height / 2) return { overTabId: el.getAttribute('data-tab-id'), pos: 'before' };
+        if (y <= r.bottom) return { overTabId: el.getAttribute('data-tab-id'), pos: 'after' };
+      }
+      return null;
+    })()`
+    try {
+      const hit = (await pw.window.webContents.executeJavaScript(script, true)) as {
+        overTabId: string
+        pos: 'before' | 'after'
+      } | null
+      return hit && typeof hit.overTabId === 'string' ? hit : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** The geometry for a torn-off window: the source window's current size, dropped
+   * so its top strip sits at the tear-off point (Chrome-style), or offset from the
+   * source when no point is known. */
+  private detachBounds(source: ProfileWindow, point?: { x: number; y: number }): PersistedBounds {
+    const size = source.window.isDestroyed()
+      ? { width: 1000, height: 720 }
+      : source.window.getNormalBounds()
+    const width = size.width
+    const height = size.height
+    if (point) {
+      // Put the drop point near where a tab sits in the toolbar (a little in from
+      // the left, just below the top), so the new window appears under the cursor.
+      return {
+        x: Math.round(point.x - 120),
+        y: Math.round(point.y - 8),
+        width,
+        height,
+        maximized: false,
+        fullScreen: false
+      }
+    }
+    const b = source.window.isDestroyed() ? { x: 80, y: 80 } : source.window.getBounds()
+    return { x: b.x + 40, y: b.y + 40, width, height, maximized: false, fullScreen: false }
+  }
+
+  /** Move tab `tabId` from `src` to `dst` (both windows of the same profile),
+   * carrying its live view (no reload) when it has one. Reworks both strips, both
+   * layouts, both saves. Closes `src` if it is left empty. `insertion` (from a drop
+   * hit-test on `dst`) places the tab exactly where it was dropped — the tab it
+   * landed on and which side; without it the tab joins the end of the strip. */
+  private attachTab(
+    src: ProfileWindow,
+    dst: ProfileWindow,
+    tabId: string,
+    insertion?: { overTabId: string; pos: 'before' | 'after' }
+  ): void {
+    if (src === dst) return
+    const tab = src.state.tabs.find((t) => t.id === tabId)
+    if (!tab) throw new Error(`unknown tab: ${tabId}`)
+    // A tab mid-fullscreen leaves that episode behind (it belongs to src's chrome).
+    if (src.htmlFullScreen?.tabId === tabId) this.leaveHtmlFullScreenIn(src)
+    // A torn-off tab loses any open docked inspector (reparenting a DevTools host is
+    // not worth the complexity — the user can reopen it in the new window).
+    this.destroyDevToolsView(src, tabId)
+
+    const view = src.views.get(tabId)
+    const buffer = src.media.get(tabId)
+    const wasPinned = tab.pinned === true
+    const wasLoaded = src.restoredLoadedIds.has(tabId)
+
+    // Detach from the source strip + native maps. closeTabPure picks src's neighbor
+    // active tab; clearing the armed id guards a stray pinned-close chain.
+    src.state = closeTabPure(src.state, tabId)
+    if (src.closeArmedId === tabId) src.closeArmedId = null
+    src.views.delete(tabId)
+    src.media.delete(tabId)
+    src.restoredLoadedIds.delete(tabId)
+    src.state = pruneFolderMembership(src.state, src.folders)
+
+    // Reparent the live view (if any) to the destination window and re-map it in the
+    // extension system (which keyed the webContents to src's window).
+    if (view) {
+      src.window.contentView.removeChildView(view)
+      dst.window.contentView.addChildView(view)
+      dst.views.set(tabId, view)
+      this.deps.extensions.removeTab(view.webContents)
+      this.deps.extensions.addTab(view.webContents, dst.window)
+    }
+    if (buffer) dst.media.set(tabId, buffer)
+    if (wasLoaded) dst.restoredLoadedIds.add(tabId)
+
+    // Add to the destination strip as the active tab. Folders are per-window, so the
+    // tab lands loose; a pinned tab stays pinned (into dst's pinned block).
+    const moved: TabMeta = { id: tabId, title: tab.title, url: tab.url, favicon: tab.favicon }
+    dst.state = addTab(dst.state, moved)
+    if (wasPinned) dst.state = pinTabPure(dst.state, tabId)
+    // Place the tab where it was dropped (a hit-test on dst's rows): join the folder
+    // of the tab it landed on and slot in before/after it — mirrors the in-window
+    // reorder (commitDrop in Sidebar.tsx). Pinned tabs keep their own block, so the
+    // drop position only applies to a regular (unpinned) tab.
+    if (insertion && !wasPinned) {
+      const over = dst.state.tabs.find((t) => t.id === insertion.overTabId)
+      if (over && over.id !== tabId) {
+        dst.state = updateTab(dst.state, tabId, { folderId: over.folderId })
+        const from = dst.state.tabs.findIndex((t) => t.id === tabId)
+        const overIndex = dst.state.tabs.findIndex((t) => t.id === insertion.overTabId)
+        const insertBefore = insertion.pos === 'before' ? overIndex : overIndex + 1
+        dst.state = moveTabPure(
+          dst.state,
+          tabId,
+          from < insertBefore ? insertBefore - 1 : insertBefore
+        )
+      }
+    }
+    dst.closeArmedId = null
+
+    // Source: close it if empty, else materialize its new active tab and refresh.
+    if (src.state.tabs.length === 0) {
+      src.window.close()
+    } else {
+      const nextActive = src.state.tabs.find((t) => t.id === src.state.activeId)
+      if (nextActive) this.materializeTab(src, nextActive)
+      this.notifyExtensionsActiveTab(src)
+      this.layout(src)
+      this.pushTabs(src)
+      this.saveSession(src)
+    }
+
+    // Destination: ensure the moved tab (now active) has a live view — a reparented
+    // view is already mapped (materializeTab no-ops); an asleep tab wakes here.
+    const dstTab = dst.state.tabs.find((t) => t.id === tabId)
+    if (dstTab) this.materializeTab(dst, dstTab)
+    this.notifyExtensionsActiveTab(dst)
+    this.layout(dst)
+    this.pushTabs(dst)
+    this.saveSession(dst)
+  }
+
+  /** Move a tab into a specific existing window (both must be the same profile) —
+   * the deterministic, pilotable counterpart to the drag-driven detachTabTo. */
+  private moveTabToWindowById(tabId: string, targetWindowId: string): { windowId: string } {
+    const src = this.ownerOf(tabId)
+    if (!src) throw new Error(`unknown tab: ${tabId}`)
+    if (tabId === src.settingsTabId) throw new Error('cannot move the Settings tab')
+    const dst = this.openById.get(targetWindowId)
+    if (!dst || dst.window.isDestroyed()) throw new Error(`unknown window: ${targetWindowId}`)
+    if (dst === src) return { windowId: targetWindowId }
+    if (dst.id !== src.id) throw new Error('cannot move a tab to a window of another profile')
+    this.attachTab(src, dst, tabId)
+    if (!dst.window.isDestroyed()) dst.window.focus()
+    return { windowId: targetWindowId }
+  }
+
+  /** Every open window: its id, profile, tab count, and screen frame — for the
+   * socket/MCP to enumerate windows and target a move. */
+  private listOpenWindows(): Array<{
+    windowId: string
+    profileId: string
+    tabCount: number
+    bounds: { x: number; y: number; width: number; height: number }
+    focused: boolean
+  }> {
+    const focused = this.findByWindow(BrowserWindow.getFocusedWindow())
+    const out: ReturnType<ProfileManager['listOpenWindows']> = []
+    for (const pw of this.openById.values()) {
+      if (pw.window.isDestroyed()) continue
+      const b = pw.window.getBounds()
+      out.push({
+        windowId: pw.windowId,
+        profileId: pw.id,
+        tabCount: pw.state.tabs.length,
+        bounds: { x: b.x, y: b.y, width: b.width, height: b.height },
+        focused: pw === focused
+      })
+    }
+    return out
   }
 
   /** Enable CDP Network events on a tab's already-attached debugger and route
@@ -2209,7 +2705,10 @@ export class ProfileManager {
    * focus moves as in discardActiveTabIn; a background tab just loses its view.
    * Throws on an unknown id. */
   private discardTabIn(pw: ProfileWindow, id: string): { discarded: boolean; id: string } {
-    if (!pw.state.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
+    const tab = pw.state.tabs.find((t) => t.id === id)
+    if (!tab) throw new Error(`unknown tab: ${id}`)
+    // Keep-awake tabs never sleep: discard is a no-op on them (the tab stays live).
+    if (tab.keepAwake === true) return { discarded: false, id }
     if (pw.state.activeId === id) {
       this.discardActiveTabIn(pw)
       return { discarded: true, id }
@@ -2230,6 +2729,10 @@ export class ProfileManager {
   private discardActiveTabIn(pw: ProfileWindow): { discarded: boolean; id: string | null } {
     const id = pw.state.activeId
     if (!id) return { discarded: false, id: null }
+    // Keep-awake tabs never sleep: Cmd+S leaves a kept-awake active tab alone.
+    if (pw.state.tabs.find((t) => t.id === id)?.keepAwake === true) {
+      return { discarded: false, id }
+    }
     // The active tab is itself loaded; nextLoadedTab skips it (it scans the tabs
     // around the active index) and any asleep tab, so focus lands on a live page.
     const target = nextLoadedTab(pw.state, new Set(pw.views.keys()))
@@ -2253,6 +2756,26 @@ export class ProfileManager {
       this.saveSession(pw)
     }
     return { discarded: true, id }
+  }
+
+  /** Wake (materialize + load) every tab that was awake at the previous quit and
+   * is still in the strip — the Cmd+Shift+A target. Focus is untouched; already
+   * loaded tabs (the active one, any woken earlier) are skipped by materializeTab.
+   * Returns how many tabs it actually woke this call. */
+  private wakeAllTabsIn(pw: ProfileWindow): { woken: number } {
+    let woken = 0
+    for (const tab of pw.state.tabs) {
+      if (!pw.restoredLoadedIds.has(tab.id)) continue
+      if (pw.views.has(tab.id)) continue
+      this.materializeTab(pw, tab)
+      woken++
+    }
+    if (woken > 0) {
+      this.layout(pw)
+      this.pushTabs(pw)
+      this.saveSession(pw)
+    }
+    return { woken }
   }
 
   private selectTabIn(pw: ProfileWindow, id: string): { id: string } {
@@ -2282,11 +2805,16 @@ export class ProfileManager {
    * every tab webContents so the shortcut works whatever holds focus. The menu
    * items carry the same accelerator for display only (registerAccelerator:false,
    * see menu.ts) so it is not handled twice. */
-  private wireTabShortcuts(pw: ProfileWindow, wc: WebContents): void {
+  private wireTabShortcuts(initialPw: ProfileWindow, wc: WebContents): void {
+    // Wired on both the chrome wc (window-stable) and each tab wc (which may move
+    // to another window on a tear-off). Resolve the owner from the wc: a tab view
+    // finds its CURRENT window, the chrome wc matches no view and falls back to the
+    // window it was wired against.
     wc.on('before-input-event', (event, input) => {
       if (input.type !== 'keyDown' || input.alt || input.shift) return
       const mod = process.platform === 'darwin' ? input.meta : input.control
       if (!mod) return
+      const pw = this.ownerByWebContents(wc) ?? initialPw
       if (input.key === 'ArrowUp') {
         this.selectAdjacentTabIn(pw, -1)
         event.preventDefault()
@@ -2298,15 +2826,22 @@ export class ProfileManager {
   }
 
   /** Wire the optical magnifier onto a tab's webContents, reusing the CDP
-   * debugger stealth already attached. Three hooks:
+   * debugger stealth already attached. Two hooks:
    *  1. Inject the input shim + register its forwarding binding (re-asserted on
    *     each navigation, which also resets the zoom — a new page starts at 100%).
    *  2. Route the shim's forwarded wheel to magnifier-zoom (Cmd held) or -pan.
-   *  3. Detect Cmd hold (before-input-event) to arm the shim's wheel capture, so
-   *     the FIRST Cmd+scroll from 100% is caught. All routing goes through the
-   *     window's chrome webContents so the command context resolves the window
-   *     (BrowserWindow.fromWebContents on a child view can be null). */
-  private wireMagnifier(pw: ProfileWindow, tabId: string, wc: WebContents): void {
+   *     All routing goes through the window's chrome webContents so the command
+   *     context resolves the window (BrowserWindow.fromWebContents on a child
+   *     view can be null).
+   * Cmd detection is NOT tracked from main: the shim reads e.metaKey off the
+   * wheel event itself (see MAGNIFIER_SHIM). A main-side "Cmd is held" boolean
+   * was tried and removed: its keyUp could land on the chrome, another tab or
+   * another app, leaving it stuck true — and the stale flag was then re-pushed
+   * into every freshly loaded page, whose shim swallowed all plain wheel events
+   * ("the page refuses to scroll after load" bug). */
+  private wireMagnifier(initialPw: ProfileWindow, tabId: string, wc: WebContents): void {
+    // Resolve the tab's CURRENT window at event time (it may have been torn off).
+    const owner = (): ProfileWindow => this.ownerOf(tabId) ?? initialPw
     const dbg = wc.debugger
     const inject = (): void => {
       try {
@@ -2330,7 +2865,7 @@ export class ProfileManager {
       this.magnifierStates.delete(tabId)
       this.shimFlags.delete(tabId)
       inject()
-      this.applyMagnifier(pw, tabId)
+      this.applyMagnifier(owner(), tabId)
     })
     dbg.on('message', (_e, method, params) => {
       if (method !== 'Runtime.bindingCalled' || params.name !== MAG_BINDING) return
@@ -2341,6 +2876,7 @@ export class ProfileManager {
         return
       }
       if (msg.t !== 'wheel') return
+      const pw = owner()
       const chrome = pw.window.webContents
       if (msg.meta) {
         // Anchor the zoom on the REAL cursor position (view surface CSS px), read
@@ -2360,13 +2896,6 @@ export class ProfileManager {
         })
       }
     })
-    wc.on('before-input-event', (_event, input) => {
-      if (input.key !== 'Meta') return
-      const held = input.type === 'keyDown'
-      if (this.cmdHeld === held) return
-      this.cmdHeld = held
-      this.updateShim(tabId, wc)
-    })
   }
 
   /** Apply tab `tabId`'s current magnifier state to its view: set (or clear) the
@@ -2378,18 +2907,24 @@ export class ProfileManager {
     if (!view) return
     const wc = view.webContents
     const state = this.magnifierStates.get(tabId) ?? NO_MAGNIFIER
-    const js = isMagnified(state) ? applyMagnifierJs(state) : CLEAR_MAGNIFIER_JS
+    const magnified = isMagnified(state)
+    const js = magnified ? applyMagnifierJs(state) : CLEAR_MAGNIFIER_JS
     evalInWebContents(wc, js).catch(() => {})
+    // Persistent red viewport frame while zoomed, so it is always obvious the
+    // page is magnified (and why the wheel pans instead of scrolls).
+    evalInWebContents(wc, magnifierFrameJs(magnified)).catch(() => {})
     this.updateShim(tabId, wc)
   }
 
   /** Push the shim's two capture flags for a tab, skipping the JS eval when they
-   * have not changed. captureWheel is on while Cmd is held OR magnified (so the
-   * first Cmd+scroll is caught and pan keeps working after release); swallowClicks
-   * only while magnified (Cmd+click still opens links when not zoomed). */
+   * have not changed. Both flags follow the magnified state and nothing else:
+   * captureWheel while magnified (pan keeps working after Cmd is released) — the
+   * first Cmd+scroll from 100% is caught by the shim's own e.metaKey read, not by
+   * a flag from main; swallowClicks while magnified (Cmd+click still opens links
+   * when not zoomed). */
   private updateShim(tabId: string, wc: WebContents): void {
     const magnified = isMagnified(this.magnifierStates.get(tabId) ?? NO_MAGNIFIER)
-    const js = setShimFlags(this.cmdHeld || magnified, magnified)
+    const js = setShimFlags(magnified, magnified)
     if (this.shimFlags.get(tabId) === js) return
     this.shimFlags.set(tabId, js)
     evalInWebContents(wc, js).catch(() => {})
@@ -2413,8 +2948,10 @@ export class ProfileManager {
    * here we only translate it to Electron menu items and popup. Mira actions
    * (`command` items) route through deps.runCommand so they hit the same registry
    * bus as the toolbar / socket; clipboard items are native roles on the view. */
-  private wireContextMenu(pw: ProfileWindow, wc: WebContents): void {
+  private wireContextMenu(initialPw: ProfileWindow, wc: WebContents): void {
     wc.on('context-menu', (_event, params) => {
+      // Pop the menu on the tab's CURRENT window (it may have been torn off).
+      const pw = this.ownerByWebContents(wc) ?? initialPw
       if (pw.window.isDestroyed()) return
       const items = buildPageMenu({
         linkURL: params.linkURL,
@@ -2436,6 +2973,13 @@ export class ProfileManager {
             click: () => void this.downloadStreamAt(wc, params.x, params.y)
           }
         }
+        if (item.type === 'inspect-element') {
+          // Open the docked DevTools and select the element at the click point.
+          return {
+            label: item.label,
+            click: () => this.inspectElementAt(wc, params.x, params.y)
+          }
+        }
         return {
           label: item.label,
           enabled: item.enabled,
@@ -2454,6 +2998,103 @@ export class ProfileManager {
     })
   }
 
+  /** Pop the native right-click menu for a tab in the sidebar. The item list is
+   * the pure, tested buildTabMenu (fed this window's folders + the tab's own
+   * folder); the popup below is the thin native part (like the page menu). Command
+   * items route through deps.runCommand so they hit the same registry bus as
+   * everything else, targeting THIS window's chrome. No-op on an unknown tab id or
+   * a destroyed window. */
+  private showTabMenuIn(pw: ProfileWindow, tabId: string): void {
+    if (pw.window.isDestroyed()) return
+    const tab = pw.state.tabs.find((t) => t.id === tabId)
+    if (!tab) return
+    const chrome = pw.window.webContents
+    const items = buildTabMenu(
+      {
+        id: tab.id,
+        pinned: tab.pinned === true,
+        keepAwake: tab.keepAwake === true,
+        folderId: tab.folderId ?? null
+      },
+      pw.folders.map((f) => ({ id: f.id, title: f.title }))
+    )
+    const template = items.map((item) => this.tabMenuItemToTemplate(item, chrome, tabId))
+    Menu.buildFromTemplate(template).popup({ window: pw.window })
+  }
+
+  /** Convert one pure TabMenuItem to a native menu item, recursing into submenus.
+   * Command items fire on the registry bus; `duplicate` is the select-then-
+   * duplicate special case (no duplicate-by-id command exists — runDetached queues
+   * both as microtasks in order, so select lands before duplicate reads the active
+   * id). `chrome`/`tabId` are captured for the click handlers. */
+  private tabMenuItemToTemplate(
+    item: TabMenuItem,
+    chrome: WebContents,
+    tabId: string
+  ): MenuItemConstructorOptions {
+    if (item.type === 'separator') return { type: 'separator' }
+    if (item.type === 'submenu') {
+      return {
+        label: item.label,
+        submenu: item.items.map((sub) => this.tabMenuItemToTemplate(sub, chrome, tabId))
+      }
+    }
+    if (item.type === 'duplicate') {
+      return {
+        label: item.label,
+        click: () => {
+          this.deps.runCommand?.(chrome, 'select-tab', { id: tabId })
+          this.deps.runCommand?.(chrome, 'duplicate-active-tab')
+        }
+      }
+    }
+    return {
+      label: item.label,
+      enabled: item.enabled,
+      click: () => this.deps.runCommand?.(chrome, item.command, item.params)
+    }
+  }
+
+  /** Pop the native right-click menu for a folder header in the sidebar. Item
+   * list from the pure, tested buildFolderMenu (fed the folder's collapse state +
+   * color); the popup is the thin native part. No-op on an unknown folder id or a
+   * destroyed window. */
+  private showFolderMenuIn(pw: ProfileWindow, folderId: string): void {
+    if (pw.window.isDestroyed()) return
+    const folder = pw.folders.find((f) => f.id === folderId)
+    if (!folder) return
+    const chrome = pw.window.webContents
+    const items = buildFolderMenu({
+      id: folder.id,
+      collapsed: folder.collapsed,
+      color: folder.color ?? null
+    })
+    const template = items.map((item) => this.folderMenuItemToTemplate(item, chrome))
+    Menu.buildFromTemplate(template).popup({ window: pw.window })
+  }
+
+  /** Convert one pure FolderMenuItem to a native menu item, recursing into
+   * submenus. Command items fire on the registry bus; `checked` renders a native
+   * checkmark (the active color). `chrome` is captured for the click handlers. */
+  private folderMenuItemToTemplate(
+    item: FolderMenuItem,
+    chrome: WebContents
+  ): MenuItemConstructorOptions {
+    if (item.type === 'separator') return { type: 'separator' }
+    if (item.type === 'submenu') {
+      return {
+        label: item.label,
+        submenu: item.items.map((sub) => this.folderMenuItemToTemplate(sub, chrome))
+      }
+    }
+    return {
+      label: item.label,
+      enabled: item.enabled,
+      ...(item.checked !== undefined ? { type: 'checkbox' as const, checked: item.checked } : {}),
+      click: () => this.deps.runCommand?.(chrome, item.command, item.params)
+    }
+  }
+
   /** Right-click "Download Video" on a streamed video: resolve the precise
    * permalink for the video at the click point (in the tab's DOM), then route it
    * to the `download-video-url` command (yt-dlp). Falls back to the page URL when
@@ -2469,11 +3110,30 @@ export class ProfileManager {
     }
   }
 
+  /** Open the docked DevTools for the right-clicked tab and reveal the Elements
+   * panel with the element at (x, y) selected — the Chrome "Inspect Element"
+   * flow. openActiveDevTools ensures the inspector renders INTO our host view
+   * (not a native docked panel that overlaps the toolbar); inspectElement then
+   * switches to Elements and selects the node at the click point. No-op if the
+   * tab's window/view is gone. */
+  private inspectElementAt(wc: WebContents, x: number, y: number): void {
+    const pw = this.ownerByWebContents(wc)
+    if (!pw || pw.window.isDestroyed()) return
+    const id = this.tabIdForWebContents(pw, wc)
+    if (!id) return
+    const view = pw.views.get(id)
+    if (!view) return
+    this.openActiveDevTools(pw, id, view)
+    wc.inspectElement(x, y)
+  }
+
   /** Step to the tab one position from the active one (arrow up/down): -1 for the
    * previous, +1 for the next. Wraps around the ends. Steps through every tab,
    * asleep or not — the target materializes on selection. */
   private selectAdjacentTabIn(pw: ProfileWindow, direction: 1 | -1): { id: string | null } {
-    const target = adjacentTab(pw.state, direction)
+    // Walk the VISIBLE order (pinned, then expanded folders' tabs, then loose),
+    // skipping the tabs of collapsed folders — the sidebar's top-to-bottom order.
+    const target = nextNavigableTabId(pw.state.tabs, pw.folders, pw.state.activeId, direction)
     if (!target) return { id: null }
     // selectTabIn materializes the (possibly asleep) target, re-lays-out and saves.
     this.selectTabIn(pw, target)
@@ -2502,9 +3162,112 @@ export class ProfileManager {
   ): { id: string; pinned: boolean } {
     if (!pw.state.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
     pw.state = pinned ? pinTabPure(pw.state, id) : unpinTabPure(pw.state, id)
+    // A pinned tab is never in a folder (it lives in the pinned grid above the
+    // folders section) — pinning takes it out of whatever folder it was in.
+    if (pinned) pw.state = setTabFolderPure(pw.state, id, null)
     this.pushTabs(pw)
     this.saveSession(pw)
     return { id, pinned }
+  }
+
+  /** Set or clear a tab's keep-awake flag. Turning it ON wakes the tab if it was
+   * asleep (a kept-awake tab must be live by definition) and lays out so the
+   * freshly materialized background view is hidden behind the active one; turning
+   * it OFF just drops the flag (the tab stays as loaded as it currently is). Throws
+   * on an unknown id. */
+  private setTabKeepAwakeIn(
+    pw: ProfileWindow,
+    id: string,
+    keepAwake: boolean
+  ): { id: string; keepAwake: boolean } {
+    const tab = pw.state.tabs.find((t) => t.id === id)
+    if (!tab) throw new Error(`unknown tab: ${id}`)
+    pw.state = setKeepAwakePure(pw.state, id, keepAwake)
+    // Enabling keep-awake on a sleeping tab wakes it now (it may never be selected,
+    // yet must stay alive across the session and restarts).
+    if (keepAwake && !pw.views.has(id) && id !== pw.settingsTabId) {
+      this.materializeTab(pw, tab)
+      this.layout(pw)
+    }
+    this.pushTabs(pw)
+    this.saveSession(pw)
+    return { id, keepAwake }
+  }
+
+  // --- Tab folders. Metadata lives in pw.folders; membership on each tab's
+  // folderId. Every mutation re-pushes the strip + folders and persists. ---
+
+  private createTabFolderIn(pw: ProfileWindow, title: string, tabId?: string): { id: string } {
+    const id = randomUUID()
+    pw.folders = addFolderPure(pw.folders, { id, title, collapsed: false })
+    if (tabId) {
+      // Move the tab in, but never a pinned tab (pinned tabs aren't in folders).
+      const tab = pw.state.tabs.find((t) => t.id === tabId)
+      if (tab && tab.pinned !== true) pw.state = setTabFolderPure(pw.state, tabId, id)
+    }
+    this.pushTabs(pw)
+    this.saveSession(pw)
+    return { id }
+  }
+
+  private renameTabFolderIn(pw: ProfileWindow, id: string, title: string): { renamed: boolean } {
+    if (!hasFolder(pw.folders, id)) return { renamed: false }
+    pw.folders = renameFolderPure(pw.folders, id, title)
+    this.pushTabs(pw)
+    this.saveSession(pw)
+    return { renamed: true }
+  }
+
+  private removeTabFolderIn(pw: ProfileWindow, id: string): { removed: boolean } {
+    if (!hasFolder(pw.folders, id)) return { removed: false }
+    // Drop the metadata AND free its tabs (they fall back to the loose section —
+    // removing a folder never closes tabs).
+    pw.folders = removeFolderPure(pw.folders, id)
+    pw.state = clearFolderMembership(pw.state, id)
+    this.pushTabs(pw)
+    this.saveSession(pw)
+    return { removed: true }
+  }
+
+  private toggleTabFolderIn(
+    pw: ProfileWindow,
+    id: string,
+    collapsed?: boolean
+  ): { collapsed: boolean } {
+    if (!hasFolder(pw.folders, id)) throw new Error(`unknown folder: ${id}`)
+    pw.folders = setFolderCollapsedPure(pw.folders, id, collapsed)
+    this.pushTabs(pw)
+    this.saveSession(pw)
+    // Non-null: hasFolder guaranteed it above, and setFolderCollapsed kept the id.
+    return { collapsed: pw.folders.find((f) => f.id === id)!.collapsed }
+  }
+
+  private setTabFolderColorIn(
+    pw: ProfileWindow,
+    id: string,
+    color: string | null
+  ): { updated: boolean } {
+    if (!hasFolder(pw.folders, id)) return { updated: false }
+    pw.folders = setFolderColorPure(pw.folders, id, color)
+    this.pushTabs(pw)
+    this.saveSession(pw)
+    return { updated: true }
+  }
+
+  private moveTabToFolderIn(
+    pw: ProfileWindow,
+    tabId: string,
+    folderId: string | null
+  ): { moved: boolean } {
+    const tab = pw.state.tabs.find((t) => t.id === tabId)
+    if (!tab) return { moved: false }
+    if (folderId !== null && !hasFolder(pw.folders, folderId)) return { moved: false }
+    // A pinned tab lives in the pinned grid, never in a folder.
+    if (tab.pinned === true && folderId !== null) return { moved: false }
+    pw.state = setTabFolderPure(pw.state, tabId, folderId)
+    this.pushTabs(pw)
+    this.saveSession(pw)
+    return { moved: true }
   }
 
   private toggleTabsPanelIn(pw: ProfileWindow, collapsed?: boolean): { collapsed: boolean } {
@@ -2527,7 +3290,11 @@ export class ProfileManager {
    * the pushTabs inside toggleTabsPanelIn carry the new zen flag to the chrome. */
   private toggleZenIn(pw: ProfileWindow, hidden?: boolean): { hidden: boolean } {
     const live = { tabsCollapsed: pw.panelCollapsed, skillPaneOpen: pw.skillPane.open }
-    const { zen, apply } = nextZen({ hidden: pw.chromeHidden, snapshot: pw.zenSnapshot }, live, hidden)
+    const { zen, apply } = nextZen(
+      { hidden: pw.chromeHidden, snapshot: pw.zenSnapshot },
+      live,
+      hidden
+    )
     pw.chromeHidden = zen.hidden
     pw.zenSnapshot = zen.snapshot
     // Both push the chrome + re-layout: toggleTabsPanelIn sends mira:tabs-changed
@@ -2579,7 +3346,8 @@ export class ProfileManager {
    * via index.ts). The menu is app-global but shows one profile at a time; it is
    * rebuilt on focus change (onChange), so it always mirrors the front window. */
   listBookmarksTree(): BookmarkTree {
-    const id = this.focusedId() ?? this.openById.keys().next().value
+    // openById is keyed by windowId now, so fall back to a window's PROFILE id.
+    const id = this.focusedId() ?? this.openById.values().next().value?.id
     return id ? this.bookmarksFor(id).get() : []
   }
 
@@ -2592,10 +3360,66 @@ export class ProfileManager {
         id: p.id,
         label: p.label,
         ...(p.color ? { color: p.color } : {}),
-        open: this.openById.has(p.id)
+        open: this.windowsForProfile(p.id).length > 0
       })),
       focused: this.focusedId()
     }
+  }
+
+  /** Cross-profile snapshot of every loaded tab with the memory of its renderer
+   * process, ranked heaviest-first. Walks every OPEN profile window (a closed
+   * profile has no live views), maps each loaded tab to its OS pid, and reads the
+   * pid's working set from the app metrics. Asleep tabs and the Settings tab have
+   * no WebContentsView, so they never appear. The `shared` count and the distinct
+   * total account for renderer reuse (several same-site tabs on one process). */
+  listTabMemory(): TabMemoryReport {
+    const memoryByPid = new Map<number, number>()
+    for (const m of this.deps.getProcessMemory()) memoryByPid.set(m.pid, m.bytes)
+    // First pass builds the entries and counts how many tabs sit on each pid.
+    const raw: Array<Omit<TabMemoryEntry, 'shared'>> = []
+    const tabsPerPid = new Map<number, number>()
+    for (const pw of this.openById.values()) {
+      const label = findById(this.profiles, pw.id)?.label ?? pw.id
+      for (const tab of pw.state.tabs) {
+        const view = pw.views.get(tab.id)
+        if (!view) continue // asleep: no process, no footprint (Settings has no view either)
+        let pid: number
+        try {
+          pid = view.webContents.getOSProcessId()
+        } catch {
+          continue // a view torn down mid-walk — skip it
+        }
+        if (!pid) continue // process not attached yet (page still spawning)
+        tabsPerPid.set(pid, (tabsPerPid.get(pid) ?? 0) + 1)
+        raw.push({
+          tabId: tab.id,
+          profileId: pw.id,
+          profileLabel: label,
+          title: tab.title || tab.url || 'Untitled',
+          url: tab.url,
+          favicon: tab.favicon,
+          pid,
+          processMemoryBytes: memoryByPid.get(pid) ?? 0,
+          active: pw.state.activeId === tab.id
+        })
+      }
+    }
+    const entries: TabMemoryEntry[] = raw.map((e) => ({
+      ...e,
+      shared: tabsPerPid.get(e.pid) ?? 1
+    }))
+    return { entries: rankTabMemory(entries), totalBytes: totalDistinctMemory(entries) }
+  }
+
+  /** Discard a tab by its globally-unique id, in whichever open profile window
+   * owns it (tab ids are UUIDs, so at most one window matches). Backs the
+   * `discard-tab` command; the Tabs settings panel spans profiles, so the owning
+   * window is not necessarily the focused one. Runs the normal discard on it. */
+  private discardTabAnywhere(tabId: string): { discarded: boolean; id: string } {
+    for (const pw of this.openById.values()) {
+      if (pw.state.tabs.some((t) => t.id === tabId)) return this.discardTabIn(pw, tabId)
+    }
+    throw new Error(`unknown tab: ${tabId}`)
   }
 
   private focusedId(): string | null {
@@ -2608,6 +3432,95 @@ export class ProfileManager {
       if (pw.window === window) return pw
     }
     return null
+  }
+
+  // --- Multi-window-per-profile resolution ---
+  // A profile can have several windows open at once (a torn-off tab, see
+  // detach-tab). These helpers replace the old `openById.get(profileId)` (which
+  // assumed one window per profile) everywhere a profile's window(s) are needed.
+
+  /** Every open, live window of a profile (0, 1, or several). */
+  private windowsForProfile(profileId: string): ProfileWindow[] {
+    const out: ProfileWindow[] = []
+    for (const pw of this.openById.values()) {
+      if (pw.id === profileId && !pw.window.isDestroyed()) out.push(pw)
+    }
+    return out
+  }
+
+  /** A single window to target for a profile: the focused one when it belongs to
+   * this profile (so a scripted action hits the window the user is looking at),
+   * else the first open one, else null. */
+  private aWindowForProfile(profileId: string): ProfileWindow | null {
+    const focused = this.findByWindow(BrowserWindow.getFocusedWindow())
+    if (focused && focused.id === profileId && !focused.window.isDestroyed()) return focused
+    return this.windowsForProfile(profileId)[0] ?? null
+  }
+
+  /** Send an IPC message to the chrome of EVERY open window of a profile. Replaces
+   * the old single-window push for per-profile state (favorites, permissions,
+   * rename, theme), which must now reach all of the profile's windows. */
+  private broadcastToProfile(profileId: string, channel: string, ...args: unknown[]): void {
+    for (const pw of this.windowsForProfile(profileId)) {
+      pw.window.webContents.send(channel, ...args)
+    }
+  }
+
+  /** The window currently hosting `tabId` (its tab is in that window's strip), or
+   * null. Resolved LIVE against the strips so a tab's own event handlers (wired
+   * once in materializeTab) follow it across a detach/attach without re-wiring —
+   * the single source of truth is which window's state holds the tab. */
+  private ownerOf(tabId: string): ProfileWindow | null {
+    for (const pw of this.openById.values()) {
+      if (pw.state.tabs.some((t) => t.id === tabId)) return pw
+    }
+    return null
+  }
+
+  /** The window currently hosting the view whose webContents is `wc`, or null.
+   * Same purpose as ownerOf but keyed by the live webContents (for handlers that
+   * only have the wc, e.g. shortcuts / context menu). A chrome webContents matches
+   * no tab view, so callers fall back to the window they were wired against. */
+  private ownerByWebContents(wc: WebContents): ProfileWindow | null {
+    for (const pw of this.openById.values()) {
+      for (const view of pw.views.values()) {
+        if (view.webContents === wc) return pw
+      }
+    }
+    return null
+  }
+
+  // --- Persisted-session helpers (a profile maps to a LIST of windows) ---
+
+  /** The saved windows of a profile (empty when none). */
+  private savedWindows(profileId: string): PersistedWindow[] {
+    return this.sessions[profileId] ?? []
+  }
+
+  /** The saved entry correlated to a live window (by windowId), or undefined. */
+  private savedEntry(pw: ProfileWindow): PersistedWindow | undefined {
+    return this.savedWindows(pw.id).find((w) => w.windowId === pw.windowId)
+  }
+
+  /** Insert or replace a live window's snapshot in its profile's saved list,
+   * matched by windowId (so a save updates in place, never appends a duplicate). */
+  private upsertSession(pw: ProfileWindow, entry: PersistedWindow): void {
+    const arr = this.sessions[pw.id] ? [...this.sessions[pw.id]] : []
+    const i = arr.findIndex((w) => w.windowId === pw.windowId)
+    if (i >= 0) arr[i] = entry
+    else arr.push(entry)
+    this.sessions[pw.id] = arr
+  }
+
+  /** Forget a window's saved entry entirely (used when the user closes one of a
+   * profile's several windows — a torn-off window they explicitly dismissed should
+   * not reopen). Drops the profile key when it leaves no windows. */
+  private removeSessionEntry(pw: ProfileWindow): void {
+    const arr = this.sessions[pw.id]
+    if (!arr) return
+    const next = arr.filter((w) => w.windowId !== pw.windowId)
+    if (next.length > 0) this.sessions[pw.id] = next
+    else delete this.sessions[pw.id]
   }
 
   /** Context bound to the window that owns `sender` (the chrome that sent IPC). */
@@ -2665,6 +3578,7 @@ export class ProfileManager {
             goBack: () => {},
             goForward: () => {},
             reload: () => {},
+            reloadIgnoringCache: () => {},
             getZoomLevel: () => 0,
             setZoomLevel: () => {}
           }
@@ -2684,6 +3598,7 @@ export class ProfileManager {
             if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward()
           },
           reload: () => wc.reload(),
+          reloadIgnoringCache: () => wc.reloadIgnoringCache(),
           getZoomLevel: () => wc.getZoomLevel(),
           setZoomLevel: (level) => wc.setZoomLevel(level)
         }
@@ -2884,11 +3799,13 @@ export class ProfileManager {
         // any further window event. The window server may still report the OLD
         // Space if re-read immediately, so stamp the index we know to be true.
         this.saveSession(target)
-        const saved = this.sessions[target.id]
+        const saved = this.savedEntry(target)
         if (saved?.bounds) saved.bounds.spaceIndex = spaceIndex
         return 'moved'
       },
       getMemoryUsage: () => this.deps.getMemoryUsage(),
+      // Cross-profile: independent of `target`, walks every open window.
+      listTabMemory: () => this.listTabMemory(),
       getTabCounts: () => {
         if (!target) return { total: 0, loaded: 0, asleep: 0 }
         // A tab is "loaded" once it has a WebContentsView (materialized); the
@@ -2983,6 +3900,12 @@ export class ProfileManager {
       hideTooltip: () => {
         if (target) hideTooltip(target)
         return { hidden: true }
+      },
+      showToast: (message) => {
+        if (!target || target.window.isDestroyed()) throw new Error('no target window')
+        // Fire-and-forget: the async render/position + auto-hide run in the
+        // background; the command returns once queued (toastSeq guards a stale one).
+        void showToast(target, message)
       },
       execJsInTab: async (code, tabId) => {
         // Reach the tab's OWN webContents and run in the page's world, so it sees
@@ -3094,9 +4017,16 @@ export class ProfileManager {
           undefined,
           background
         )
-        // A freshly opened tab is always materialized (loaded), a web tab, and
-        // never born pinned.
-        return { ...tab, loaded: true, kind: 'web', pinned: false }
+        // A freshly opened tab is always materialized (loaded), a web tab, never
+        // born pinned, kept-awake, or in a folder.
+        return {
+          ...tab,
+          loaded: true,
+          kind: 'web',
+          pinned: false,
+          keepAwake: false,
+          folderId: null
+        }
       },
       closeTab: (id) => {
         if (!target) throw new Error('no target window')
@@ -3106,18 +4036,36 @@ export class ProfileManager {
         if (!target) throw new Error('no target window')
         return this.closeActiveTabIn(target)
       },
-      discardTab: (id) => {
+      duplicateActiveTab: () => {
         if (!target) throw new Error('no target window')
-        return this.discardTabIn(target, id)
+        return this.duplicateActiveTabIn(target)
       },
+      // Resolve by the tab's globally-unique id across every open window, not just
+      // the focused one — so the Tabs settings panel (cross-profile) can sleep any
+      // listed tab, and a socket caller need not target the right window first.
+      discardTab: (id) => this.discardTabAnywhere(id),
       discardActiveTab: () => {
         if (!target) throw new Error('no target window')
         return this.discardActiveTabIn(target)
+      },
+      wakeAllTabs: () => {
+        if (!target) throw new Error('no target window')
+        return this.wakeAllTabsIn(target)
       },
       moveTab: (id, toIndex) => {
         if (!target) throw new Error('no target window')
         return this.moveTabIn(target, id, toIndex)
       },
+      // Tear a tab off the target window into another window of the same profile:
+      // onto an existing window under the drop point, or a fresh one there. The tab
+      // is resolved in the target window (the chrome that owns the sidebar drag).
+      detachTab: (id, point) => {
+        if (!target) throw new Error('no target window')
+        const src = this.ownerOf(id) ?? target
+        return this.detachTabTo(src, id, point)
+      },
+      moveTabToWindow: (id, windowId) => this.moveTabToWindowById(id, windowId),
+      listWindows: () => this.listOpenWindows(),
       pinTab: (id) => {
         if (!target) throw new Error('no target window')
         return this.setTabPinnedIn(target, id, true)
@@ -3125,6 +4073,10 @@ export class ProfileManager {
       unpinTab: (id) => {
         if (!target) throw new Error('no target window')
         return this.setTabPinnedIn(target, id, false)
+      },
+      setTabKeepAwake: (id, keepAwake) => {
+        if (!target) throw new Error('no target window')
+        return this.setTabKeepAwakeIn(target, id, keepAwake)
       },
       selectTab: (id) => {
         if (!target) throw new Error('no target window')
@@ -3149,6 +4101,39 @@ export class ProfileManager {
       toggleTabsPanel: (collapsed) => {
         if (!target) throw new Error('no target window')
         return this.toggleTabsPanelIn(target, collapsed)
+      },
+      showTabMenu: (tabId) => {
+        if (!target) throw new Error('no target window')
+        this.showTabMenuIn(target, tabId)
+      },
+      listTabFolders: () => ({ folders: target ? target.folders : [] }),
+      createTabFolder: (title, tabId) => {
+        if (!target) throw new Error('no target window')
+        return this.createTabFolderIn(target, title, tabId)
+      },
+      renameTabFolder: (id, title) => {
+        if (!target) throw new Error('no target window')
+        return this.renameTabFolderIn(target, id, title)
+      },
+      removeTabFolder: (id) => {
+        if (!target) throw new Error('no target window')
+        return this.removeTabFolderIn(target, id)
+      },
+      toggleTabFolder: (id, collapsed) => {
+        if (!target) throw new Error('no target window')
+        return this.toggleTabFolderIn(target, id, collapsed)
+      },
+      setTabFolderColor: (id, color) => {
+        if (!target) throw new Error('no target window')
+        return this.setTabFolderColorIn(target, id, color)
+      },
+      moveTabToFolder: (tabId, folderId) => {
+        if (!target) throw new Error('no target window')
+        return this.moveTabToFolderIn(target, tabId, folderId)
+      },
+      showFolderMenu: (folderId) => {
+        if (!target) throw new Error('no target window')
+        this.showFolderMenuIn(target, folderId)
       },
       toggleZen: (hidden) => {
         if (!target) throw new Error('no target window')
@@ -3215,6 +4200,13 @@ export class ProfileManager {
       uninstallExtension: (id) => {
         if (!target) throw new Error('no target window')
         return this.deps.extensions.uninstall(this.sessionFor(target.id), target.id, id)
+      },
+      readServiceWorkerConsole: (query) => {
+        // Explicit profileId wins (extensions are per profile, D2) and works even
+        // with no focused window; otherwise fall back to the target window.
+        const profileId = query.profileId ?? target?.id
+        if (!profileId) throw new Error('no target window')
+        return this.deps.extensions.serviceWorkerConsole(this.sessionFor(profileId), query)
       }
     }
   }

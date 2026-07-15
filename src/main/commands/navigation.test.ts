@@ -193,6 +193,16 @@ describe('reload', () => {
   })
 })
 
+describe('hard-reload', () => {
+  it('reloads bypassing the cache and ignores params', () => {
+    const { ctx, nav } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('hard-reload', {}, ctx)).toEqual({ ok: true })
+    registry.execute('hard-reload', undefined, ctx)
+    expect(nav).toEqual(['hard-reload', 'hard-reload'])
+  })
+})
+
 describe('nextZoomLevel', () => {
   it('steps up and down by one ZOOM_STEP', () => {
     expect(nextZoomLevel(0, 1)).toBe(ZOOM_STEP)
