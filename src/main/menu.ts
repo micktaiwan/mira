@@ -57,6 +57,8 @@ export interface AppMenuHandlers {
    * prev-tab / next-tab commands; steps through every tab, asleep or not. */
   prevTab: () => void
   nextTab: () => void
+  recentTabBack: () => void
+  recentTabForward: () => void
   /** Bookmark the focused window's active tab (Cmd+D). Wired to the add-bookmark
    * command with no url, which defaults to the active tab. */
   addBookmark: () => void
@@ -205,6 +207,21 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
         accelerator: 'CmdOrCtrl+Down',
         registerAccelerator: false,
         click: () => handlers.nextTab()
+      },
+      // Back / forward through the tabs you've looked at (focus history), not the
+      // strip order. Same display-only accelerator treatment as Previous/Next Tab:
+      // the keys are handled by the before-input-event hook (wireTabShortcuts).
+      {
+        label: 'Back to Recent Tab',
+        accelerator: 'CmdOrCtrl+Shift+Left',
+        registerAccelerator: false,
+        click: () => handlers.recentTabBack()
+      },
+      {
+        label: 'Forward to Recent Tab',
+        accelerator: 'CmdOrCtrl+Shift+Right',
+        registerAccelerator: false,
+        click: () => handlers.recentTabForward()
       },
       { type: 'separator' },
       { role: 'close', label: 'Close Window', accelerator: 'CmdOrCtrl+Shift+W' }

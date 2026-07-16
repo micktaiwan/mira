@@ -576,3 +576,70 @@ describe('reopen-closed-tab', () => {
     })
   })
 })
+
+describe('recent-tab-back / recent-tab-forward (MRU focus history)', () => {
+  // Open three tabs then walk back to tab-1, viewing tabs in order 1→2→3→4.
+  const withFourTabs = () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, fake.ctx) // tab-2 active
+    registry.execute('new-tab', {}, fake.ctx) // tab-3 active
+    registry.execute('new-tab', {}, fake.ctx) // tab-4 active
+    return { ...fake, registry }
+  }
+
+  it('steps back through the tabs in the order they were viewed', () => {
+    const { ctx, tabState, registry } = withFourTabs()
+    expect(registry.execute('recent-tab-back', {}, ctx)).toEqual({ ok: true, id: 'tab-3' })
+    expect(tabState().activeId).toBe('tab-3')
+    expect(registry.execute('recent-tab-back', {}, ctx)).toEqual({ ok: true, id: 'tab-2' })
+    expect(registry.execute('recent-tab-back', {}, ctx)).toEqual({ ok: true, id: 'tab-1' })
+  })
+
+  it('steps forward again after stepping back', () => {
+    const { ctx, tabState, registry } = withFourTabs()
+    registry.execute('recent-tab-back', {}, ctx) // tab-3
+    registry.execute('recent-tab-back', {}, ctx) // tab-2
+    expect(registry.execute('recent-tab-forward', {}, ctx)).toEqual({ ok: true, id: 'tab-3' })
+    expect(registry.execute('recent-tab-forward', {}, ctx)).toEqual({ ok: true, id: 'tab-4' })
+    expect(tabState().activeId).toBe('tab-4')
+  })
+
+  it('is a no-op (id:null) at each end without wrapping', () => {
+    const { ctx, registry } = withFourTabs()
+    // Already on the newest (tab-4): forward can't move.
+    expect(registry.execute('recent-tab-forward', {}, ctx)).toEqual({ ok: true, id: null })
+    registry.execute('recent-tab-back', {}, ctx) // tab-3
+    registry.execute('recent-tab-back', {}, ctx) // tab-2
+    registry.execute('recent-tab-back', {}, ctx) // tab-1 (oldest)
+    expect(registry.execute('recent-tab-back', {}, ctx)).toEqual({ ok: true, id: null })
+  })
+
+  it('deduplicates: re-viewing a tab moves it to the newest end, no double entry', () => {
+    const { ctx, mru, registry } = withFourTabs()
+    // History is 1,2,3,4. Re-select tab-2 → it becomes the newest, appears once.
+    registry.execute('select-tab', { id: 'tab-2' }, ctx)
+    expect(mru().ids).toEqual(['tab-1', 'tab-3', 'tab-4', 'tab-2'])
+    // Back now goes to tab-4 (the entry just before tab-2), not another tab-2.
+    expect(registry.execute('recent-tab-back', {}, ctx)).toEqual({ ok: true, id: 'tab-4' })
+  })
+
+  it('drops the forward branch when a new tab is viewed mid-history', () => {
+    const { ctx, mru, registry } = withFourTabs()
+    registry.execute('recent-tab-back', {}, ctx) // tab-3
+    registry.execute('recent-tab-back', {}, ctx) // tab-2 — tab-3, tab-4 are forward
+    registry.execute('select-tab', { id: 'tab-1' }, ctx) // fresh view drops the forward branch
+    // tab-3 and tab-4 are discarded; tab-1 (deduped from the head) is the newest.
+    expect(mru().ids).toEqual(['tab-2', 'tab-1'])
+    // Forward can no longer reach tab-3 / tab-4.
+    expect(registry.execute('recent-tab-forward', {}, ctx)).toEqual({ ok: true, id: null })
+  })
+
+  it('closing a tab removes it from the focus history', () => {
+    const { ctx, mru, registry } = withFourTabs()
+    registry.execute('close-tab', { id: 'tab-3' }, ctx)
+    expect(mru().ids).not.toContain('tab-3')
+    // Back from tab-4 (still active) now skips the closed tab-3 straight to tab-2.
+    expect(registry.execute('recent-tab-back', {}, ctx)).toEqual({ ok: true, id: 'tab-2' })
+  })
+})

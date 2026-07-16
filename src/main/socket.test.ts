@@ -102,6 +102,8 @@ function setup(): {
     selectTab: (id: string) => ({ id }),
     selectPrevTab: () => ({ id: null }),
     selectNextTab: () => ({ id: null }),
+    recentTabBack: () => ({ id: null }),
+    recentTabForward: () => ({ id: null }),
     reopenClosedTab: () => ({ reopened: false, id: null }),
     moveTab: (id: string) => ({ id }),
     detachTab: async () => ({ windowId: 'w', created: true }),

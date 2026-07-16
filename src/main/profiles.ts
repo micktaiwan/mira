@@ -89,6 +89,7 @@ import {
   nextLoadedTab,
   updateTab
 } from './tab-store'
+import { type MruHistory, emptyMru, mruRecord, mruStep, mruPrune } from './tab-mru'
 import {
   type PersistedSessions,
   type PersistedWindow,
@@ -286,6 +287,12 @@ interface ProfileWindow {
    * (reopen-closed-tab) pops the top. In-memory only — cleared when the window
    * closes, like a browser session's reopen history. */
   closedTabs: ClosedTab[]
+  /** Recently-viewed-tabs history for THIS window: the order tabs were activated,
+   * walked by Cmd+Shift+Left / Cmd+Shift+Right (stepMruIn) like a browser's page
+   * back/forward but between tabs. Deduplicated, per-window, in-memory only (a
+   * focus history has no reason to survive a restart). Recorded on every active-tab
+   * change (notifyExtensionsActiveTab), pruned when a tab leaves the window. */
+  mru: MruHistory
   /** Tab ids (the NEW ids minted at restore) of the tabs that were awake, not
    * asleep, when Mira last quit — read from each PersistedTab.loaded. Populated
    * once by restoreSession; `wake-all-tabs` (Cmd+Shift+A) materializes exactly
@@ -451,6 +458,10 @@ export class ProfileManager {
   /** Live app settings (home URL, …). Mirrors settings.json; seeded from
    * deps.homeUrl and updated in place by set-home-url. */
   private appSettings: AppSettings
+  /** Set while stepMruIn is driving a Cmd+Shift+Left/Right cursor move: the tab
+   * switch it triggers must NOT be recorded as a fresh MRU visit (that would
+   * corrupt the very history we're walking). Read by recordMruVisit. */
+  private mruSuppressRecord = false
   /** Debounce for persisting settings during a panel resize drag: many width
    * updates per second update the layout live, but only settle to disk once idle. */
   private settingsSaveTimer: ReturnType<typeof setTimeout> | null = null
@@ -1102,6 +1113,7 @@ export class ProfileManager {
       settingsTabId: null,
       closeArmedId: null,
       closedTabs: [],
+      mru: emptyMru(),
       restoredLoadedIds: new Set(),
       paletteOpen: false,
       mediaGalleryOpen: false,
@@ -1321,16 +1333,45 @@ export class ProfileManager {
    * without a view (asleep / Settings) is simply not reported. */
   private notifyExtensionsActiveTab(pw: ProfileWindow): void {
     const id = pw.state.activeId
+    // This is the choke point every active-tab change flows through, so it is also
+    // where we record the MRU focus history — including asleep / Settings tabs (they
+    // have no view but are still "tabs I looked at"). Suppressed while stepMruIn is
+    // walking the history so a back/forward hop doesn't re-record itself.
+    this.recordMruVisit(pw, id)
     if (!id || id === pw.settingsTabId) return
     const view = pw.views.get(id)
     if (view) this.deps.extensions.selectTab(view.webContents)
+  }
+
+  /** Record `id` as the current MRU entry, unless a back/forward step is in flight
+   * (mruSuppressRecord) or there is no active tab. Idempotent on the tab already at
+   * the cursor, so the many notifyExtensionsActiveTab callers never create dups. */
+  private recordMruVisit(pw: ProfileWindow, id: string | null): void {
+    if (this.mruSuppressRecord || !id) return
+    pw.mru = mruRecord(pw.mru, id)
+  }
+
+  /** Step the recently-viewed-tabs history (Cmd+Shift+Left = back / -1,
+   * Cmd+Shift+Right = forward / +1) and select the tab it lands on, without
+   * recording that hop as a new visit. No-op at either end of the history. */
+  private stepMruIn(pw: ProfileWindow, direction: 1 | -1): { id: string | null } {
+    const { mru, id } = mruStep(pw.mru, direction)
+    if (id === null) return { id: null }
+    pw.mru = mru
+    this.mruSuppressRecord = true
+    try {
+      this.selectTabIn(pw, id)
+    } finally {
+      this.mruSuppressRecord = false
+    }
+    return { id }
   }
 
   /** Give a tab (already in the state list) its live WebContentsView and start
    * loading its url. This is the lazy-load boundary: a tab exists in the strip
    * without a view until it is first selected. No-op if already materialized.
    * All tabs of a profile window share the profile's session partition. */
-  private materializeTab(pw: ProfileWindow, tab: TabMeta): void {
+  private materializeTab(pw: ProfileWindow, tab: TabMeta, httpReferrer?: string): void {
     if (pw.views.has(tab.id)) return
     // The Settings tab is chrome, not a web page: it never gets a WebContentsView.
     // layout() then hides every view while it is active, so the chrome's Settings
@@ -1399,8 +1440,10 @@ export class ProfileManager {
         }
       }
       // Slot the new tab right under the opener (this view's tab) instead of at
-      // the end of the strip — the child sits next to its parent.
-      this.newTabIn(host, decision.url, false, tab.id)
+      // the end of the strip — the child sits next to its parent. Carry the
+      // opener's URL as httpReferrer, as Chrome does for a target=_blank open —
+      // some outbound gateways (LinkedIn's safety/go) 404 without it.
+      this.newTabIn(host, decision.url, false, tab.id, false, decision.referrer)
       return { action: 'deny' }
     })
     // A blank tab (empty stored url) shows Mira's home page — the session summary —
@@ -1408,7 +1451,16 @@ export class ProfileManager {
     // (wireView) recognizes the home data URL via isMiraHomeUrl and mirrors '' back.
     // The "look like real Chrome" window.chrome shim is wired globally on webContents
     // creation and re-asserted on every navigation (see stealth.ts) — no coupling here.
-    view.webContents.loadURL(tab.url || this.blankPageUrl(pw))
+    // A tab opened from a target=_blank link (window.open → setWindowOpenHandler)
+    // carries the opener's URL as httpReferrer, exactly as Chrome does. Some
+    // outbound gateways require it: LinkedIn's www.linkedin.com/safety/go?url=…
+    // drops the url and 404s to its language page without a linkedin.com Referer
+    // (verified 2026-07-16). Only applies to a real url — the blank home has none.
+    if (tab.url && httpReferrer) {
+      view.webContents.loadURL(tab.url, { httpReferrer })
+    } else {
+      view.webContents.loadURL(tab.url || this.blankPageUrl(pw))
+    }
   }
 
   /** The URL a blank tab loads: Mira's home page as a fresh data: URL, baked with
@@ -1435,7 +1487,8 @@ export class ProfileManager {
     url: string,
     focusChrome = false,
     afterId?: string,
-    background = false
+    background = false,
+    httpReferrer?: string
   ): TabMeta {
     const prevActiveId = pw.state.activeId
     const tab: TabMeta = { id: randomUUID(), title: '', url, favicon: null }
@@ -1452,7 +1505,7 @@ export class ProfileManager {
         : addTabAtHead(pw.state, tab)
     // The active tab may have changed: a pinned tab armed by Cmd+W is disarmed.
     pw.closeArmedId = null
-    this.materializeTab(pw, tab)
+    this.materializeTab(pw, tab, httpReferrer)
     if (!background) {
       // Only the foreground path changed the active tab; skip the extension notify
       // (and any focusChrome) when opening in background so nothing steals focus.
@@ -2054,6 +2107,10 @@ export class ProfileManager {
     }
     const wasActive = pw.state.activeId === id
     pw.state = closeTabPure(pw.state, id)
+    // The closed tab must never be a back/forward target again. When it was active,
+    // the neighbor that inherits focus is recorded by the notifyExtensionsActiveTab
+    // call below (the normal active-change path), so the MRU cursor follows focus.
+    pw.mru = mruPrune(pw.mru, id)
     if (pw.closeArmedId === id) pw.closeArmedId = null
     // Closing the Settings tab frees the singleton slot so it can reopen later.
     if (id === pw.settingsTabId) pw.settingsTabId = null
@@ -2361,6 +2418,9 @@ export class ProfileManager {
     // Detach from the source strip + native maps. closeTabPure picks src's neighbor
     // active tab; clearing the armed id guards a stray pinned-close chain.
     src.state = closeTabPure(src.state, tabId)
+    // The torn-off tab leaves src's window: drop it from src's focus history (it
+    // joins dst's history via dst's notifyExtensionsActiveTab when it lands active).
+    src.mru = mruPrune(src.mru, tabId)
     if (src.closeArmedId === tabId) src.closeArmedId = null
     src.views.delete(tabId)
     src.media.delete(tabId)
@@ -2883,15 +2943,24 @@ export class ProfileManager {
     // finds its CURRENT window, the chrome wc matches no view and falls back to the
     // window it was wired against.
     wc.on('before-input-event', (event, input) => {
-      if (input.type !== 'keyDown' || input.alt || input.shift) return
+      if (input.type !== 'keyDown' || input.alt) return
       const mod = process.platform === 'darwin' ? input.meta : input.control
       if (!mod) return
       const pw = this.ownerByWebContents(wc) ?? initialPw
-      if (input.key === 'ArrowUp') {
+      // Cmd+Up / Cmd+Down (no Shift): step the strip in its visible order.
+      if (!input.shift && input.key === 'ArrowUp') {
         this.selectAdjacentTabIn(pw, -1)
         event.preventDefault()
-      } else if (input.key === 'ArrowDown') {
+      } else if (!input.shift && input.key === 'ArrowDown') {
         this.selectAdjacentTabIn(pw, 1)
+        event.preventDefault()
+      }
+      // Cmd+Shift+Left / Cmd+Shift+Right: back/forward through recently-viewed tabs.
+      else if (input.shift && input.key === 'ArrowLeft') {
+        this.stepMruIn(pw, -1)
+        event.preventDefault()
+      } else if (input.shift && input.key === 'ArrowRight') {
+        this.stepMruIn(pw, 1)
         event.preventDefault()
       }
     })
@@ -4187,6 +4256,14 @@ export class ProfileManager {
       selectNextTab: () => {
         if (!target) throw new Error('no target window')
         return this.selectAdjacentTabIn(target, 1)
+      },
+      recentTabBack: () => {
+        if (!target) throw new Error('no target window')
+        return this.stepMruIn(target, -1)
+      },
+      recentTabForward: () => {
+        if (!target) throw new Error('no target window')
+        return this.stepMruIn(target, 1)
       },
       listTabs: () => {
         if (!target) return { tabs: [], activeId: null, panelCollapsed: false }
