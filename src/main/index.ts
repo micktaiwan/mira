@@ -448,6 +448,8 @@ app.whenReady().then(async () => {
       wakeAllTabs: () => runDetached('wake-all-tabs', {}, profiles.contextForFocused()),
       prevTab: () => runDetached('prev-tab', {}, profiles.contextForFocused()),
       nextTab: () => runDetached('next-tab', {}, profiles.contextForFocused()),
+      recentTabBack: () => runDetached('recent-tab-back', {}, profiles.contextForFocused()),
+      recentTabForward: () => runDetached('recent-tab-forward', {}, profiles.contextForFocused()),
       addBookmark: () => runDetached('add-bookmark', {}, profiles.contextForFocused()),
       // Zoom the focused window's active tab through the registry, same bus as
       // the socket/MCP — targets the page, not Mira's chrome.

@@ -85,6 +85,16 @@ export interface TabsContext {
    * asleep or not. No-op at the bottom — no wrap. Returns the newly active id, or
    * null if it could not move. */
   selectNextTab: () => { id: string | null }
+  /** Step BACK through the recently-viewed-tabs history (Cmd+Shift+Left): re-focus
+   * the tab looked at just before the current one. This walks the FOCUS order (the
+   * order tabs were activated), not the strip order — like a browser's page
+   * back/forward but between tabs, per window, deduplicated. No-op at the oldest end
+   * (no wrap). Returns the newly active id, or null if it could not move. */
+  recentTabBack: () => { id: string | null }
+  /** Step FORWARD through the recently-viewed-tabs history (Cmd+Shift+Right): the
+   * inverse of recentTabBack, re-focusing a more recently viewed tab after stepping
+   * back. No-op at the newest end. Returns the newly active id, or null. */
+  recentTabForward: () => { id: string | null }
   /** Reorder: move a tab to `toIndex` (its final position). The active tab is
    * unchanged. Throws on an unknown id. */
   moveTab: (id: string, toIndex: number) => { id: string }
@@ -253,6 +263,27 @@ export const tabsCommands: CommandMap<CommandContext> = {
   'next-tab': (ctx) => {
     try {
       const { id } = ctx.selectNextTab()
+      return { ok: true, id }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // Cmd+Shift+Left: go back through the tabs you've looked at (focus history),
+  // not the strip order. A no-op (id:null) at the oldest viewed tab.
+  'recent-tab-back': (ctx) => {
+    try {
+      const { id } = ctx.recentTabBack()
+      return { ok: true, id }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // Cmd+Shift+Right: go forward again through the focus history after stepping back.
+  'recent-tab-forward': (ctx) => {
+    try {
+      const { id } = ctx.recentTabForward()
       return { ok: true, id }
     } catch (error) {
       return fail(error)

@@ -33,6 +33,7 @@ import {
   adjacentTab,
   type TabState
 } from '../tab-store'
+import { type MruHistory, emptyMru, mruRecord, mruStep, mruPrune } from '../tab-mru'
 import {
   addFolder as addFolderPure,
   renameFolder as renameFolderPure,
@@ -75,6 +76,8 @@ export interface FakeContext {
   focused: string | null
   /** Live view of the fake window's tabs (reassigned by tab commands). */
   tabState: () => TabState
+  /** Live view of the fake window's recently-viewed-tabs (focus) history. */
+  mru: () => MruHistory
   /** Mutable set of tab ids with a live view — the fake's lazy-load model for
    * wake-all-tabs. A test seeds/reads it directly (the fake has no WebContentsView). */
   loadedTabIds: Set<string>
@@ -234,6 +237,9 @@ export function makeContext(
     // Tab armed by a first Cmd+W on a pinned tab (see closeActiveDecision);
     // reset whenever the active tab changes, mirroring the manager.
     closeArmedId: null as string | null,
+    // Recently-viewed-tabs (focus) history, walked by recent-tab-back/-forward.
+    // Recorded on every active-tab change, pruned on close — mirrors the manager.
+    mru: mruRecord(emptyMru(), 'tab-1') as MruHistory,
     // Global browsing history + a monotonic clock so recorded timestamps order
     // deterministically without Date.now() (mirrors recordVisit in the manager).
     history: [] as HistoryEntry[],
@@ -283,6 +289,11 @@ export function makeContext(
   const recordVisit = (url: string, title: string): void => {
     if (!/^https?:\/\//i.test(url)) return
     state.history = recordVisitPure(state.history, { url, title, at: ++state.historyClock })
+  }
+  // Record an active-tab change into the MRU focus history, like the manager's
+  // recordMruVisit (idempotent on the current entry, dedup + drop-forward inside).
+  const recordMru = (id: string | null): void => {
+    if (id) state.mru = mruRecord(state.mru, id)
   }
   // Snapshot a tab into the closed stack before it is removed (for reopen).
   const rememberClosed = (id: string): void => {
@@ -691,6 +702,7 @@ export function makeContext(
       state.tabs = background ? addTabInactive(state.tabs, tab) : addTab(state.tabs, tab)
       state.closeArmedId = null
       recordVisit(tab.url, '')
+      if (!background) recordMru(id)
       return {
         ...tab,
         loaded: true,
@@ -703,7 +715,10 @@ export function makeContext(
     closeTab: (id: string) => {
       if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
       rememberClosed(id)
+      const wasActive = state.tabs.activeId === id
       state.tabs = closeTabPure(state.tabs, id)
+      state.mru = mruPrune(state.mru, id)
+      if (wasActive) recordMru(state.tabs.activeId)
       if (state.closeArmedId === id) state.closeArmedId = null
       return { closed: true }
     },
@@ -717,7 +732,10 @@ export function makeContext(
       }
       state.closeArmedId = null
       rememberClosed(decision.id)
+      const wasActive = state.tabs.activeId === decision.id
       state.tabs = closeTabPure(state.tabs, decision.id)
+      state.mru = mruPrune(state.mru, decision.id)
+      if (wasActive) recordMru(state.tabs.activeId)
       return { closed: true, id: decision.id }
     },
     duplicateActiveTab: () => {
@@ -728,6 +746,7 @@ export function makeContext(
       state.tabs = addTabAfter(state.tabs, { id, title: '', url, favicon: null }, active.id)
       state.closeArmedId = null
       recordVisit(url, '')
+      recordMru(id)
       return { duplicated: true, id, url }
     },
     reopenClosedTab: () => {
@@ -743,6 +762,7 @@ export function makeContext(
       if (closed.pinned) state.tabs = pinTabPure(state.tabs, id)
       state.tabs = moveTabPure(state.tabs, id, closed.index)
       state.closeArmedId = null
+      recordMru(id)
       return { reopened: true, id, url: closed.url }
     },
     // The fake has no WebContentsView to free and no lazy-load, so every tab
@@ -785,6 +805,7 @@ export function makeContext(
       if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
       state.tabs = selectTabPure(state.tabs, id)
       state.closeArmedId = null
+      recordMru(id)
       return { id }
     },
     selectPrevTab: () => {
@@ -792,6 +813,7 @@ export function makeContext(
       if (target) {
         state.tabs = selectTabPure(state.tabs, target)
         state.closeArmedId = null
+        recordMru(target)
       }
       return { id: target }
     },
@@ -800,8 +822,27 @@ export function makeContext(
       if (target) {
         state.tabs = selectTabPure(state.tabs, target)
         state.closeArmedId = null
+        recordMru(target)
       }
       return { id: target }
+    },
+    // Back/forward through the focus history: step the cursor and select the tab it
+    // lands on WITHOUT recording that hop (mirrors stepMruIn's suppress in the mgr).
+    recentTabBack: () => {
+      const { mru, id } = mruStep(state.mru, -1)
+      if (id === null) return { id: null }
+      state.mru = mru
+      state.tabs = selectTabPure(state.tabs, id)
+      state.closeArmedId = null
+      return { id }
+    },
+    recentTabForward: () => {
+      const { mru, id } = mruStep(state.mru, 1)
+      if (id === null) return { id: null }
+      state.mru = mru
+      state.tabs = selectTabPure(state.tabs, id)
+      state.closeArmedId = null
+      return { id }
     },
     moveTab: (id: string, toIndex: number) => {
       if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
@@ -1135,6 +1176,7 @@ export function makeContext(
     profiles: state.profiles,
     focused: state.focused,
     tabState: () => state.tabs,
+    mru: () => state.mru,
     loadedTabIds: state.loadedTabIds,
     restoredLoadedIds: state.restoredLoadedIds,
     panelCollapsed: () => state.panelCollapsed,
