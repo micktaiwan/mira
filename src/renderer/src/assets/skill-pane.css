@@ -1,9 +1,16 @@
-/* The right-side skill pane (an AI summary). It sits in the gap main reserves by
+/* The right-side skill pane (an AI chat). It sits in the gap main reserves by
    shrinking the active WebContentsView (profiles.ts layout), so — unlike the
    palette — it does NOT hide the page. Fixed to that exact gap: below the
    toolbar, above the status bar, flush right, --skill-pane-width wide. The width
    MUST match SKILL_PANE_WIDTH in the main process (src/main/index.ts). */
 .skill-pane {
+  /* Local design tokens for the pane, so the accent lives in one place instead
+     of the hard-coded #6988e6 scattered before. */
+  --accent: #6988e6;
+  --accent-strong: #7d99ec;
+  --accent-soft: rgba(105, 136, 230, 0.16);
+  --accent-line: rgba(105, 136, 230, 0.4);
+
   position: fixed;
   top: var(--toolbar-height);
   bottom: var(--statusbar-height);
@@ -17,70 +24,104 @@
   -webkit-app-region: no-drag;
 }
 
+/* ── Header ─────────────────────────────────────────────────────────────── */
 .skill-pane-head {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 9px 10px 9px 12px;
   border-bottom: 1px solid var(--ev-c-gray-3);
 }
 
 .skill-pane-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-right: auto;
+  min-width: 0;
+}
+
+/* The star glyph — "mira" is a star; a small accent mark gives the pane an
+   identity instead of a bare label. */
+.skill-pane-star {
+  flex-shrink: 0;
+  color: var(--accent);
+  filter: drop-shadow(0 0 6px var(--accent-soft));
+}
+
+.skill-pane-title-text {
   font-size: 13px;
   font-weight: 600;
+  letter-spacing: 0.01em;
   color: var(--color-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* The title takes the free space; the two buttons stay at their intrinsic size. */
-.skill-pane-title {
-  margin-right: auto;
+/* The header action cluster (copy / clear / close), kept as one group at the
+   right edge. */
+.skill-pane-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
 }
 
-.skill-pane-copy,
-.skill-pane-clear,
-.skill-pane-close {
-  flex-shrink: 0;
+.skill-pane-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
   border: none;
   background: transparent;
   color: var(--ev-c-text-3);
-  font-size: 12px;
   cursor: pointer;
-  padding: 2px 6px;
-  border-radius: 6px;
+  border-radius: 7px;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease;
 }
 
-.skill-pane-copy:hover,
-.skill-pane-clear:hover,
-.skill-pane-close:hover {
+.skill-pane-tool svg {
+  width: 15px;
+  height: 15px;
+}
+
+.skill-pane-tool:hover:not(:disabled) {
   background: var(--ev-c-gray-2);
   color: var(--color-text);
 }
 
-.skill-pane-copy:disabled,
-.skill-pane-clear:disabled {
-  opacity: 0.4;
+.skill-pane-tool:disabled {
+  opacity: 0.35;
   cursor: default;
-  background: transparent;
-  color: var(--ev-c-text-3);
 }
 
-/* The conversation, scrolling between the header and the prompt box. */
+/* Copy just succeeded: flash the accent so the check reads as confirmation. */
+.skill-pane-tool.is-done {
+  color: var(--accent-strong);
+}
+
+.skill-pane-tool-close:hover:not(:disabled) {
+  background: rgba(224, 108, 117, 0.18);
+  color: #e06c75;
+}
+
+/* ── Thread ─────────────────────────────────────────────────────────────── */
 .skill-pane-thread {
   flex: 1;
   overflow-y: auto;
-  padding: 12px;
+  padding: 14px 12px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 14px;
 }
 
 /* A thin, discreet scrollbar for the conversation — the default macOS/Chromium
-   one reads as a heavy grey slab against the dark pane. Track stays invisible;
-   the thumb is a faint rounded pill that darkens on hover. */
+   one reads as a heavy grey slab against the dark pane. */
 .skill-pane-thread::-webkit-scrollbar {
   width: 8px;
 }
@@ -92,7 +133,6 @@
 .skill-pane-thread::-webkit-scrollbar-thumb {
   background: var(--ev-c-gray-2);
   border-radius: 8px;
-  /* Inset the pill so it doesn't touch the pane edge. */
   border: 2px solid transparent;
   background-clip: padding-box;
 }
@@ -102,23 +142,11 @@
   background-clip: padding-box;
 }
 
-.skill-pane-status {
-  font-size: 14px;
-  color: var(--ev-c-text-3);
-}
-
-.skill-pane-error {
-  font-size: 13px;
-  color: #e06c75;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-/* One conversation turn. The user's question is a right-aligned bubble; the
-   assistant's answer is full-width prose (rendered markdown). */
+/* One conversation turn. The user's question is a right-aligned accent bubble;
+   the assistant's answer is full-width prose (rendered markdown). */
 .chat-turn {
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.6;
   color: var(--color-text);
   overflow-wrap: anywhere;
   user-select: text;
@@ -126,16 +154,70 @@
 
 .chat-user {
   align-self: flex-end;
-  max-width: 85%;
+  max-width: 88%;
   white-space: pre-wrap;
-  background: var(--color-background-mute);
-  border: 1px solid var(--ev-c-gray-2);
-  border-radius: 10px;
-  padding: 6px 10px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 12px 12px 4px 12px;
+  padding: 7px 11px;
 }
 
 .chat-assistant {
   align-self: stretch;
+}
+
+/* The assistant's reasoning ("thinking"), streamed above its answer and
+   collapsible. Muted, monospace-ish, set apart from the answer prose. */
+.chat-thinking {
+  align-self: stretch;
+  margin-bottom: 4px;
+  border: 1px solid var(--ev-c-gray-3);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.02);
+  overflow: hidden;
+}
+
+.chat-thinking > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ev-c-text-3);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+}
+
+.chat-thinking > summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-thinking > summary .chevron {
+  transition: transform 0.15s ease;
+}
+
+.chat-thinking[open] > summary .chevron {
+  transform: rotate(90deg);
+}
+
+.chat-thinking-body {
+  padding: 0 12px 10px 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ev-c-text-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* While thinking streams, a soft pulse on the label hints it's live. */
+.chat-thinking.is-streaming > summary {
+  color: var(--accent-strong);
+}
+
+.chat-thinking.is-streaming > summary .chevron {
+  animation: skillPanePulse 1.4s ease-in-out infinite;
 }
 
 /* Markdown rendered inside the skill pane (see Markdown.tsx). Compact, tuned for
@@ -197,7 +279,7 @@
 }
 
 .markdown a {
-  color: #6988e6;
+  color: var(--accent-strong);
   text-decoration: none;
 }
 
@@ -209,19 +291,101 @@
   font-weight: 600;
 }
 
+/* ── States ─────────────────────────────────────────────────────────────── */
 /* Empty-state hint when the pane is opened with no result yet. */
 .skill-pane-hint {
-  font-size: 13px;
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 0 24px;
+  text-align: center;
   color: var(--ev-c-text-3);
 }
 
-/* Prompt box pinned at the bottom of the pane: type a question about the page. */
+.skill-pane-hint-star {
+  color: var(--accent);
+  opacity: 0.55;
+}
+
+.skill-pane-hint-text {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* The "working" indicator: three pulsing dots + a label, in place of the old
+   ⏳ text. */
+.skill-pane-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ev-c-text-3);
+}
+
+.skill-pane-status-dots {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.skill-pane-status-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: skillPaneBlink 1.2s ease-in-out infinite;
+}
+
+.skill-pane-status-dots span:nth-child(2) {
+  animation-delay: 0.18s;
+}
+
+.skill-pane-status-dots span:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+.skill-pane-error {
+  font-size: 13px;
+  color: #e06c75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid rgba(224, 108, 117, 0.3);
+  background: rgba(224, 108, 117, 0.08);
+  border-radius: 9px;
+  padding: 9px 11px;
+}
+
+@keyframes skillPaneBlink {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes skillPanePulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* ── Prompt box ─────────────────────────────────────────────────────────── */
 .skill-pane-prompt {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 12px;
+  gap: 8px;
+  padding: 10px 12px 12px;
   border-top: 1px solid var(--ev-c-gray-3);
 }
 
@@ -229,22 +393,30 @@
   width: 100%;
   resize: none;
   border: 1px solid var(--ev-c-gray-2);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--color-background-mute);
   color: var(--color-text);
   font-family: inherit;
   font-size: 13px;
-  line-height: 1.4;
-  padding: 8px 10px;
+  line-height: 1.45;
+  padding: 9px 11px;
   outline: none;
+  transition:
+    border-color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+.skill-pane-input::placeholder {
+  color: var(--ev-c-text-3);
 }
 
 .skill-pane-input:focus {
-  border-color: #6988e6;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
-/* The bottom control row under the input: user options on the left (model / MCP),
-   send actions on the right (📷 + Send). */
+/* The bottom control row under the input: user options on the left (model /
+   agent), send actions on the right (📷 + Send). */
 .skill-pane-controls {
   display: flex;
   align-items: center;
@@ -260,38 +432,83 @@
   min-width: 0;
 }
 
-.skill-pane-opt {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: var(--ev-c-text-3);
-  cursor: pointer;
-}
-
-.skill-pane-opt-label {
-  user-select: none;
-}
-
+/* Model select, styled as a compact pill. */
 .skill-pane-model {
   border: 1px solid var(--ev-c-gray-2);
-  border-radius: 6px;
+  border-radius: 7px;
   background: var(--color-background-mute);
   color: var(--color-text);
   font-family: inherit;
   font-size: 11px;
-  padding: 3px 4px;
+  padding: 4px 6px;
   cursor: pointer;
   outline: none;
+  transition: border-color 0.12s ease;
+}
+
+.skill-pane-model:hover {
+  border-color: var(--ev-c-gray-1);
 }
 
 .skill-pane-model:focus {
-  border-color: #6988e6;
+  border-color: var(--accent);
 }
 
-.skill-pane-mcp input {
-  margin: 0;
+/* Agent toggle — a real switch instead of a raw checkbox. */
+.skill-pane-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--ev-c-text-3);
   cursor: pointer;
+  user-select: none;
+}
+
+.skill-pane-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.skill-pane-toggle-track {
+  position: relative;
+  width: 26px;
+  height: 15px;
+  border-radius: 999px;
+  background: var(--ev-c-gray-2);
+  transition: background 0.15s ease;
+}
+
+.skill-pane-toggle-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--ev-c-text-2);
+  transition:
+    transform 0.15s ease,
+    background 0.15s ease;
+}
+
+.skill-pane-toggle input:checked + .skill-pane-toggle-track {
+  background: var(--accent);
+}
+
+.skill-pane-toggle input:checked + .skill-pane-toggle-track .skill-pane-toggle-thumb {
+  transform: translateX(11px);
+  background: #fff;
+}
+
+.skill-pane-toggle input:focus-visible + .skill-pane-toggle-track {
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.skill-pane-toggle.is-on {
+  color: var(--color-text);
 }
 
 /* Right cluster: 📷 (with screenshot) + Send. */
@@ -303,17 +520,26 @@
 }
 
 .skill-pane-shot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
   border: 1px solid var(--ev-c-gray-2);
   border-radius: 8px;
   background: var(--color-background-mute);
-  font-size: 13px;
+  color: var(--ev-c-text-2);
+  font-size: 14px;
   line-height: 1;
-  padding: 5px 8px;
   cursor: pointer;
+  transition:
+    border-color 0.12s ease,
+    color 0.12s ease;
 }
 
 .skill-pane-shot:hover:not(:disabled) {
-  border-color: #6988e6;
+  border-color: var(--accent);
+  color: var(--color-text);
 }
 
 .skill-pane-shot:disabled {
@@ -322,13 +548,26 @@
 }
 
 .skill-pane-send {
+  height: 30px;
   border: none;
   border-radius: 8px;
-  background: #6988e6;
+  background: var(--accent);
   color: #fff;
   font-size: 12px;
-  padding: 5px 14px;
+  font-weight: 500;
+  padding: 0 16px;
   cursor: pointer;
+  transition:
+    background 0.12s ease,
+    transform 0.06s ease;
+}
+
+.skill-pane-send:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.skill-pane-send:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .skill-pane-send:disabled {

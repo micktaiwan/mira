@@ -12,7 +12,7 @@ import MarkdownView from './MarkdownView'
 // appends one too. "Clear" empties the thread; the pane can be opened anytime.
 
 /** The user-driven chat options (the bar beside Send). `provider` decides which
- * controls are relevant (the MCP toggle only bites for the claude-cli provider). */
+ * controls are relevant (the Agent toggle only bites for the claude-cli provider). */
 export interface ChatOptions {
   provider: string
   model: string
@@ -39,10 +39,85 @@ interface Props {
   onClear: () => void
   /** Copy the latest assistant answer to the clipboard (Copy). */
   onCopy: () => void
-  /** Current chat options (model / MCP), driven from the bar beside Send. */
+  /** Current chat options (model / agent), driven from the bar beside Send. */
   options: ChatOptions
   /** Persist an option change; main merges it into the llm config. */
   onOptions: (patch: { model?: string; loadMcp?: boolean }) => void
+}
+
+// ── Inline icons ────────────────────────────────────────────────────────────
+// Small stroked glyphs (currentColor, so they inherit hover/disabled state).
+// Kept inline rather than pulling an icon dependency into the chrome bundle.
+
+function StarIcon({ size = 15 }: { size?: number }): React.JSX.Element {
+  return (
+    <svg
+      className="skill-pane-star"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+    >
+      <path d="M12 2.5l2.35 6.02L20.5 9l-4.75 3.9L17.3 19 12 15.4 6.7 19l1.55-6.1L3.5 9l6.15-.48L12 2.5z" />
+    </svg>
+  )
+}
+
+function CopyIcon(): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V5a2 2 0 0 1 2-2h8" />
+    </svg>
+  )
+}
+
+function CheckIcon(): React.JSX.Element {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 12.5l5 5 11-11" />
+    </svg>
+  )
+}
+
+function TrashIcon(): React.JSX.Element {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2m2 0v12a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V7" />
+    </svg>
+  )
+}
+
+function CloseIcon(): React.JSX.Element {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden="true"
+    >
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  )
 }
 
 function SkillPane({
@@ -89,8 +164,9 @@ function SkillPane({
 
   const empty = turnCount === 0
   const hasAnswer = state.messages.some((m) => m.role === 'assistant' && m.text.trim() !== '')
+  const canSend = prompt.trim() !== ''
 
-  // Copy the latest answer, with a brief "Copied" confirmation on the button.
+  // Copy the latest answer, with a brief check confirmation on the button.
   const copy = (): void => {
     onCopy()
     setCopied(true)
@@ -100,39 +176,49 @@ function SkillPane({
   return (
     <aside className="skill-pane">
       <header className="skill-pane-head">
-        <span className="skill-pane-title">{state.title || 'AI'}</span>
-        <button
-          type="button"
-          className="skill-pane-copy"
-          aria-label="Copy answer"
-          title="Copy the latest answer"
-          disabled={!hasAnswer}
-          onClick={copy}
-        >
-          {copied ? 'Copied' : 'Copy'}
-        </button>
-        <button
-          type="button"
-          className="skill-pane-clear"
-          aria-label="Clear chat"
-          title="Clear chat"
-          disabled={empty && state.status !== 'error'}
-          onClick={onClear}
-        >
-          Clear
-        </button>
-        <button
-          type="button"
-          className="skill-pane-close"
-          aria-label="Close panel"
-          onClick={onClose}
-        >
-          ✕
-        </button>
+        <span className="skill-pane-title">
+          <StarIcon />
+          <span className="skill-pane-title-text">{state.title || 'AI'}</span>
+        </span>
+        <div className="skill-pane-tools">
+          <button
+            type="button"
+            className={`skill-pane-tool${copied ? ' is-done' : ''}`}
+            aria-label="Copy answer"
+            title="Copy the latest answer"
+            disabled={!hasAnswer}
+            onClick={copy}
+          >
+            {copied ? <CheckIcon /> : <CopyIcon />}
+          </button>
+          <button
+            type="button"
+            className="skill-pane-tool"
+            aria-label="Clear chat"
+            title="Clear chat"
+            disabled={empty && state.status !== 'error'}
+            onClick={onClear}
+          >
+            <TrashIcon />
+          </button>
+          <button
+            type="button"
+            className="skill-pane-tool skill-pane-tool-close"
+            aria-label="Close panel"
+            title="Close"
+            onClick={onClose}
+          >
+            <CloseIcon />
+          </button>
+        </div>
       </header>
+
       <div className="skill-pane-thread" ref={threadRef}>
         {empty && state.status === 'idle' ? (
-          <div className="skill-pane-hint">Ask a question about this page below.</div>
+          <div className="skill-pane-hint">
+            <StarIcon size={26} />
+            <span className="skill-pane-hint-text">Ask a question about this page below.</span>
+          </div>
         ) : (
           state.messages.map((m, i) =>
             m.role === 'user' ? (
@@ -146,9 +232,19 @@ function SkillPane({
             )
           )
         )}
-        {state.status === 'loading' && <div className="skill-pane-status">⏳ Working…</div>}
+        {state.status === 'loading' && (
+          <div className="skill-pane-status">
+            <span className="skill-pane-status-dots">
+              <span />
+              <span />
+              <span />
+            </span>
+            Working…
+          </div>
+        )}
         {state.status === 'error' && <div className="skill-pane-error">{state.error}</div>}
       </div>
+
       <form
         className="skill-pane-prompt"
         onSubmit={(e) => {
@@ -170,27 +266,25 @@ function SkillPane({
           {/* The user drives everything: which model answers, and (claude-cli only)
               whether their MCP servers load. Off = cheaper/faster (no MCP boot). */}
           <div className="skill-pane-opts">
-            <label className="skill-pane-opt" title="Model that answers">
-              <span className="skill-pane-opt-label">Model</span>
-              <select
-                className="skill-pane-model"
-                value={options.model}
-                onChange={(e) => onOptions({ model: e.target.value })}
-              >
-                {/* Surface an unknown persisted model (e.g. set in Settings) too. */}
-                {!MODELS.some((m) => m.model === options.model) && options.model !== '' && (
-                  <option value={options.model}>{options.model}</option>
-                )}
-                {MODELS.map((m) => (
-                  <option key={m.model} value={m.model}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <select
+              className="skill-pane-model"
+              title="Model that answers"
+              value={options.model}
+              onChange={(e) => onOptions({ model: e.target.value })}
+            >
+              {/* Surface an unknown persisted model (e.g. set in Settings) too. */}
+              {!MODELS.some((m) => m.model === options.model) && options.model !== '' && (
+                <option value={options.model}>{options.model}</option>
+              )}
+              {MODELS.map((m) => (
+                <option key={m.model} value={m.model}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
             {options.provider === 'claude-cli' && (
               <label
-                className="skill-pane-opt skill-pane-mcp"
+                className={`skill-pane-toggle${options.loadMcp ? ' is-on' : ''}`}
                 title="Agent mode: let the chat use tools (Bash, files) and your MCP servers to ACT — not just answer. Off = a page chat that can still search the web (WebSearch + WebFetch)."
               >
                 <input
@@ -198,6 +292,9 @@ function SkillPane({
                   checked={options.loadMcp}
                   onChange={(e) => onOptions({ loadMcp: e.target.checked })}
                 />
+                <span className="skill-pane-toggle-track">
+                  <span className="skill-pane-toggle-thumb" />
+                </span>
                 <span className="skill-pane-opt-label">Agent</span>
               </label>
             )}
@@ -210,12 +307,12 @@ function SkillPane({
               className="skill-pane-shot"
               title="Send with a screenshot of this page"
               aria-label="Send with screenshot"
-              disabled={prompt.trim() === ''}
+              disabled={!canSend}
               onClick={() => submit(true)}
             >
               📷
             </button>
-            <button type="submit" className="skill-pane-send" disabled={prompt.trim() === ''}>
+            <button type="submit" className="skill-pane-send" disabled={!canSend}>
               Send
             </button>
           </div>
