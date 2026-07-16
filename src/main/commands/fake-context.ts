@@ -116,6 +116,8 @@ export interface FakeContext {
   cookiesSet: Map<string, CookieSetDetails[]>
   /** Code + target passed to execJsInTab (exec-js spy); tabId null = active tab. */
   execJs: Array<{ code: string; tabId: string | null }>
+  /** Key + target + modifiers passed to pressKeyInTab (press-key spy). */
+  keyPresses: Array<{ key: string; tabId: string | null; modifiers: string[] | undefined }>
   /** Sources passed to extractText (run-skill extraction spy). */
   extractCalls: SkillSource[]
   /** Prompt+text pairs passed to summarize (run-skill engine spy). */
@@ -171,6 +173,8 @@ export function makeContext(
   const tooltipHidden: boolean[] = []
   const cookiesSet = new Map<string, CookieSetDetails[]>()
   const execJs: Array<{ code: string; tabId: string | null }> = []
+  const keyPresses: Array<{ key: string; tabId: string | null; modifiers: string[] | undefined }> =
+    []
   const extractCalls: SkillSource[] = []
   const summarizeCalls: Array<{ prompt: string; text: string }> = []
   const chatCalls: Array<{ messages: ChatMessage[]; page: PageContext }> = []
@@ -615,6 +619,25 @@ export function makeContext(
       execJs.push({ code, tabId: null })
       return Promise.resolve(`ran:${code}`)
     },
+    pressKeyInTab: (key: string, tabId?: string, modifiers?: string[]) => {
+      // Mirror execJsInTab's tab resolution (unknown tab / Settings / no active
+      // page), then record the press so the press-key command is testable.
+      if (tabId !== undefined) {
+        const tab = state.tabs.tabs.find((t) => t.id === tabId)
+        if (!tab) return Promise.reject(new Error(`unknown tab: ${tabId}`))
+        if (tab.id === state.settingsTabId) {
+          return Promise.reject(new Error('not a web page (Settings tab)'))
+        }
+        keyPresses.push({ key, tabId, modifiers })
+        return Promise.resolve()
+      }
+      const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
+      if (!active || active.id === state.settingsTabId) {
+        return Promise.reject(new Error('no active web page'))
+      }
+      keyPresses.push({ key, tabId: null, modifiers })
+      return Promise.resolve()
+    },
     toggleDevToolsInActiveTab: () => {
       // Mirror the manager: refuse when there's no active web page, otherwise flip
       // the flag so the toggle-devtools command's plumbing is testable.
@@ -795,6 +818,12 @@ export function makeContext(
     moveTabToWindow: (id: string, windowId: string) => {
       if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
       return { windowId }
+    },
+    activateTab: (id: string) => {
+      if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
+      // Mirror the manager: selecting the tab makes it the active/visible one.
+      state.tabs = selectTabPure(state.tabs, id)
+      return { windowId: 'fake-window', id }
     },
     listWindows: () => [
       {
@@ -1125,6 +1154,7 @@ export function makeContext(
     magnifierFlashes,
     cookiesSet,
     execJs,
+    keyPresses,
     extractCalls,
     summarizeCalls,
     chatCalls,

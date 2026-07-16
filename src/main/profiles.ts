@@ -122,6 +122,7 @@ import { dockRight } from './devtools-layout'
 import { decideWindowOpen } from './window-open'
 import { installHoverReporter, reduceHover, hoverText, EMPTY_HOVER, type HoverEvent } from './hover'
 import { evalInWebContents } from './cdp-eval'
+import { keyToDispatchEvents } from './input-keys'
 import {
   type MagnifierState,
   NO_MAGNIFIER,
@@ -2440,6 +2441,54 @@ export class ProfileManager {
     return { windowId: targetWindowId }
   }
 
+  /** Make `tabId` the visible/active tab in its own window, and bring that window
+   * forward — wherever the tab lives. The cross-window counterpart to selectTabIn
+   * (which only acts on the focused window's context). Real-input commands need
+   * this first: Chromium drops input on a hidden tab. Throws on an unknown tab. */
+  private activateTabById(tabId: string): { windowId: string; id: string } {
+    const pw = this.ownerOf(tabId)
+    if (!pw) throw new Error(`unknown tab: ${tabId}`)
+    // show()+focus() so the OS raises the window (and macOS un-minimizes it),
+    // then select the tab so it becomes the visible WebContentsView.
+    if (!pw.window.isDestroyed()) {
+      pw.window.show()
+      pw.window.focus()
+    }
+    this.selectTabIn(pw, tabId)
+    return { windowId: pw.windowId, id: tabId }
+  }
+
+  /** True when the tab's page reports `document.visibilityState === 'visible'`.
+   * Read over the same CDP eval path exec-js uses (works even on a hidden tab).
+   * Never throws — a failed probe reads as "not visible". */
+  private async isPageVisible(wc: WebContents): Promise<boolean> {
+    try {
+      return (await evalInWebContents(wc, 'document.visibilityState')) === 'visible'
+    } catch {
+      return false
+    }
+  }
+
+  /** Ensure `wc`'s tab is visible so real input (press-key) can land. If already
+   * visible, a no-op. Otherwise activate its tab (raise the window + select it),
+   * then poll until the page reports visible (layout + compositor need a beat).
+   * Returns whether it became visible within the budget. */
+  private async ensurePageVisibleForInput(wc: WebContents, id?: string): Promise<boolean> {
+    if (await this.isPageVisible(wc)) return true
+    if (id) {
+      try {
+        this.activateTabById(id)
+      } catch {
+        // Unknown/asleep tab: fall through to the poll, which will fail cleanly.
+      }
+    }
+    for (let i = 0; i < 20; i++) {
+      if (await this.isPageVisible(wc)) return true
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    return false
+  }
+
   /** Every open window: its id, profile, tab count, and screen frame — for the
    * socket/MCP to enumerate windows and target a move. */
   private listOpenWindows(): Array<{
@@ -2543,6 +2592,29 @@ export class ProfileManager {
     const view = target.views.get(activeId)
     if (!view) throw new Error('no active tab')
     return { wc: view.webContents, buffer: target.media.get(activeId) }
+  }
+
+  /** Resolve a tab's OWN webContents for input injection. Same lookup and error
+   * semantics as execJsInTab: with a `tabId`, search ALL windows (UUIDs are
+   * global); without one, the target window's active tab. Throws on an
+   * unknown/asleep tab, the Settings tab, or no active web page. */
+  private webContentsForTab(target: ProfileWindow | null, tabId?: string): WebContents {
+    if (tabId) {
+      for (const pw of this.openById.values()) {
+        if (pw.window.isDestroyed()) continue
+        const view = pw.views.get(tabId)
+        if (view) return view.webContents
+        if (tabId === pw.settingsTabId) throw new Error('not a web page (Settings tab)')
+        if (pw.state.tabs.some((t) => t.id === tabId)) throw new Error(`tab is asleep: ${tabId}`)
+      }
+      throw new Error(`unknown tab: ${tabId}`)
+    }
+    if (!target || target.window.isDestroyed()) throw new Error('no target window')
+    const activeId = target.state.activeId
+    if (!activeId || activeId === target.settingsTabId) throw new Error('no active web page')
+    const view = target.views.get(activeId)
+    if (!view) throw new Error('no active tab')
+    return view.webContents
   }
 
   /** Save one media url to `dir`. A data: URL is decoded and written directly; an
@@ -3938,6 +4010,31 @@ export class ProfileManager {
         if (!view) throw new Error('no active tab')
         return evalInWebContents(view.webContents, code)
       },
+      pressKeyInTab: async (key, tabId, modifiers) => {
+        // Reach the tab's OWN webContents (same lookup/errors as exec-js) and
+        // inject a real keypress via CDP Input.dispatchKeyEvent — the stealth
+        // shim already drives that transport, so no new attach in the common
+        // case. isTrusted:true, so keyboard-shortcut UIs (Kondo archive 'e', …)
+        // fire, which a synthetic DOM KeyboardEvent can't guarantee.
+        const wc = this.webContentsForTab(target, tabId)
+        // Chromium delivers input ONLY to a visible tab; a hidden/background tab
+        // silently drops it (a misleading "ok" with no effect). Make the target
+        // the visible/active tab first, then confirm — never report a false
+        // success.
+        const id = tabId ?? target?.state.activeId ?? undefined
+        const visible = await this.ensurePageVisibleForInput(wc, id)
+        if (!visible) throw new Error('tab could not be made visible for input')
+        const events = keyToDispatchEvents(key, modifiers)
+        const dbg = wc.debugger
+        const wasAttached = dbg.isAttached()
+        if (!wasAttached) dbg.attach('1.3')
+        try {
+          for (const ev of events) await dbg.sendCommand('Input.dispatchKeyEvent', ev)
+        } finally {
+          // Only detach a debugger we attached; leave stealth's in place.
+          if (!wasAttached) dbg.detach()
+        }
+      },
       toggleDevToolsInActiveTab: () => {
         // The active tab's inspector, docked on the right into a host view we
         // position ourselves (see toggleActiveDevTools for the why).
@@ -4065,6 +4162,7 @@ export class ProfileManager {
         return this.detachTabTo(src, id, point)
       },
       moveTabToWindow: (id, windowId) => this.moveTabToWindowById(id, windowId),
+      activateTab: (id) => this.activateTabById(id),
       listWindows: () => this.listOpenWindows(),
       pinTab: (id) => {
         if (!target) throw new Error('no target window')

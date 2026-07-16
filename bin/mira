@@ -19,8 +19,10 @@
 //   mira use --active               pin the focused window's active tab
 //   mira use <id>                   pin an explicit id
 //   mira exec <code|-|@file>        run JS in the pinned/active tab
+//   mira press <key> [--mod a,b]    send a real keypress (e.g. e, Enter, ArrowDown)
 //   mira reload                     reload the pinned (via exec-js) or active tab
 //   mira nav <url>                  navigate the active tab
+//   mira windows                    list open windows (id / profile / tabs), * = focused
 //   mira commands                   list every command the running build knows
 //   mira call <command> [--params '<json>']   generic passthrough to any command
 //   mira <command> [--params '<json>']        same, shorthand
@@ -36,8 +38,10 @@ import {
   pickTabByUrl,
   buildExec,
   buildReload,
+  buildPress,
   buildCall,
   formatTabs,
+  formatWindows,
   resolveCode
 } from '../src/cli/mira-core.mjs'
 
@@ -145,8 +149,23 @@ async function main() {
       return send(buildExec(cr.code, tabId), { json })
     }
 
+    case 'press': {
+      const key = positionals[0]
+      const modifiers =
+        typeof flags.mod === 'string' ? flags.mod.split(',').map((m) => m.trim()).filter(Boolean) : []
+      const built = buildPress(key, tabId, modifiers)
+      if ('error' in built) return die(built.error, 2)
+      return send(built.request, { json })
+    }
+
     case 'reload':
       return send(buildReload(tabId), { json })
+
+    case 'windows':
+      return send(
+        { command: 'list-windows' },
+        { json, pretty: (r) => formatWindows(r.windows) }
+      )
 
     case 'nav':
     case 'navigate': {

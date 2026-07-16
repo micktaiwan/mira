@@ -22,6 +22,7 @@ import { extensionsCommands } from './extensions'
 import { findCommands } from './find'
 import { folderMenuCommands } from './folder-menu'
 import { historyCommands } from './history'
+import { inputCommands } from './input'
 import { magnifierCommands } from './magnifier'
 import { mediaCommands } from './media'
 import { navigationCommands } from './navigation'
@@ -73,6 +74,7 @@ export type { FindContext, FindStopAction } from './find'
 export type { FolderMenuContext } from './folder-menu'
 export type { HistoryContext } from './history'
 export type { HistoryEntry } from '../history-store'
+export type { InputContext, PressKeyParams } from './input'
 export type { MagnifierContext } from './magnifier'
 export type { MediaContext, MediaItem, MediaKind, MediaSource } from './media'
 export type { NavContext } from './navigation'
@@ -116,6 +118,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...findCommands,
     ...folderMenuCommands,
     ...historyCommands,
+    ...inputCommands,
     ...magnifierCommands,
     ...mediaCommands,
     ...navigationCommands,

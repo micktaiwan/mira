@@ -273,6 +273,30 @@ body {
   overflow-y: auto;
 }
 
+/* A thin, discreet scrollbar for the tab list — the default macOS/Chromium one
+   reads as a heavy grey slab against the dark sidebar. Track stays invisible;
+   the thumb is a faint rounded pill that darkens on hover. */
+.sidebar::-webkit-scrollbar {
+  width: 8px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: var(--ev-c-gray-2);
+  border-radius: 8px;
+  /* Inset the pill so it doesn't touch the sidebar edge. */
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover {
+  background: var(--ev-c-gray-1);
+  background-clip: padding-box;
+}
+
 .sidebar-new {
   -webkit-app-region: no-drag;
   display: flex;

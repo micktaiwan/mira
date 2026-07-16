@@ -106,6 +106,7 @@ function setup(): {
     moveTab: (id: string) => ({ id }),
     detachTab: async () => ({ windowId: 'w', created: true }),
     moveTabToWindow: (_id: string, windowId: string) => ({ windowId }),
+    activateTab: (id: string) => ({ windowId: 'w', id }),
     listWindows: () => [],
     pinTab: (id: string) => ({ id, pinned: true }),
     unpinTab: (id: string) => ({ id, pinned: false }),
@@ -179,6 +180,7 @@ function setup(): {
     locationAuthStatus: () => 'authorized' as const,
     requestLocationAuthorization: () => 'authorized' as const,
     execJsInTab: (code: string) => Promise.resolve(`ran:${code}`),
+    pressKeyInTab: () => Promise.resolve(),
     toggleDevToolsInActiveTab: () => true,
     inspectCookiesInActiveTab: () => Promise.resolve(true),
     // Skills slice: minimal stubs, not exercised by these socket-dispatch tests.

@@ -14,6 +14,7 @@ import type { ExtensionsContext } from './extensions'
 import type { FindContext } from './find'
 import type { FolderMenuContext } from './folder-menu'
 import type { HistoryContext } from './history'
+import type { InputContext } from './input'
 import type { MagnifierContext } from './magnifier'
 import type { MediaContext } from './media'
 import type { NavContext } from './navigation'
@@ -44,6 +45,7 @@ export type CommandContext = AppContext &
   FindContext &
   FolderMenuContext &
   HistoryContext &
+  InputContext &
   MagnifierContext &
   MediaContext &
   NavContext &

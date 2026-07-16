@@ -11,9 +11,11 @@ that removes the hand-built JSON, the `nc` async-read trap, and the manual
 list-tabs → filter → tabId dance:
 
 ```bash
-bin/mira tabs                                # list tabs, * = active
+bin/mira tabs                                # list tabs, * = active, z = asleep
+bin/mira windows                             # list open windows, * = focused
 eval "$(bin/mira use --url localhost:8000)"  # pin a tab → export MIRA_TAB=<uuid> (this shell only)
 bin/mira exec "document.title"               # exec-js on the pinned/active tab
+bin/mira press e                             # real keypress on the pinned/active tab (--mod meta,shift)
 bin/mira reload                              # reload the pinned tab (via exec-js) or the active one
 bin/mira call <command> --params '<json>'    # generic passthrough to any command below
 ```
@@ -115,7 +117,8 @@ clicks are swallowed (they'd land wrong), so it is a "look only" mode.
 | ----------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `list-tabs`             | —                     | `{tabs, activeId, panelCollapsed}` — tabs of the target window, with their UUID ids                                                                                                                                       |
 | `new-tab`               | `url?`, `background?` | open a tab (default: home). `background:true` opens it hidden without switching to it or bringing Mira to the foreground — use this when driving a page from a script so Mira does not pop in front of what you are doing |
-| `select-tab`            | `id`                  | activate a tab (wakes it if asleep)                                                                                                                                                                                       |
+| `select-tab`            | `id`                  | activate a tab **in the focused window only** (wakes it if asleep). To activate a tab in ANY window, use `activate-tab`.                                                                                                    |
+| `activate-tab`          | `id`                  | make a tab the VISIBLE/active tab in its own window AND raise that window, wherever it lives — the cross-window counterpart to `select-tab`. Needed before `press-key`: Chromium only delivers input to a visible tab. `{windowId, id}`. Errors: `unknown tab` |
 | `close-tab`             | `id`                  | close a tab                                                                                                                                                                                                               |
 | `close-active-tab`      | —                     | close the active tab (Cmd+W semantics, pinned tabs are guarded)                                                                                                                                                           |
 | `duplicate-active-tab`  | —                     | duplicate the active web tab (Cmd+Shift+D): open a copy of its live url right under it and focus it. No-op on the Settings tab or when nothing is active                                                                   |
@@ -138,6 +141,7 @@ clicks are swallowed (they'd land wrong), so it is a "look only" mode.
 | Command           | Params           | Effect / result                                                                                                                                                                                                                                    |
 | ----------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `exec-js`         | `code`, `tabId?` | run JS in a tab's page world, return its JSON-serializable value. With `tabId` (from `list-tabs`), targets **any tab in any window**; without, the active tab. Errors: `unknown tab: <id>`, `tab is asleep: <id>`, `not a web page (Settings tab)` |
+| `press-key`       | `key`, `tabId?`, `modifiers?` | send a REAL keypress (CDP `Input.dispatchKeyEvent`, `isTrusted:true`) to a tab — for keyboard-driven web apps (archive with `e`, `j`/`k`, `Escape`) that ignore synthetic DOM events. `key` is a `KeyboardEvent.key` name (`e`, `Enter`, `ArrowDown`, ` `); `modifiers` ⊆ `alt|ctrl|meta|shift`. The tab is **activated first** (brought forward) so a background tab does not silently drop the key. Result `{key}`. Errors: `unknown tab`, `tab could not be made visible for input` |
 | `toggle-devtools` | —                | open/close the inspector on the active tab                                                                                                                                                                                                         |
 | `inspect-cookies` | —                | open the inspector on the active tab (if needed, never closes it) and reveal the Cookies view of the Application panel; result `{ open }`. Errors: `no active web page`                                                                            |
 
