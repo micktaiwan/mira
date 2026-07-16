@@ -55,6 +55,16 @@ Dépannage rapide en shell si vraiment besoin de `nc` : garder stdin ouvert le t
 - **Pour ouvrir un onglet de test, TOUJOURS `new-tab` avec `background:true`.** Un `new-tab` normal met l'onglet actif ET ramène Mira au premier plan, ce qui vole le focus de l'utilisateur pendant que tu testes. Le mode background charge la page cachée sans voler le focus ni faire passer la fenêtre devant ; tu récupères le `tabId` dans la réponse et tu la pilotes via `exec-js`.
 - **Profil de test isolé.** Un profil dédié (session/cookies à part) existe pour ne pas polluer les profils réels. Son id concret et son usage vivent dans `CLAUDE.local.md` (non versionné).
 
+## Piloter au clavier (vraie frappe) et onglets cachés
+
+Pour les web apps **clavier-first** (Kondo, Superhuman : archiver avec `e`, `j`/`k`, `Escape`), utiliser `press-key`, pas un `KeyboardEvent` synthétique via `exec-js`.
+
+- **Les events synthétiques sont ignorés.** Un `document.dispatchEvent(new KeyboardEvent(...))` a `isTrusted:false` ; ces apps le rejettent (vérifié le 2026-07-15 : synthétique `l` n'ouvre PAS le menu Label de Kondo). `press-key` passe par CDP `Input.dispatchKeyEvent` → `isTrusted:true`, indistinguable d'une frappe physique.
+- **CLI** : `mira press <key> [--mod alt,ctrl,meta,shift]`. `key` = nom façon `KeyboardEvent.key` (`e`, `Enter`, `ArrowDown`, ` `). Socket : `press-key {key, tabId?, modifiers?}`.
+- **Une vraie frappe n'atteint qu'un onglet VISIBLE.** Chromium droppe silencieusement l'input d'un onglet caché (arrière-plan / `document.visibilityState !== "visible"`). Le **focus OS de la fenêtre n'est PAS requis** — un onglet visible dans une fenêtre non-focus reçoit quand même la frappe (vérifié le 2026-07-15). `press-key` **auto-active l'onglet cible d'abord** (le remonte au premier plan) puis attend qu'il soit visible ; si impossible, il échoue (`tab could not be made visible for input`) au lieu de faire un faux succès.
+
+**Fenêtres multiples & activation cross-fenêtre.** Un profil peut avoir plusieurs fenêtres ; `list-tabs`/`mira tabs` ne montrent que les onglets de la fenêtre cible, `mira windows` liste les fenêtres (`*` = focus). Piège : `select-tab` n'active un onglet que dans la **fenêtre focus** (`unknown tab` sinon), alors que `exec-js`/`press-key` résolvent le `tabId` cross-fenêtre. Pour rendre visible un onglet de N'IMPORTE quelle fenêtre : **`activate-tab {id}`** (le fait passer actif + remonte sa fenêtre). `mira tabs` marque `*` l'onglet actif/visible et `z` les onglets endormis (page-bound échoue dessus tant qu'ils ne sont pas réveillés).
+
 ## Lancer Mira à froid sur un seul profil (`--profile` / `MIRA_PROFILE`)
 
 Au démarrage, Mira rouvre par défaut les profils qui étaient ouverts au dernier quit. Pour **démarrer à froid sur un seul profil** (typiquement le profil de test), sans rouvrir les autres :

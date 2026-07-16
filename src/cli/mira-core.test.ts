@@ -5,8 +5,10 @@ import {
   pickTabByUrl,
   buildExec,
   buildReload,
+  buildPress,
   buildCall,
   formatTabs,
+  formatWindows,
   resolveCode,
   TAB_BOUND
   // @ts-expect-error — plain-ESM sibling module, no .d.ts (the CLI ships without a build)
@@ -143,6 +145,59 @@ describe('formatTabs', () => {
     expect(lines[0].startsWith(' ')).toBe(true)
     expect(lines[1].startsWith('*')).toBe(true)
     expect(lines[1]).toContain('b')
+  })
+
+  it('marks an asleep tab (loaded===false) with z, unless it is active', () => {
+    const out = formatTabs(
+      [
+        { id: 'a', url: 'u1', title: 't1', loaded: false },
+        { id: 'b', url: 'u2', title: 't2', loaded: true },
+        { id: 'c', url: 'u3', title: 't3', loaded: false }
+      ],
+      'c'
+    )
+    const lines = out.split('\n')
+    expect(lines[0].startsWith('z')).toBe(true) // asleep
+    expect(lines[1].startsWith(' ')).toBe(true) // loaded, not active
+    expect(lines[2].startsWith('*')).toBe(true) // active wins over asleep
+  })
+})
+
+describe('buildPress', () => {
+  it('builds a press-key request with just a key', () => {
+    expect(buildPress('e', null, [])).toEqual({
+      request: { command: 'press-key', params: { key: 'e' } }
+    })
+  })
+
+  it('includes tabId and modifiers when given', () => {
+    expect(buildPress('a', 't1', ['meta', 'shift'])).toEqual({
+      request: { command: 'press-key', params: { key: 'a', tabId: 't1', modifiers: ['meta', 'shift'] } }
+    })
+  })
+
+  it('errors on a missing key', () => {
+    expect(buildPress('', null, [])).toEqual({ error: 'press needs a key' })
+  })
+})
+
+describe('formatWindows', () => {
+  it('marks the focused window with * and shows profile + tab count', () => {
+    const out = formatWindows([
+      { windowId: 'w1', profileId: 'default', tabCount: 3, focused: false },
+      { windowId: 'w2', profileId: 'perso', tabCount: 7, focused: true }
+    ])
+    const lines = out.split('\n')
+    expect(lines[0].startsWith(' ')).toBe(true)
+    expect(lines[0]).toContain('tabs=3')
+    expect(lines[1].startsWith('*')).toBe(true)
+    expect(lines[1]).toContain('w2')
+  })
+})
+
+describe('TAB_BOUND includes press-key', () => {
+  it('so a generic call injects the resolved tabId', () => {
+    expect(TAB_BOUND.has('press-key')).toBe(true)
   })
 })
 

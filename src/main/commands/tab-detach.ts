@@ -34,6 +34,12 @@ export interface TabDetachContext {
    * counterpart to detachTab, for the socket/MCP. Throws on an unknown tab/window
    * or a cross-profile move. */
   moveTabToWindow: (id: string, windowId: string) => { windowId: string }
+  /** Make a tab the VISIBLE/active tab in its own window AND focus that window,
+   * wherever it lives — the cross-window counterpart to select-tab (which only
+   * reaches the focused window). Needed before real-input commands (press-key):
+   * Chromium only delivers input to a visible tab. Returns the tab's window.
+   * Throws on an unknown/asleep tab. */
+  activateTab: (id: string) => { windowId: string; id: string }
   /** Every open window (id, profile, tab count, screen frame, focus). */
   listWindows: () => WindowInfo[]
 }
@@ -82,6 +88,19 @@ export const tabDetachCommands: CommandMap<CommandContext> = {
     }
     try {
       const result = ctx.moveTabToWindow(id.trim(), windowId.trim())
+      return { ok: true, ...result }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  'activate-tab': (ctx, params) => {
+    const { id } = (params ?? {}) as Partial<{ id: string }>
+    if (typeof id !== 'string' || id.trim() === '') {
+      return { ok: false, error: 'missing "id"' }
+    }
+    try {
+      const result = ctx.activateTab(id.trim())
       return { ok: true, ...result }
     } catch (error) {
       return fail(error)

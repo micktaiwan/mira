@@ -25,7 +25,7 @@ export const BOOLEAN_FLAGS = new Set(['json', 'active', 'help'])
 /** Registry commands that accept a `tabId` param (see docs/socket.md). Only for
  * these does a resolved tab target get injected into params — injecting `tabId`
  * into e.g. select-tab (which wants `id`) would be wrong. */
-export const TAB_BOUND = new Set(['exec-js', 'collect-media', 'download-media'])
+export const TAB_BOUND = new Set(['exec-js', 'collect-media', 'download-media', 'press-key'])
 
 /**
  * Parse an argv tail (already stripped of node + script path) into a command,
@@ -124,6 +124,41 @@ export function buildReload(tabId) {
 }
 
 /**
+ * Press-key plan: send a real keypress to the pinned/active tab. `modifiers` is
+ * a list of alt|ctrl|meta|shift. The target tab is activated first server-side,
+ * so a background tab is brought forward rather than silently dropping the key.
+ *
+ * @param {string} key
+ * @param {string|null} tabId
+ * @param {string[]} [modifiers]
+ * @returns {{ request: {command:string, params:object} } | { error: string }}
+ */
+export function buildPress(key, tabId, modifiers) {
+  if (typeof key !== 'string' || key === '') return { error: 'press needs a key' }
+  const params = { key }
+  if (tabId) params.tabId = tabId
+  if (modifiers && modifiers.length > 0) params.modifiers = modifiers
+  return { request: { command: 'press-key', params } }
+}
+
+/**
+ * Human-readable rendering of a list-windows result: one line per window with
+ * its id, profile, tab count, and a `*` on the focused one.
+ *
+ * @param {Array<{windowId:string,profileId:string,tabCount:number,focused:boolean}>} windows
+ * @returns {string}
+ */
+export function formatWindows(windows) {
+  return (windows ?? [])
+    .map((w) => {
+      const mark = w.focused ? '*' : ' '
+      const prof = (w.profileId ?? '').slice(0, 12).padEnd(12)
+      return `${mark} ${w.windowId}  prof=${prof}  tabs=${w.tabCount}`
+    })
+    .join('\n')
+}
+
+/**
  * Assemble a generic passthrough request: a command name plus params from a
  * `--params '<json>'` flag, with `tabId` injected only for TAB_BOUND commands
  * when a tab is resolved and the caller did not already set one.
@@ -154,16 +189,18 @@ export function buildCall(command, paramsJson, tabId) {
 
 /**
  * Human-readable one-line-per-tab rendering of a list-tabs result. The active
- * tab is marked with `*`, others with a space.
+ * (visible) tab is marked with `*`; a tab that is asleep/discarded (`loaded ===
+ * false`, so page-bound commands would fail until it is woken) with `z`; the
+ * rest with a space. Knowing a tab is asleep up front saves a failed round-trip.
  *
- * @param {Array<{id:string,url?:string,title?:string}>} tabs
+ * @param {Array<{id:string,url?:string,title?:string,loaded?:boolean}>} tabs
  * @param {string} [activeId]
  * @returns {string}
  */
 export function formatTabs(tabs, activeId) {
   return (tabs ?? [])
     .map((t) => {
-      const mark = t.id === activeId ? '*' : ' '
+      const mark = t.id === activeId ? '*' : t.loaded === false ? 'z' : ' '
       const title = (t.title ?? '').slice(0, 40).padEnd(40)
       return `${mark} ${t.id}  ${title}  ${t.url ?? ''}`
     })

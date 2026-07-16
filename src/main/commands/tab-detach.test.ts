@@ -84,6 +84,38 @@ describe('move-tab-to-window', () => {
   })
 })
 
+describe('activate-tab', () => {
+  it('makes a background tab the active one and reports its window', async () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    // Open a second tab (now active), then activate the first one by id.
+    await registry.execute('new-tab', { url: 'example.com' }, ctx)
+    expect(tabState().activeId).toBe('tab-2')
+
+    const result = await registry.execute('activate-tab', { id: 'tab-1' }, ctx)
+    expect(result).toMatchObject({ ok: true, windowId: 'fake-window', id: 'tab-1' })
+    expect(tabState().activeId).toBe('tab-1')
+  })
+
+  it('rejects a missing id', async () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(await registry.execute('activate-tab', {}, ctx)).toEqual({
+      ok: false,
+      error: 'missing "id"'
+    })
+  })
+
+  it('fails on an unknown tab', async () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(await registry.execute('activate-tab', { id: 'nope' }, ctx)).toEqual({
+      ok: false,
+      error: 'unknown tab: nope'
+    })
+  })
+})
+
 describe('list-windows', () => {
   it('lists the open windows', () => {
     const { ctx } = makeContext()
