@@ -28,6 +28,11 @@ function activeUrlOf(tabs: TabInfo[], activeId: string | null): string {
   return tabs.find((t) => t.id === activeId)?.url ?? ''
 }
 
+/** The active tab's title, or '' when there is no active tab. */
+function activeTitleOf(tabs: TabInfo[], activeId: string | null): string {
+  return tabs.find((t) => t.id === activeId)?.title ?? ''
+}
+
 /** Whether an address-bar push should overwrite the field. When the active tab
  * changed (select / close / open) we always resync, else a stale URL lingers
  * while the bar holds focus. For a same-tab push (live title/favicon) we skip
@@ -417,6 +422,11 @@ function App(): React.JSX.Element {
             ⟳
           </button>
           <form className="address-form" onSubmit={onSubmitUrl}>
+            {activeTitleOf(tabs, activeId) && (
+              <span className="address-title" title={activeTitleOf(tabs, activeId)}>
+                {activeTitleOf(tabs, activeId)}
+              </span>
+            )}
             <input
               ref={addressInputRef}
               className="address-input"
