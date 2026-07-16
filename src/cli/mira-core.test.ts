@@ -38,6 +38,23 @@ describe('parseArgs', () => {
   it('a trailing value-flag with nothing after it becomes true', () => {
     expect(parseArgs(['reload', '--tab']).flags).toEqual({ tab: true })
   })
+
+  it('maps -n to the new-tab boolean flag', () => {
+    expect(parseArgs(['nav', 'example.com', '-n'])).toEqual({
+      command: 'nav',
+      positionals: ['example.com'],
+      flags: { 'new-tab': true }
+    })
+    expect(parseArgs(['nav', 'example.com', '--new-tab']).flags).toEqual({ 'new-tab': true })
+  })
+
+  it('leaves a bare - as a positional (stdin), not a short flag', () => {
+    expect(parseArgs(['exec', '-'])).toEqual({
+      command: 'exec',
+      positionals: ['-'],
+      flags: {}
+    })
+  })
 })
 
 describe('resolveTabId — precedence --tab > $MIRA_TAB > null', () => {

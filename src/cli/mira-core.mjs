@@ -20,7 +20,11 @@
 /** Flags that take no value (their presence alone means `true`). Every other
  * `--flag` consumes the next token as its value unless that token is itself a
  * flag. Keeping this explicit avoids `--json tabs` swallowing `tabs`. */
-export const BOOLEAN_FLAGS = new Set(['json', 'active', 'help'])
+export const BOOLEAN_FLAGS = new Set(['json', 'active', 'help', 'new-tab'])
+
+/** Single-letter short flags, mapped to their long boolean name. `-n` == `--new-tab`.
+ * A bare `-` is NOT a short flag: it stays a positional (e.g. `mira exec -` = stdin). */
+export const SHORT_FLAGS = new Map([['n', 'new-tab']])
 
 /** Registry commands that accept a `tabId` param (see docs/socket.md). Only for
  * these does a resolved tab target get injected into params — injecting `tabId`
@@ -55,6 +59,10 @@ export function parseArgs(argv) {
       } else {
         flags[body] = true
       }
+    } else if (/^-[a-zA-Z]$/.test(tok) && SHORT_FLAGS.has(tok.slice(1))) {
+      // Single-letter short flag (e.g. `-n`). A bare `-` falls through to the
+      // positional branch so `mira exec -` (stdin) still works.
+      flags[SHORT_FLAGS.get(tok.slice(1))] = true
     } else if (command === null) {
       command = tok
     } else {

@@ -21,7 +21,8 @@
 //   mira exec <code|-|@file>        run JS in the pinned/active tab
 //   mira press <key> [--mod a,b]    send a real keypress (e.g. e, Enter, ArrowDown)
 //   mira reload                     reload the pinned (via exec-js) or active tab
-//   mira nav <url>                  navigate the active tab
+//   mira nav <url> [--new-tab|-n]   navigate the active tab in place (--new-tab: open a fresh tab instead)
+//   mira open <url>                 open <url> in a NEW tab, leaving the current tab untouched
 //   mira windows                    list open windows (id / profile / tabs), * = focused
 //   mira commands                   list every command the running build knows
 //   mira call <command> [--params '<json>']   generic passthrough to any command
@@ -171,7 +172,18 @@ async function main() {
     case 'navigate': {
       const url = positionals[0]
       if (!url) return die('nav needs a url', 2)
-      return send({ command: 'navigate', params: { url } }, { json })
+      // In place by default (URL-bar semantics); --new-tab / -n spawns a fresh
+      // tab instead, leaving the active tab untouched.
+      const params = flags['new-tab'] === true ? { url, newTab: true } : { url }
+      return send({ command: 'navigate', params }, { json })
+    }
+
+    case 'open': {
+      // "open" == navigate into a NEW tab: the non-destructive verb. The current
+      // tab keeps its page. The registry dedups to an existing tab on same URL.
+      const url = positionals[0]
+      if (!url) return die('open needs a url', 2)
+      return send({ command: 'navigate', params: { url, newTab: true } }, { json })
     }
 
     case 'use': {
