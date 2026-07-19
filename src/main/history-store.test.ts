@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   recordVisit,
   recentHistory,
+  removeHistoryForDomain,
   searchHistory,
   normalizeHistory,
   MAX_HISTORY,
@@ -121,5 +122,35 @@ describe('normalizeHistory', () => {
       { url: 'https://a.test', title: 'dup' }
     ])
     expect(list).toEqual([{ url: 'https://a.test', title: 'first', lastVisited: 0, visitCount: 1 }])
+  })
+})
+
+describe('removeHistoryForDomain', () => {
+  const list: HistoryEntry[] = [
+    { url: 'https://www.example.com/a', title: 'a', lastVisited: 3, visitCount: 1 },
+    { url: 'https://mail.example.com/b', title: 'b', lastVisited: 2, visitCount: 1 },
+    { url: 'https://example.com/c', title: 'c', lastVisited: 1, visitCount: 1 },
+    { url: 'https://example.org/d', title: 'd', lastVisited: 0, visitCount: 1 }
+  ]
+
+  it('drops the base domain and every subdomain, keeps others', () => {
+    const { list: kept, removed } = removeHistoryForDomain(list, 'example.com')
+    expect(removed).toBe(3)
+    expect(kept).toEqual([
+      { url: 'https://example.org/d', title: 'd', lastVisited: 0, visitCount: 1 }
+    ])
+  })
+
+  it('removes nothing for an unrelated domain', () => {
+    const { list: kept, removed } = removeHistoryForDomain(list, 'other.com')
+    expect(removed).toBe(0)
+    expect(kept).toEqual(list)
+  })
+
+  it('keeps entries whose url does not parse', () => {
+    const bad: HistoryEntry[] = [{ url: 'not a url', title: 'x', lastVisited: 0, visitCount: 1 }]
+    const { list: kept, removed } = removeHistoryForDomain(bad, 'example.com')
+    expect(removed).toBe(0)
+    expect(kept).toEqual(bad)
   })
 })

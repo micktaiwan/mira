@@ -18,6 +18,20 @@ describe('buildHomePage', () => {
     expect(html).toContain('7 processes')
   })
 
+  it('bakes the profile theme into the page (light theme → white surface)', () => {
+    const html = buildHomePage({
+      ...base,
+      theme: { background: '#ffffff', text: '#1a1a1a', accent: '#3b6fe0' }
+    })
+    expect(html).toContain('--surface: #ffffff;')
+    expect(html).toContain('--text: #1a1a1a;')
+    expect(html).toContain('--accent: #3b6fe0;')
+  })
+
+  it('falls back to the default dark surface with no theme', () => {
+    expect(buildHomePage(base)).toContain('--surface: #1b1b1f;')
+  })
+
   it('reports partial vs full load and pluralizes correctly', () => {
     expect(buildHomePage({ ...base, loadedCount: 1, tabCount: 3 })).toContain('1 loaded')
     expect(buildHomePage({ ...base, loadedCount: 3, tabCount: 3 })).toContain('all loaded')

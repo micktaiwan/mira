@@ -21,6 +21,10 @@ extraResources:
   # Same deal for the Spaces addon (macOS virtual desktops, see src/main/spaces.ts).
   - from: native/mira-spaces/build/Release/mira_spaces.node
     to: mira_spaces.node
+  # Same deal for the activation addon (suppress background reload foregrounding,
+  # see src/main/mac-activation.ts).
+  - from: native/mira-activation/build/Release/mira_activation.node
+    to: mira_activation.node
 asarUnpack:
   - resources/**
 # Declare Mira a handler for local HTML files so `open foo.html` (and a

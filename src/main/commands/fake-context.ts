@@ -60,10 +60,22 @@ import {
   recordVisit as recordVisitPure,
   recentHistory,
   searchHistory as searchHistoryPure,
+  removeHistoryForDomain,
   type HistoryEntry
 } from '../history-store'
+import { registrableDomain } from '../domain'
 import { type PermissionGrant } from '../permission-store'
 import type { MagnifierState } from '../magnifier'
+import { DownloadTracker, type DownloadRecord } from '../downloads'
+import {
+  normalizeThemes,
+  createTheme as createThemePure,
+  updateTheme as updateThemePure,
+  deleteTheme as deleteThemePure,
+  findTheme,
+  type Theme
+} from '../theme-store'
+import { setProfileTheme as setProfileThemePure } from '../profile-store'
 
 export interface FakeContext {
   ctx: CommandContext
@@ -153,6 +165,16 @@ export interface FakeContext {
   spaceMoves: number[]
   /** Live view of the fake window's virtual-desktop index (spaces spy). */
   windowSpaceIndex: () => number
+  /** Seed a tracked download, as the will-download hook would (downloads spy). */
+  seedDownload: (record: DownloadRecord) => void
+  /** Live view of the fake app's tracked downloads (newest-first, downloads spy). */
+  downloadsList: () => DownloadRecord[]
+  /** Ids passed to cancelDownload that actually cancelled (downloads spy). */
+  cancelledDownloads: string[]
+  /** Ids passed to openDownload that actually opened (downloads spy). */
+  openedDownloads: string[]
+  /** Ids passed to revealDownload that actually revealed (downloads spy). */
+  revealedDownloads: string[]
 }
 
 /** Options to shape the fake's native edges for a specific test. */
@@ -189,6 +211,13 @@ export function makeContext(
   const externalOpens: string[] = []
   const externalOpenTargets: (string | undefined)[] = []
   const spaceMoves: number[] = []
+  // Downloads: an in-memory tracker (the pure model) plus spies for the native
+  // effects (cancel / open / reveal). A monotonic clock stamps updates.
+  const downloads = new DownloadTracker()
+  const cancelledDownloads: string[] = []
+  const openedDownloads: string[] = []
+  const revealedDownloads: string[] = []
+  let downloadClock = 0
   // Magnifier: per-view zoom/pan state, plus spies for the native effects.
   const magnifierStates = new Map<string, MagnifierState>()
   const magnifierApplied: Array<{ id: string; state: MagnifierState }> = []
@@ -201,6 +230,9 @@ export function makeContext(
       ProfileInfo & { open: boolean }
     >,
     focused: focusedId as string | null,
+    // Chrome themes (built-ins + any created in a test). Mirrors what the real
+    // ProfileManager holds and persists to themes.json.
+    themes: normalizeThemes([]) as Theme[],
     seq: 1,
     // A window always starts with one tab, like the real ProfileManager.
     tabs: addTab(emptyTabState(), { id: 'tab-1', title: '', url: 'home', favicon: null }),
@@ -428,6 +460,43 @@ export function makeContext(
       return { id, label: profile.label, ...(color ? { color } : {}) }
     },
     listProfiles: () => ({ profiles: state.profiles, focused: state.focused }),
+    listThemes: () => state.themes,
+    createTheme: (input) => {
+      const [themes, theme] = createThemePure(state.themes, {
+        name: input.name,
+        background: input.background,
+        text: input.text,
+        accent: input.accent ?? null,
+        wallpaper: input.wallpaper ?? null
+      })
+      state.themes = themes
+      return theme
+    },
+    updateTheme: (id, patch) => {
+      state.themes = updateThemePure(state.themes, id, patch)
+      return findTheme(state.themes, id)!
+    },
+    deleteTheme: (id) => {
+      state.themes = deleteThemePure(state.themes, id)
+      return { id }
+    },
+    setProfileTheme: (id, themeId) => {
+      const profile = state.profiles.find((p) => p.id === id)
+      if (!profile) throw new Error(`unknown profile: ${id}`)
+      if (themeId !== null && !findTheme(state.themes, themeId)) {
+        throw new Error(`unknown theme: ${themeId}`)
+      }
+      // Reuse the pure model so the fake matches the manager's write.
+      const [next] = setProfileThemePure(
+        [{ id: profile.id, label: profile.label }],
+        id,
+        themeId
+      )
+      if (next.themeId) profile.themeId = next.themeId
+      else delete profile.themeId
+      delete profile.color
+      return { id, label: profile.label, ...(profile.themeId ? { themeId: profile.themeId } : {}) }
+    },
     openSettings: (section?: string) => {
       settingsOpened.push(section ?? null)
       // Model the singleton Settings tab (url carries the section, like the
@@ -522,6 +591,31 @@ export function makeContext(
       if (state.focused) cookiesSet.set(state.focused, [])
       return Promise.resolve({ host: new URL(site).host, cookiesRemoved })
     },
+    forgetActiveSite: () => {
+      const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
+      const empty = { domain: null, cookiesRemoved: 0, historyRemoved: 0, closed: false, tabId: null }
+      if (!active || active.id === state.settingsTabId || !/^https?:\/\//.test(active.url)) {
+        return Promise.resolve(empty)
+      }
+      const domain = registrableDomain(new URL(active.url).hostname)
+      if (domain === '') return Promise.resolve(empty)
+      // Model the cookie wipe: empty the focused profile's recorded jar.
+      const jar = state.focused ? (cookiesSet.get(state.focused) ?? []) : []
+      const cookiesRemoved = jar.length
+      if (state.focused) cookiesSet.set(state.focused, [])
+      // History for the domain + subdomains.
+      const { list, removed: historyRemoved } = removeHistoryForDomain(state.history, domain)
+      state.history = list
+      // Close the tab.
+      const tabId = active.id
+      rememberClosed(tabId)
+      const wasActive = state.tabs.activeId === tabId
+      state.tabs = closeTabPure(state.tabs, tabId)
+      state.mru = mruPrune(state.mru, tabId)
+      if (wasActive) recordMru(state.tabs.activeId)
+      if (state.closeArmedId === tabId) state.closeArmedId = null
+      return Promise.resolve({ domain, cookiesRemoved, historyRemoved, closed: true, tabId })
+    },
     getMemoryUsage: () => ({ rss: 123 * 1024 * 1024, processes: 4 }),
     // The fake has no real renderer processes: give each tab a distinct canned
     // footprint (heavier the further down the strip) on its own pid, then run the
@@ -556,6 +650,31 @@ export function makeContext(
       state.mediaGalleryOpen = open ?? !state.mediaGalleryOpen
       return { open: state.mediaGalleryOpen }
     },
+    // Downloads slice: drive the pure tracker and record the native side effects.
+    // Mirrors the ProfileManager guards (only running downloads cancel, only
+    // completed ones open, a gone file cannot be revealed — modeled by state).
+    listDownloads: () => downloads.list(),
+    cancelDownload: (id: string) => {
+      const record = downloads.get(id)
+      if (!record || record.state !== 'progressing') return false
+      downloads.update(id, { state: 'cancelled' }, ++downloadClock)
+      cancelledDownloads.push(id)
+      return true
+    },
+    openDownload: async (id: string) => {
+      const record = downloads.get(id)
+      if (!record || record.state !== 'completed') return false
+      openedDownloads.push(id)
+      return true
+    },
+    revealDownload: (id: string) => {
+      const record = downloads.get(id)
+      if (!record) return false
+      revealedDownloads.push(id)
+      return true
+    },
+    clearDownloads: () => downloads.clearInactive(),
+    getDownloadStats: () => downloads.stats(),
     // Find slice: mirror the manager's guard (find needs an active WEB page),
     // record the calls, remember the text so findStep works without resending it.
     openFindBar: () => {
@@ -709,7 +828,8 @@ export function makeContext(
         kind: 'web' as const,
         pinned: false,
         keepAwake: false,
-        folderId: null
+        folderId: null,
+        audible: false
       }
     },
     closeTab: (id: string) => {
@@ -899,7 +1019,8 @@ export function makeContext(
         kind: (t.id === state.settingsTabId ? 'settings' : 'web') as 'web' | 'settings',
         pinned: t.pinned === true,
         keepAwake: t.keepAwake === true,
-        folderId: t.folderId ?? null
+        folderId: t.folderId ?? null,
+        audible: false
       })),
       activeId: state.tabs.activeId,
       panelCollapsed: state.panelCollapsed
@@ -911,6 +1032,9 @@ export function makeContext(
     // Native tab context menu (show-tab-menu): a no-op in tests — the item list is
     // covered by tab-menu.test.ts, so the command test only checks validation.
     showTabMenu: () => {},
+    // Native audio drop-down (show-audio-menu): a no-op in tests — the item list is
+    // covered by audio-menu.test.ts, so the command test only checks dispatch.
+    showAudioMenu: () => {},
     // Tab folders: real in-memory mutations so the tab-folders command tests can
     // observe them (mirrors ProfileManager, minus the native re-layout).
     listTabFolders: () => ({ folders: state.folders }),
@@ -1213,6 +1337,11 @@ export function makeContext(
     externalOpens,
     externalOpenTargets,
     spaceMoves,
-    windowSpaceIndex: () => windowSpace
+    windowSpaceIndex: () => windowSpace,
+    seedDownload: (record: DownloadRecord) => downloads.add(record),
+    downloadsList: () => downloads.list(),
+    cancelledDownloads,
+    openedDownloads,
+    revealedDownloads
   }
 }

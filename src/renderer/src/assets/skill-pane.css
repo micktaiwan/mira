@@ -4,13 +4,8 @@
    toolbar, above the status bar, flush right, --skill-pane-width wide. The width
    MUST match SKILL_PANE_WIDTH in the main process (src/main/index.ts). */
 .skill-pane {
-  /* Local design tokens for the pane, so the accent lives in one place instead
-     of the hard-coded #6988e6 scattered before. */
-  --accent: #6988e6;
-  --accent-strong: #7d99ec;
-  --accent-soft: rgba(105, 136, 230, 0.16);
-  --accent-line: rgba(105, 136, 230, 0.4);
-
+  /* Accent tokens (--accent, --accent-strong, --accent-soft, --accent-line)
+     come from the global theme layer in tokens.css. */
   position: fixed;
   top: var(--toolbar-height);
   bottom: var(--statusbar-height);
@@ -106,8 +101,8 @@
 }
 
 .skill-pane-tool-close:hover:not(:disabled) {
-  background: rgba(224, 108, 117, 0.18);
-  color: #e06c75;
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
 }
 
 /* ── Thread ─────────────────────────────────────────────────────────────── */
@@ -173,7 +168,7 @@
   margin-bottom: 4px;
   border: 1px solid var(--ev-c-gray-3);
   border-radius: 9px;
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--overlay-faint);
   overflow: hidden;
 }
 
@@ -347,11 +342,11 @@
 
 .skill-pane-error {
   font-size: 13px;
-  color: #e06c75;
+  color: var(--color-danger);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  border: 1px solid rgba(224, 108, 117, 0.3);
-  background: rgba(224, 108, 117, 0.08);
+  border: 1px solid var(--color-danger-line);
+  background: var(--color-danger-soft);
   border-radius: 9px;
   padding: 9px 11px;
 }
@@ -500,7 +495,7 @@
 
 .skill-pane-toggle input:checked + .skill-pane-toggle-track .skill-pane-toggle-thumb {
   transform: translateX(11px);
-  background: #fff;
+  background: var(--on-accent);
 }
 
 .skill-pane-toggle input:focus-visible + .skill-pane-toggle-track {
@@ -552,7 +547,7 @@
   border: none;
   border-radius: 8px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 12px;
   font-weight: 500;
   padding: 0 16px;

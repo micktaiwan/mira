@@ -1,8 +1,8 @@
 // The recently-viewed-tabs (MRU) navigation model, pure and Electron-free — the
 // testable half of the "back/forward through the tabs I've looked at" feature.
 // Separate from tab-store.ts (which owns the strip ORDER): this owns the FOCUS
-// history, i.e. the order in which tabs were activated, so Cmd+Shift+Left /
-// Cmd+Shift+Right can walk it like a browser's page back/forward — but between
+// history, i.e. the order in which tabs were activated, so Cmd+Alt+Left /
+// Cmd+Alt+Right can walk it like a browser's page back/forward — but between
 // tabs, per window.
 //
 // It is a classic back/forward stack with two twists Mickael asked for:

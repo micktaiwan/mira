@@ -12,8 +12,8 @@
   z-index: 80;
   display: flex;
   flex-direction: column;
-  background: #f6f7f9;
-  color: #1a1c20;
+  background: var(--color-background);
+  color: var(--color-text);
   overflow: hidden;
 }
 
@@ -22,8 +22,8 @@
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
-  background: #eceef1;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--color-background-mute);
   flex-wrap: wrap;
 }
 
@@ -46,7 +46,7 @@
   align-items: center;
   gap: 5px;
   padding: 3px 9px;
-  border: 1px solid rgba(0, 0, 0, 0.12);
+  border: 1px solid var(--border);
   border-radius: 14px;
   background: transparent;
   color: inherit;
@@ -57,8 +57,8 @@
 
 .media-filter.active {
   opacity: 1;
-  background: #fff;
-  border-color: rgba(105, 136, 230, 0.6);
+  background: var(--color-background-soft);
+  border-color: var(--accent-line);
 }
 
 .media-filter-icon {
@@ -79,9 +79,9 @@
 
 .media-btn {
   padding: 4px 10px;
-  border: 1px solid rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #fff;
+  background: var(--color-background-soft);
   color: inherit;
   font-size: 12px;
   cursor: pointer;
@@ -93,9 +93,9 @@
 }
 
 .media-btn-primary {
-  background: #6988e6;
-  border-color: #6988e6;
-  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
 }
 
 .media-empty {
@@ -106,7 +106,7 @@
 }
 
 .media-error {
-  color: #c0392b;
+  color: var(--color-danger);
 }
 
 .media-grid {
@@ -122,16 +122,16 @@
 .media-card {
   display: flex;
   flex-direction: column;
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
   overflow: hidden;
-  background: #fff;
+  background: var(--color-background-soft);
 }
 
 .media-thumb-wrap {
   position: relative;
   aspect-ratio: 4 / 3;
-  background: repeating-conic-gradient(#e8eaed 0% 25%, #f4f5f7 0% 50%) 50% / 18px 18px;
+  background: repeating-conic-gradient(var(--checker-a) 0% 25%, var(--checker-b) 0% 50%) 50% / 18px 18px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -160,18 +160,18 @@
   font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.3px;
-  color: #fff;
-  background: rgba(0, 0, 0, 0.55);
+  color: var(--on-accent);
+  background: var(--badge-generic);
 }
 
 .media-badge-dom {
-  background: rgba(80, 110, 200, 0.85);
+  background: var(--badge-dom);
 }
 .media-badge-net {
-  background: rgba(190, 120, 40, 0.85);
+  background: var(--badge-net);
 }
 .media-badge-dom-net {
-  background: rgba(60, 150, 90, 0.9);
+  background: var(--badge-dom-net);
 }
 
 .media-meta {
@@ -195,9 +195,9 @@
   flex: none;
   width: 24px;
   height: 24px;
-  border: 1px solid rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #fff;
+  background: var(--color-background-soft);
   color: inherit;
   cursor: pointer;
   font-size: 13px;
@@ -212,29 +212,29 @@
 /* Download feedback states. `done` stays readable while disabled-looking; `error`
    is a clear red so a silent failure (streamed/blob media) is visible. */
 .media-download-done {
-  color: #2e9e5b;
-  border-color: rgba(46, 158, 91, 0.5);
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 50%, transparent);
   opacity: 1;
 }
 
 .media-download-error {
-  color: #c0392b;
-  border-color: rgba(192, 57, 43, 0.5);
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 50%, transparent);
   opacity: 1;
 }
 
 /* A streamed video's download button (yt-dlp) — highlighted, as it is the only
    way to save that video. Overridden by the done/error state colors below. */
 .media-download-stream {
-  background: #3a7bd5;
-  border-color: #3a7bd5;
-  color: #fff;
+  background: var(--color-info);
+  border-color: var(--color-info);
+  color: var(--on-accent);
 }
 
 /* Status-bar download indicator (rendered by StatusBar; styled here as it is
    part of the media feature). Shows while a yt-dlp video download runs. */
 .status-downloading {
-  color: #3a7bd5;
+  color: var(--color-info);
   font-variant-numeric: tabular-nums;
 }
 
@@ -246,35 +246,5 @@
   align-self: center;
 }
 
-/* Dark theme — the chrome follows the OS scheme. */
-@media (prefers-color-scheme: dark) {
-  .media-gallery {
-    background: #1c1e22;
-    color: #e6e8ec;
-  }
-  .media-toolbar {
-    background: #24262b;
-    border-bottom-color: rgba(255, 255, 255, 0.08);
-  }
-  .media-filter {
-    border-color: rgba(255, 255, 255, 0.14);
-  }
-  .media-filter.active {
-    background: #2f3340;
-  }
-  .media-btn {
-    background: #2a2d33;
-    border-color: rgba(255, 255, 255, 0.14);
-  }
-  .media-card {
-    background: #24262b;
-    border-color: rgba(255, 255, 255, 0.09);
-  }
-  .media-thumb-wrap {
-    background: repeating-conic-gradient(#2a2d33 0% 25%, #212327 0% 50%) 50% / 18px 18px;
-  }
-  .media-download {
-    background: #2a2d33;
-    border-color: rgba(255, 255, 255, 0.14);
-  }
-}
+/* The gallery now follows Mira's active theme (the tokens above), not the OS
+   color scheme — so it matches the profile theme in both light and dark. */

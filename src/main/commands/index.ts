@@ -15,12 +15,15 @@
 import { buildRegistry, type CommandMap, type CommandRegistryOf } from './registry'
 import type { CommandContext } from './context'
 import { appCommands } from './app'
+import { audioCommands } from './audio'
 import { bookmarksCommands } from './bookmarks'
 import { cookieCommands } from './cookies'
 import { devtoolsCommands } from './devtools'
+import { downloadsCommands } from './downloads'
 import { extensionsCommands } from './extensions'
 import { findCommands } from './find'
 import { folderMenuCommands } from './folder-menu'
+import { forgetCommands } from './forget'
 import { historyCommands } from './history'
 import { inputCommands } from './input'
 import { magnifierCommands } from './magnifier'
@@ -40,6 +43,7 @@ import { tabDetachCommands } from './tab-detach'
 import { tabMemoryCommands } from './tab-memory'
 import { tabMenuCommands } from './tab-menu'
 import { tabsCommands } from './tabs'
+import { themeCommands } from './themes'
 import { toastCommands } from './toast'
 import { tooltipCommands } from './tooltip'
 import { vaultCommands } from './vault'
@@ -49,10 +53,12 @@ import { zenCommands } from './zen'
 export type { CommandContext } from './context'
 export type { NavigableContents, ProfileInfo, CommandResult, CommandHandler } from './registry'
 export type { AppContext } from './app'
+export type { AudioContext } from './audio'
 export type { BookmarkContext } from './bookmarks'
 export type { BookmarkNode, BookmarkUrl, BookmarkFolder, BookmarkTree } from '../bookmark-store'
 export type { CookieContext, CookieSink, ImportCookiesParams } from './cookies'
 export type { DevtoolsContext } from './devtools'
+export type { DownloadsContext, DownloadRecord, DownloadState, DownloadStats } from './downloads'
 export type {
   ExtensionsContext,
   ExtensionInfo,
@@ -100,6 +106,8 @@ export { formatBytes, rankTabMemory, totalDistinctMemory } from './tab-memory'
 export type { TabDetachContext, WindowInfo } from './tab-detach'
 export type { TabMenuContext } from './tab-menu'
 export type { TabsContext, TabInfo, TabKind } from './tabs'
+export type { ThemeContext } from './themes'
+export type { Theme, ThemeInput } from '../theme-store'
 export type { ToastContext } from './toast'
 export type { TooltipContext } from './tooltip'
 export type { VaultContext } from './vault'
@@ -111,12 +119,15 @@ export type CommandRegistry = CommandRegistryOf<CommandContext>
 export function createCommandRegistry(): CommandRegistry {
   const commands: CommandMap<CommandContext> = {
     ...appCommands,
+    ...audioCommands,
     ...bookmarksCommands,
     ...cookieCommands,
     ...devtoolsCommands,
+    ...downloadsCommands,
     ...extensionsCommands,
     ...findCommands,
     ...folderMenuCommands,
+    ...forgetCommands,
     ...historyCommands,
     ...inputCommands,
     ...magnifierCommands,
@@ -136,6 +147,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...tabDetachCommands,
     ...tabMenuCommands,
     ...tabsCommands,
+    ...themeCommands,
     ...toastCommands,
     ...tooltipCommands,
     ...vaultCommands,

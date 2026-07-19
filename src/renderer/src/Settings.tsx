@@ -9,23 +9,25 @@ import { useEffect, useState } from 'react'
 interface Profile {
   id: string
   label: string
-  /** Theme color (#rrggbb) tinting the profile window's chrome, if set. */
+  /** The id of the chrome theme this profile uses (see theme-store.ts). */
+  themeId?: string
+  /** Legacy tint color (#rrggbb) for pre-themes profiles. */
   color?: string
   open: boolean
 }
 
-/** Preset theme colors offered per profile. Must match PROFILE_COLORS in
- * src/main/profile-store.ts (the model also accepts any hex via the bus). */
-const PROFILE_COLORS = [
-  '#4d7cfe',
-  '#8b5cf6',
-  '#ec4899',
-  '#ef4444',
-  '#f97316',
-  '#eab308',
-  '#22c55e',
-  '#14b8a6'
-]
+/** A chrome theme as returned by list-themes. */
+interface ThemeItem {
+  id: string
+  name: string
+  background: string
+  text: string
+  accent?: string
+  wallpaper?: string
+  builtin?: boolean
+}
+
+const DEFAULT_THEME_ID = 'midnight'
 
 /** Thin wrapper around the command bus; every command returns a result object
  * shaped { ok, ... } or { ok: false, error }. */
@@ -230,8 +232,9 @@ function ProfileRow({
   focused,
   encrypted,
   unlocked,
+  themes,
   onRename,
-  onSetColor,
+  onSetTheme,
   onOpen,
   onEncrypt,
   onUnlock,
@@ -243,8 +246,10 @@ function ProfileRow({
   encrypted: boolean
   /** An encrypted profile currently unlocked this session (plaintext live). */
   unlocked: boolean
+  /** Every available theme (built-ins + custom), for the per-profile picker. */
+  themes: ThemeItem[]
   onRename: (label: string) => void
-  onSetColor: (color: string | null) => void
+  onSetTheme: (themeId: string) => void
   onOpen: () => void
   onEncrypt: () => void
   onUnlock: () => void
@@ -254,6 +259,12 @@ function ProfileRow({
   // when the committed label changes, so no prop-sync effect is needed.
   const [label, setLabel] = useState(profile.label)
   const status = profile.open ? (focused ? 'focused' : 'open') : 'closed'
+  // The theme this profile currently resolves to (its themeId, else the default),
+  // for the picker's value and preview dot.
+  const currentTheme =
+    themes.find((t) => t.id === profile.themeId) ??
+    themes.find((t) => t.id === DEFAULT_THEME_ID) ??
+    themes[0] ?? { id: DEFAULT_THEME_ID, name: 'Midnight', background: '#1b1b1f', text: '#ebebeb' }
 
   return (
     <li className="profile-row">
@@ -272,68 +283,75 @@ function ProfileRow({
         spellCheck={false}
         aria-label="Profile name"
       />
-      <div className="profile-colors" role="radiogroup" aria-label="Theme color">
-        {PROFILE_COLORS.map((color) => (
-          <button
-            key={color}
-            role="radio"
-            aria-checked={profile.color === color}
-            className={`profile-color-swatch${profile.color === color ? ' selected' : ''}`}
-            style={{ '--swatch-color': color } as React.CSSProperties}
-            title={color}
-            aria-label={`Theme color ${color}`}
-            onClick={() => onSetColor(profile.color === color ? null : color)}
-          />
-        ))}
-        <button
-          role="radio"
-          aria-checked={!profile.color}
-          className={`profile-color-swatch profile-color-none${profile.color ? '' : ' selected'}`}
-          title="No color"
-          aria-label="No theme color"
-          onClick={() => onSetColor(null)}
+      <div className="profile-theme-pick">
+        <span
+          className="profile-theme-dot"
+          style={
+            { '--dot-bg': currentTheme.background, '--dot-fg': currentTheme.text } as React.CSSProperties
+          }
+          aria-hidden
         />
+        <select
+          className="profile-theme-select"
+          value={currentTheme.id}
+          aria-label="Chrome theme"
+          onChange={(e) => onSetTheme(e.target.value)}
+        >
+          {themes.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
       </div>
       <span className={`profile-status status-${status}`}>{status}</span>
-      {encrypted && (
-        <span className={`vault-badge ${unlocked ? 'unlocked' : 'locked'}`}>
-          {unlocked ? '🔓 Unlocked' : '🔒 Locked'}
-        </span>
-      )}
-      {/* Encrypt: only a plaintext, non-default profile. The default profile has no
-          self-contained dir to vault. Disabled while its window is open (encrypt
-          needs the partition's handles released). */}
-      {!encrypted && profile.id !== 'default' && (
-        <button
-          className="btn btn-ghost"
-          onClick={onEncrypt}
-          disabled={profile.open}
-          title={profile.open ? 'Close its window first' : 'Encrypt this profile'}
-        >
-          Encrypt
-        </button>
-      )}
-      {encrypted && !unlocked && (
-        <button className="btn" onClick={onUnlock}>
-          Unlock
-        </button>
-      )}
-      {encrypted && unlocked && (
-        <button
-          className="btn btn-ghost"
-          onClick={onLock}
-          disabled={profile.open}
-          title={profile.open ? 'Close its window first' : 'Lock this profile'}
-        >
-          Lock
-        </button>
-      )}
-      {/* Open / Focus — hidden while locked (there is nothing to open until unlock). */}
-      {(!encrypted || unlocked) && (
-        <button className="btn btn-ghost" onClick={onOpen}>
-          {profile.open ? 'Focus' : 'Open'}
-        </button>
-      )}
+      {/* Fixed trailing slots so every row shares the same columns (a row missing
+          the Encrypt button must not shift its neighbours' alignment). */}
+      <span className="profile-badge-slot">
+        {encrypted && (
+          <span className={`vault-badge ${unlocked ? 'unlocked' : 'locked'}`}>
+            {unlocked ? '🔓 Unlocked' : '🔒 Locked'}
+          </span>
+        )}
+      </span>
+      <span className="profile-action-slot">
+        {/* Encrypt: only a plaintext, non-default profile. The default profile has no
+            self-contained dir to vault. Disabled while its window is open (encrypt
+            needs the partition's handles released). */}
+        {!encrypted && profile.id !== 'default' && (
+          <button
+            className="btn btn-ghost"
+            onClick={onEncrypt}
+            disabled={profile.open}
+            title={profile.open ? 'Close its window first' : 'Encrypt this profile'}
+          >
+            Encrypt
+          </button>
+        )}
+        {encrypted && !unlocked && (
+          <button className="btn" onClick={onUnlock}>
+            Unlock
+          </button>
+        )}
+        {encrypted && unlocked && (
+          <button
+            className="btn btn-ghost"
+            onClick={onLock}
+            disabled={profile.open}
+            title={profile.open ? 'Close its window first' : 'Lock this profile'}
+          >
+            Lock
+          </button>
+        )}
+      </span>
+      <span className="profile-action-slot">
+        {/* Open / Focus — hidden while locked (there is nothing to open until unlock). */}
+        {(!encrypted || unlocked) && (
+          <button className="btn btn-ghost" onClick={onOpen}>
+            {profile.open ? 'Focus' : 'Open'}
+          </button>
+        )}
+      </span>
     </li>
   )
 }
@@ -421,10 +439,131 @@ function VaultPasswordDialog({
   )
 }
 
+/** Theme manager under the profile list: create a theme from a name + two colors
+ * (+ an optional wallpaper URL), and delete custom ones. Built-ins are read-only.
+ * Every action is a command (create-theme / delete-theme); main pushes
+ * profiles-changed so the parent refetches the theme list. */
+function ThemesManager({
+  themes,
+  onError
+}: {
+  themes: ThemeItem[]
+  onError: (msg: string | null) => void
+}): React.JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [name, setName] = useState('')
+  const [background, setBackground] = useState('#12141a')
+  const [text, setText] = useState('#e8e8ea')
+  const [accent, setAccent] = useState('#6988e6')
+  const [wallpaper, setWallpaper] = useState('')
+
+  const create = async (): Promise<void> => {
+    if (name.trim() === '') {
+      onError('Give the theme a name')
+      return
+    }
+    const res = await run('create-theme', {
+      name: name.trim(),
+      background,
+      text,
+      accent,
+      wallpaper: wallpaper.trim() || null
+    })
+    if (!res.ok) {
+      onError(String(res.error))
+      return
+    }
+    onError(null)
+    setName('')
+    setWallpaper('')
+    setOpen(false)
+  }
+
+  const remove = async (id: string): Promise<void> => {
+    const res = await run('delete-theme', { id })
+    onError(res.ok ? null : String(res.error))
+  }
+
+  return (
+    <div className="themes-manager">
+      <div className="themes-head">
+        <h2 className="themes-title">Themes</h2>
+        <button className="btn btn-ghost" onClick={() => setOpen((o) => !o)}>
+          {open ? 'Close' : 'New theme'}
+        </button>
+      </div>
+      {open && (
+        <div className="theme-form">
+          <input
+            className="settings-input"
+            placeholder="Theme name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            spellCheck={false}
+          />
+          <div className="theme-form-colors">
+            <label className="theme-color-field">
+              Background
+              <input type="color" value={background} onChange={(e) => setBackground(e.target.value)} />
+            </label>
+            <label className="theme-color-field">
+              Text
+              <input type="color" value={text} onChange={(e) => setText(e.target.value)} />
+            </label>
+            <label className="theme-color-field">
+              Accent
+              <input type="color" value={accent} onChange={(e) => setAccent(e.target.value)} />
+            </label>
+          </div>
+          <input
+            className="settings-input"
+            placeholder="Wallpaper URL (optional, http/https)"
+            value={wallpaper}
+            onChange={(e) => setWallpaper(e.target.value)}
+            spellCheck={false}
+          />
+          <div className="theme-form-actions">
+            <button className="btn" onClick={() => void create()}>
+              Create theme
+            </button>
+          </div>
+        </div>
+      )}
+      <ul className="theme-list">
+        {themes.map((t) => (
+          <li key={t.id} className="theme-item">
+            <span
+              className="theme-swatch"
+              style={
+                {
+                  '--sw-bg': t.background,
+                  '--sw-fg': t.text,
+                  '--sw-accent': t.accent ?? t.text
+                } as React.CSSProperties
+              }
+            >
+              Aa
+            </span>
+            <span className="theme-name">{t.name}</span>
+            {t.builtin ? (
+              <span className="theme-tag">built-in</span>
+            ) : (
+              <button className="btn btn-ghost" onClick={() => void remove(t.id)}>
+                Delete
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}
+
 /** The "Profiles" sub-section: the profile manager (list / create / rename / open). */
 function ProfilesSection(): React.JSX.Element {
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [focused, setFocused] = useState<string | null>(null)
+  const [themes, setThemes] = useState<ThemeItem[]>([])
   const [error, setError] = useState<string | null>(null)
   // Vault state, kept as sets for O(1) per-row lookup. Fetched alongside the
   // profile list (list-vaults is the runtime source of encrypted/unlocked).
@@ -437,7 +576,11 @@ function ProfilesSection(): React.JSX.Element {
 
   useEffect(() => {
     const load = async (): Promise<void> => {
-      const [res, vaults] = await Promise.all([run('list-profiles'), run('list-vaults')])
+      const [res, vaults, th] = await Promise.all([
+        run('list-profiles'),
+        run('list-vaults'),
+        run('list-themes')
+      ])
       if (res.ok) {
         setProfiles((res.profiles as Profile[]) ?? [])
         setFocused((res.focused as string | null) ?? null)
@@ -446,6 +589,7 @@ function ProfilesSection(): React.JSX.Element {
         setEncrypted(new Set((vaults.encrypted as string[]) ?? []))
         setUnlocked(new Set((vaults.unlocked as string[]) ?? []))
       }
+      if (th.ok) setThemes((th.themes as ThemeItem[]) ?? [])
     }
     void load()
     // Main pushes on every profile change (create/rename/encrypt/unlock/lock here,
@@ -461,10 +605,10 @@ function ProfilesSection(): React.JSX.Element {
     setError(res.ok ? null : String(res.error))
   }
 
-  const setColor = async (id: string, color: string | null): Promise<void> => {
-    // Main persists, re-tints the profile's open window live, and pushes
-    // profiles-changed — which refetches this list, updating the swatches.
-    const res = await run('set-profile-color', { id, color })
+  const setTheme = async (id: string, themeId: string): Promise<void> => {
+    // Main persists, repaints the profile's open windows live, and pushes
+    // profiles-changed — which refetches this list.
+    const res = await run('set-profile-theme', { id, themeId })
     setError(res.ok ? null : String(res.error))
   }
 
@@ -501,8 +645,8 @@ function ProfilesSection(): React.JSX.Element {
       </div>
       <p className="settings-hint">
         A profile keeps its own cookies. Renaming changes the label only — the session is preserved.
-        The theme color tints the profile window&apos;s chrome, so windows are tellable apart.
-        Encrypting a profile keeps its data in a password-protected vault at rest.
+        Each profile paints its chrome with a theme, so windows are tellable apart. Encrypting a
+        profile keeps its data in a password-protected vault at rest.
       </p>
       {error && <p className="settings-error">{error}</p>}
       <ul className="profile-list">
@@ -513,8 +657,9 @@ function ProfilesSection(): React.JSX.Element {
             focused={p.id === focused}
             encrypted={encrypted.has(p.id)}
             unlocked={unlocked.has(p.id)}
+            themes={themes}
             onRename={(label) => rename(p.id, label)}
-            onSetColor={(color) => void setColor(p.id, color)}
+            onSetTheme={(themeId) => void setTheme(p.id, themeId)}
             onOpen={() => open(p.id)}
             onEncrypt={() => setDialog({ mode: 'encrypt', profile: p })}
             onUnlock={() => setDialog({ mode: 'unlock', profile: p })}
@@ -522,6 +667,7 @@ function ProfilesSection(): React.JSX.Element {
           />
         ))}
       </ul>
+      <ThemesManager themes={themes} onError={setError} />
       {dialog && (
         <VaultPasswordDialog
           mode={dialog.mode}
@@ -810,6 +956,10 @@ function TabsMemorySection(): React.JSX.Element {
 
   useEffect(() => {
     void load()
+    // Opening/closing a profile adds or removes its live views, so re-read the
+    // snapshot on every profile change — otherwise a closed profile's tabs stay
+    // frozen on screen until a manual Refresh.
+    return window.mira.onProfilesChanged(load)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

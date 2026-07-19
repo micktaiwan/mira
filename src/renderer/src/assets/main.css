@@ -1,3 +1,4 @@
+@import './tokens.css';
 @import './base.css';
 @import './tab-folders.css';
 @import './palette.css';
@@ -24,6 +25,44 @@
   height: 100vh;
 }
 
+/* Wallpaper: when the active theme carries one (--wallpaper set + data-wallpaper
+   on <html> by profile-theme.ts), paint it fixed behind everything with a scrim
+   in the surface color so chrome text stays readable. The toolbar/sidebar/status
+   bar go translucent so the image bleeds through them — that's what makes a
+   window instantly recognizable. */
+/* Paint the theme's wallpaper DIRECTLY on the chrome strips (toolbar, sidebar,
+   status bar) — the places that aren't covered by the native web view. Each
+   strip carries the full image with `fixed` attachment so all three line up into
+   one continuous picture across the window. A light tint over it keeps text
+   readable. Painting it on the strips (not behind a translucent panel) makes it
+   actually show — the earlier show-through approach washed out to nothing. */
+:root[data-wallpaper] .toolbar,
+:root[data-wallpaper] .sidebar,
+:root[data-wallpaper] .status-bar {
+  background-image: linear-gradient(
+      color-mix(in srgb, var(--surface) 20%, transparent),
+      color-mix(in srgb, var(--surface) 20%, transparent)
+    ),
+    var(--wallpaper);
+  background-size: cover;
+  background-position: center;
+  background-attachment: fixed;
+  background-repeat: no-repeat;
+}
+
+/* The strip borders are a light hairline in a light theme, which reads as a hard
+   white line breaking the wallpaper. Over a wallpaper, swap them for a faint dark
+   translucent hairline that blends into the texture instead of cutting it. */
+:root[data-wallpaper] .toolbar {
+  border-bottom-color: color-mix(in srgb, var(--text) 10%, transparent);
+}
+:root[data-wallpaper] .sidebar {
+  border-right-color: color-mix(in srgb, var(--text) 10%, transparent);
+}
+:root[data-wallpaper] .status-bar {
+  border-top-color: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
 /* Below the toolbar: the left tab panel, then the region the active tab's
    native WebContentsView covers (offset right by --sidebar-width in main). */
 .body {
@@ -47,7 +86,7 @@
 }
 
 .resize-handle:hover {
-  background: rgba(105, 136, 230, 0.4);
+  background: var(--accent-line);
 }
 
 .resize-handle-sidebar {
@@ -147,7 +186,7 @@ body {
 }
 
 .address-input:focus {
-  border-color: #6988e6;
+  border-color: var(--accent);
 }
 
 /* Star at the end of the toolbar: bookmark / un-bookmark the active tab. It is a
@@ -159,7 +198,7 @@ body {
 }
 
 .star-button.active {
-  color: #e6b325;
+  color: var(--color-warning);
 }
 
 .star-button:disabled {
@@ -269,11 +308,19 @@ body {
 }
 
 .status-tabs {
-  color: rgba(235, 235, 245, 0.75);
+  color: var(--text-muted);
+}
+
+/* Native file-download indicator (StatusBar). Green to distinguish it from the
+   yt-dlp video indicator (blue, .status-downloading); shows while a page-triggered
+   download runs, then vanishes as the completion toast fires. */
+.status-file-download {
+  color: var(--color-success);
+  font-variant-numeric: tabular-nums;
 }
 
 .status-memory {
-  color: rgba(235, 235, 245, 0.75);
+  color: var(--text-muted);
 }
 
 .status-time {
@@ -394,11 +441,11 @@ body {
 }
 
 .tab-row.drop-before {
-  box-shadow: inset 0 2px 0 0 #6988e6;
+  box-shadow: inset 0 2px 0 0 var(--accent);
 }
 
 .tab-row.drop-after {
-  box-shadow: inset 0 -2px 0 0 #6988e6;
+  box-shadow: inset 0 -2px 0 0 var(--accent);
 }
 
 /* The favicon slot: a one-letter badge while the page has no icon (or its icon
@@ -429,6 +476,49 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Speaker icon on a tab that is emitting sound: a monochrome SVG that inherits
+   its color from `color` (currentColor). In a regular row it sits after the title
+   (flex-shrink:0 so it is never clipped by a long title). Muted by default; the
+   active tab's row brightens it like the rest of that row's text. */
+.tab-audio {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  color: var(--ev-c-text-2);
+}
+
+.tab-row.active .tab-audio {
+  color: var(--color-text);
+}
+
+/* On a pinned square (no title, favicon-only) the icon overlaps as a small badge
+   in the bottom-right corner instead of taking a slot. A soft chip behind it so
+   it reads over any favicon. */
+.pinned-tab {
+  position: relative;
+}
+
+.pinned-tab .tab-audio {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding: 1px;
+  border-radius: 5px;
+  background: var(--color-background);
+  color: var(--color-text);
+}
+
+.pinned-tab .tab-audio svg {
+  width: 10px;
+  height: 10px;
+}
+
+/* The toolbar audio button carries the same SVG; center it like the other
+   nav-button glyphs (which are text). */
+.audio-button svg {
+  display: block;
 }
 
 /* ---- Pinned tabs (grid of squares at the head of the tab list) ---------- */
@@ -478,11 +568,11 @@ body {
 }
 
 .pinned-tab.drop-before {
-  box-shadow: inset 2px 0 0 0 #6988e6;
+  box-shadow: inset 2px 0 0 0 var(--accent);
 }
 
 .pinned-tab.drop-after {
-  box-shadow: inset -2px 0 0 0 #6988e6;
+  box-shadow: inset -2px 0 0 0 var(--accent);
 }
 
 /* The badge reads better a notch larger inside a 40px square. */
@@ -515,7 +605,7 @@ body {
 .settings-tabs {
   display: flex;
   gap: 4px;
-  border-bottom: 1px solid var(--color-border, rgba(255, 255, 255, 0.1));
+  border-bottom: 1px solid var(--border-subtle);
   margin-bottom: 16px;
 }
 
@@ -536,7 +626,7 @@ body {
 
 .settings-tab.active {
   color: var(--color-text);
-  border-bottom-color: var(--color-accent, #4a9eff);
+  border-bottom-color: var(--accent);
 }
 
 .settings-section {
@@ -563,8 +653,8 @@ body {
 }
 
 .settings-input {
-  background: var(--color-background-soft, rgba(255, 255, 255, 0.06));
-  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.12));
+  background: var(--color-background-soft);
+  border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--color-text);
   font-size: 13px;
@@ -574,7 +664,7 @@ body {
 }
 
 .settings-input:focus {
-  border-color: var(--color-accent, #4a9eff);
+  border-color: var(--accent);
 }
 
 .settings-header {
@@ -597,7 +687,7 @@ body {
 }
 
 .settings-error {
-  color: #e06666;
+  color: var(--color-danger);
   font-size: 12px;
   margin-bottom: 12px;
 }
@@ -606,19 +696,33 @@ body {
   list-style: none;
   /* Same native <ul> padding reset as .tab-list (base.css resets margin only). */
   padding: 0;
-  display: flex;
-  flex-direction: column;
+  /* Grid so every row shares column tracks: label | theme | status | badge |
+     vault-action | open-action. Each row is a subgrid onto these, so a row
+     missing a button keeps the others aligned across the whole list. */
+  display: grid;
+  grid-template-columns: 1fr max-content max-content max-content max-content max-content;
   gap: 8px;
 }
 
 .profile-row {
-  display: flex;
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: subgrid;
   align-items: center;
   gap: 10px;
   padding: 8px;
   border: 1px solid var(--ev-c-gray-3);
   border-radius: 8px;
   background: var(--color-background-soft);
+}
+
+/* Trailing action slots hold a fixed column even when empty, and right-align
+   their button so all rows' buttons line up on the same edge. */
+.profile-badge-slot,
+.profile-action-slot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
 }
 
 .profile-label-input {
@@ -635,47 +739,151 @@ body {
 }
 
 .profile-label-input:focus {
-  border-color: #6988e6;
+  border-color: var(--accent);
 }
 
-/* Theme-color picker in a profile row: one round swatch per preset color, plus
-   a "none" swatch to clear. The selected one gets a visible ring. */
-.profile-colors {
+/* Per-profile theme picker in a profile row: a small preview dot (the theme's
+   own background + text) beside a native select of every theme. */
+.profile-theme-pick {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex-shrink: 0;
 }
 
-.profile-color-swatch {
+.profile-theme-dot {
   width: 16px;
   height: 16px;
-  padding: 0;
-  border: 1px solid rgba(128, 128, 128, 0.4);
   border-radius: 50%;
-  background: var(--swatch-color, transparent);
+  flex-shrink: 0;
+  border: 1px solid var(--border-strong);
+  background: var(--dot-bg);
+  box-shadow: inset 0 0 0 3px var(--dot-fg);
+}
+
+.profile-theme-select {
+  height: 28px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--color-background-mute);
+  color: var(--color-text);
+  font-size: 12px;
+  cursor: pointer;
+  outline: none;
+}
+
+/* Theme manager block (create / list / delete themes) under the profile list. */
+.themes-manager {
+  margin-top: 24px;
+  border-top: 1px solid var(--border-subtle);
+  padding-top: 16px;
+}
+
+.themes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.themes-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.theme-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--color-background-soft);
+}
+
+.theme-form-colors {
+  display: flex;
+  gap: 16px;
+}
+
+.theme-color-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.theme-color-field input[type='color'] {
+  width: 44px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
   cursor: pointer;
 }
 
-.profile-color-swatch:hover {
-  transform: scale(1.15);
+.theme-form-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
-.profile-color-swatch.selected {
-  box-shadow:
-    0 0 0 2px var(--color-background-soft),
-    0 0 0 4px var(--swatch-color, var(--ev-c-gray-1));
+.theme-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 
-/* The "no color" swatch: an empty circle with a diagonal strike. */
-.profile-color-none {
-  background: linear-gradient(
-    135deg,
-    transparent 44%,
-    var(--ev-c-gray-1) 44%,
-    var(--ev-c-gray-1) 56%,
-    transparent 56%
-  );
+.theme-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--color-background-soft);
+}
+
+/* A theme swatch previews the theme itself: its background, its text ("Aa"), and
+   an accent underline — a mini render, not just a color chip. */
+.theme-swatch {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 24px;
+  border-radius: 5px;
+  border: 1px solid var(--border-strong);
+  background: var(--sw-bg);
+  color: var(--sw-fg);
+  font-size: 11px;
+  font-weight: 700;
+  box-shadow: inset 0 -3px 0 -1px var(--sw-accent);
+}
+
+.theme-name {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text);
+}
+
+.theme-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 1px 8px;
 }
 
 .profile-status {
@@ -686,7 +894,7 @@ body {
 }
 
 .status-focused {
-  color: #6988e6;
+  color: var(--accent);
   font-weight: 600;
 }
 
@@ -888,8 +1096,8 @@ body {
 }
 
 .tab-mem-active {
-  color: #fff;
-  background: #6988e6;
+  color: var(--on-accent);
+  background: var(--accent);
 }
 
 .tab-mem-shared {
@@ -915,10 +1123,10 @@ body {
   flex-shrink: 0;
   height: 30px;
   padding: 0 14px;
-  border: 1px solid #6988e6;
+  border: 1px solid var(--accent);
   border-radius: 6px;
-  background: #6988e6;
-  color: #fff;
+  background: var(--accent);
+  color: var(--on-accent);
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
@@ -935,8 +1143,8 @@ body {
 }
 
 .btn-danger {
-  background: #d9534f;
-  border-color: #d9534f;
+  background: var(--color-danger);
+  border-color: var(--color-danger);
 }
 
 /* Fallback drawn by ErrorBoundary when an uncaught render error would otherwise
@@ -947,8 +1155,8 @@ body {
   inset: 0;
   overflow: auto;
   padding: 24px;
-  background: #1e1e1e;
-  color: #eee;
+  background: var(--color-background);
+  color: var(--color-text);
   font:
     13px/1.5 -apple-system,
     system-ui,
@@ -962,36 +1170,36 @@ body {
 
 .error-boundary p {
   margin: 0 0 16px;
-  color: #aaa;
+  color: var(--text-muted);
 }
 
 .error-boundary pre {
   margin: 0 0 12px;
   padding: 12px;
   border-radius: 6px;
-  background: #2a2a2a;
+  background: var(--color-background-mute);
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .error-boundary-message {
-  color: #ff8a80;
+  color: var(--color-danger);
 }
 
 .error-boundary-stack {
-  color: #888;
+  color: var(--text-faint);
   font-size: 12px;
 }
 
 .error-boundary button {
   padding: 6px 14px;
-  border: 1px solid #555;
+  border: 1px solid var(--border);
   border-radius: 6px;
-  background: #333;
-  color: #eee;
+  background: var(--color-background-mute);
+  color: var(--color-text);
   cursor: pointer;
 }
 
 .error-boundary button:hover {
-  background: #444;
+  background: var(--border);
 }

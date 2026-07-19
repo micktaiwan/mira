@@ -10,6 +10,8 @@
 // favorites tree (see track.md) — but a re-visit / reopen always acts on the
 // window that issued the command, so it lands in the right profile.
 
+import { hostMatchesDomain } from './domain'
+
 /** A visited page. `lastVisited` is an epoch-ms timestamp; `visitCount` grows on
  * every re-visit. `title` is the last non-empty title seen for this url. */
 export interface HistoryEntry {
@@ -57,6 +59,27 @@ export function recordVisit(
 /** The `limit` most-recent entries (the head of the list). */
 export function recentHistory(list: HistoryEntry[], limit: number): HistoryEntry[] {
   return list.slice(0, Math.max(0, limit))
+}
+
+/** Drop every entry whose url belongs to the registrable domain `base` — the
+ * base host itself and all its subdomains (see hostMatchesDomain). Powers the
+ * "forget this site" deep clean: closing a tab wipes its whole domain from
+ * history, not just the exact page. Entries with an unparseable url are kept.
+ * Pure: returns a new list plus how many entries were removed. */
+export function removeHistoryForDomain(
+  list: HistoryEntry[],
+  base: string
+): { list: HistoryEntry[]; removed: number } {
+  const kept = list.filter((e) => {
+    let host: string
+    try {
+      host = new URL(e.url).hostname
+    } catch {
+      return true // unparseable url: never matches a domain, so keep it
+    }
+    return !hostMatchesDomain(host, base)
+  })
+  return { list: kept, removed: list.length - kept.length }
 }
 
 /** Relevance of an entry against a lower-cased query: a title/url prefix beats a

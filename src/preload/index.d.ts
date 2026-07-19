@@ -14,6 +14,9 @@ export interface TabInfo {
   pinned: boolean
   /** Id of the tab folder this tab is in, or null when loose (in no folder). */
   folderId: string | null
+  /** Whether the tab is currently playing sound (live runtime flag, not persisted).
+   * Drives the sidebar's speaker icon and the toolbar audio button. */
+  audible: boolean
 }
 
 /** A tab folder (metadata): the sidebar groups tabs by folderId; this carries the
@@ -79,13 +82,17 @@ export interface MiraAPI {
   command: (name: string, params?: unknown) => Promise<unknown>
   /** Subscribe to this window's profile being relabelled. Returns unsubscribe. */
   onProfileRenamed: (callback: (label: string) => void) => () => void
-  /** Subscribe to this window's profile theme color changing (a hex, or null
-   * when cleared). Returns unsubscribe. */
-  onProfileThemeChanged: (callback: (color: string | null) => void) => () => void
+  /** Subscribe to this window's profile theme changing. The callback receives the
+   * resolved theme object ({ background, text, accent?, wallpaper?, … }), or null
+   * when cleared. Returns unsubscribe. */
+  onProfileThemeChanged: (callback: (theme: unknown) => void) => () => void
   /** Subscribe to the profile set changing (Settings window). Returns unsubscribe. */
   onProfilesChanged: (callback: () => void) => () => void
   /** Subscribe to the web-permission grant log changing (Settings). Returns unsubscribe. */
   onPermissionsChanged: (callback: () => void) => () => void
+  /** Subscribe to the file-downloads list changing (a download starts, progresses,
+   * or finishes) so the status bar can re-poll get-download-stats. Returns unsubscribe. */
+  onDownloadsChanged: (callback: () => void) => () => void
   /** Subscribe to this window's tab strip changing. Returns unsubscribe. */
   onTabsChanged: (callback: (state: TabsState) => void) => () => void
   /** Subscribe to the "focus the address bar" push (new tab opened). Returns unsubscribe. */

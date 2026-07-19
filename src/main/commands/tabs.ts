@@ -35,6 +35,11 @@ export interface TabInfo {
    * tabs by this; folder metadata (title, collapsed, order) rides a separate
    * channel (list-tab-folders + the tabs-changed push). */
   folderId: string | null
+  /** Whether the tab is currently emitting sound (its WebContentsView is audible).
+   * A live runtime flag read from the native view, not persisted metadata: the
+   * sidebar shows a speaker icon for it, and the toolbar audio button lists these
+   * tabs. Always false for an asleep tab (no view to be audible). */
+  audible: boolean
 }
 
 /** Tabs capability slice: create / close / select / list tabs of the target
@@ -85,13 +90,13 @@ export interface TabsContext {
    * asleep or not. No-op at the bottom — no wrap. Returns the newly active id, or
    * null if it could not move. */
   selectNextTab: () => { id: string | null }
-  /** Step BACK through the recently-viewed-tabs history (Cmd+Shift+Left): re-focus
+  /** Step BACK through the recently-viewed-tabs history (Cmd+Alt+Left): re-focus
    * the tab looked at just before the current one. This walks the FOCUS order (the
    * order tabs were activated), not the strip order — like a browser's page
    * back/forward but between tabs, per window, deduplicated. No-op at the oldest end
    * (no wrap). Returns the newly active id, or null if it could not move. */
   recentTabBack: () => { id: string | null }
-  /** Step FORWARD through the recently-viewed-tabs history (Cmd+Shift+Right): the
+  /** Step FORWARD through the recently-viewed-tabs history (Cmd+Alt+Right): the
    * inverse of recentTabBack, re-focusing a more recently viewed tab after stepping
    * back. No-op at the newest end. Returns the newly active id, or null. */
   recentTabForward: () => { id: string | null }
@@ -269,7 +274,7 @@ export const tabsCommands: CommandMap<CommandContext> = {
     }
   },
 
-  // Cmd+Shift+Left: go back through the tabs you've looked at (focus history),
+  // Cmd+Alt+Left: go back through the tabs you've looked at (focus history),
   // not the strip order. A no-op (id:null) at the oldest viewed tab.
   'recent-tab-back': (ctx) => {
     try {
@@ -280,7 +285,7 @@ export const tabsCommands: CommandMap<CommandContext> = {
     }
   },
 
-  // Cmd+Shift+Right: go forward again through the focus history after stepping back.
+  // Cmd+Alt+Right: go forward again through the focus history after stepping back.
   'recent-tab-forward': (ctx) => {
     try {
       const { id } = ctx.recentTabForward()
@@ -379,6 +384,24 @@ export const tabsCommands: CommandMap<CommandContext> = {
       ctx.writeClipboard(id.trim())
       ctx.showToast('Copied!')
       return { ok: true, id: id.trim() }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // Copy the ACTIVE tab's url to the OS clipboard (fired when the address bar takes
+  // focus, so grabbing the current address costs one click). Stays a command so a
+  // socket / MCP client can lift the url too. Refuses with ok:false when there is
+  // no active tab or it has no url yet (a fresh empty tab): copying '' and then
+  // toasting "Copied!" would flash a lie.
+  'copy-active-url': (ctx) => {
+    try {
+      const { tabs, activeId } = ctx.listTabs()
+      const url = tabs.find((t) => t.id === activeId)?.url.trim() ?? ''
+      if (url === '') return { ok: false, error: 'no url to copy' }
+      ctx.writeClipboard(url)
+      ctx.showToast('Copied!')
+      return { ok: true, url }
     } catch (error) {
       return fail(error)
     }

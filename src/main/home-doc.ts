@@ -8,6 +8,8 @@
 //
 // buildHomePage is pure and tested; profiles.ts gathers the stats and interpolates.
 
+import { docThemeVars, type DocTheme } from './doc-theme'
+
 /** The session snapshot the home page renders. All primitives so this file stays
  * decoupled from Electron and the status-domain types — profiles.ts formats the
  * memory text (via formatMemory) and counts the tabs before calling in. */
@@ -22,6 +24,9 @@ export interface HomeStats {
   memoryText: string
   /** How many Electron processes contributed to the memory figure. */
   processCount: number
+  /** The active profile's resolved theme (base colors), so the home page matches
+   * the chrome. Absent falls back to the default dark theme. */
+  theme?: DocTheme
 }
 
 /** A marker embedded in the page as an HTML comment. Its letters survive URL
@@ -60,20 +65,20 @@ export function buildHomePage(stats: HomeStats): string {
 <!--${HOME_MARKER}-->
 <head><meta charset="utf-8"><title>Mira</title><style>
   :root {
-    --bg: #1b1b1f;
-    --card: #222226;
-    --line: #32363f;
-    --t1: rgba(255, 255, 245, 0.86);
-    --t2: rgba(235, 235, 245, 0.6);
-    --t3: rgba(235, 235, 245, 0.38);
-    --accent: #8aa0ff;
+    ${docThemeVars(stats.theme)}
+    --bg: var(--surface);
+    --card: var(--surface-raised);
+    --line: var(--border-subtle);
+    --t1: var(--text);
+    --t2: var(--text-muted);
+    --t3: var(--text-faint);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
     background:
-      radial-gradient(1200px 600px at 50% -10%, rgba(138, 160, 255, 0.10), transparent 60%),
-      radial-gradient(900px 500px at 90% 110%, rgba(138, 160, 255, 0.06), transparent 55%),
+      radial-gradient(1200px 600px at 50% -10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%),
+      radial-gradient(900px 500px at 90% 110%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 55%),
       var(--bg);
     color: var(--t1);
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -95,7 +100,7 @@ export function buildHomePage(stats: HomeStats): string {
   .star {
     width: 34px; height: 34px;
     color: var(--accent);
-    filter: drop-shadow(0 0 14px rgba(138, 160, 255, 0.45));
+    filter: drop-shadow(0 0 14px var(--accent-soft));
     animation: twinkle 4s ease-in-out infinite;
   }
   @keyframes twinkle {
@@ -107,7 +112,7 @@ export function buildHomePage(stats: HomeStats): string {
     font-weight: 600;
     letter-spacing: -0.02em;
     margin: 0;
-    background: linear-gradient(180deg, #fff, #b9c2ff);
+    background: linear-gradient(180deg, var(--text), var(--accent));
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
@@ -128,7 +133,7 @@ export function buildHomePage(stats: HomeStats): string {
     text-align: left;
     transition: border-color 0.2s ease, transform 0.2s ease;
   }
-  .card:hover { border-color: #414853; transform: translateY(-2px); }
+  .card:hover { border-color: var(--border); transform: translateY(-2px); }
   .card .label {
     font-size: 11px;
     text-transform: uppercase;
@@ -188,9 +193,9 @@ export function buildHomePage(stats: HomeStats): string {
     display: inline-block;
     font: 600 11px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
     color: var(--t1);
-    background: #2b2b31;
+    background: var(--surface-mute);
     border: 1px solid var(--line);
-    border-bottom-color: #23262d;
+    border-bottom-color: var(--border);
     border-radius: 6px;
     padding: 2px 6px;
     white-space: nowrap;

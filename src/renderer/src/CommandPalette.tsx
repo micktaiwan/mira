@@ -1,26 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-
-/** One palette row (mirrors PaletteEntry in the main-process registry). Running it
- * is just a registry command, so the chrome holds no palette logic of its own.
- * A `url` marks a navigable row (history / favorite / the typed address): the
- * chrome opens it in the current tab or a new one per mode + Cmd, instead of
- * running `command`. */
-export interface PaletteEntry {
-  id: string
-  title: string
-  subtitle?: string
-  group: 'Skills' | 'Commands' | 'Tabs' | 'Bookmarks' | 'History' | 'Profiles'
-  command: string
-  params?: Record<string, unknown>
-  keywords?: string
-  url?: string
-  shortcut?: string
-}
-
-/** How the palette was opened, which sets the DEFAULT target of a page pick:
- * 'launcher' (Cmd+K) opens a new tab; 'address' (typed in the URL bar) navigates
- * the current tab. Cmd+Enter / Cmd+click flips it either way. */
-type PaletteMode = 'launcher' | 'address'
+import { buildPaletteList, type PaletteEntry, type PaletteMode } from './palette-list'
 
 interface Props {
   /** Dismiss the palette (Esc, backdrop click, or after a pick). The parent tells
@@ -31,10 +10,6 @@ interface Props {
   /** Seed text (what was typed in the URL bar, empty for Cmd+K). */
   initialQuery: string
 }
-
-/** In address mode the palette is an address bar: only navigation targets belong
- * (history / favorites / open tabs), not commands or profile switches. */
-const ADDRESS_GROUPS = new Set<PaletteEntry['group']>(['History', 'Bookmarks', 'Tabs'])
 
 /** Leading glyph per group — pure decoration; the color accent comes from CSS
  * keyed on the row's data-group attribute. */
@@ -47,53 +22,16 @@ const GROUP_ICONS: Record<PaletteEntry['group'], string> = {
   Profiles: '◉'
 }
 
-/** The synthetic top row in address mode: "open exactly what you typed". Its url
- * is the raw query; `navigate` normalizes it (a bare domain → https, otherwise a
- * search), so this covers both "go to a site" and "search the web". */
-function goToEntry(query: string): PaletteEntry {
-  const q = query.trim()
-  return {
-    id: 'address:go',
-    title: q,
-    subtitle: 'Search or open address',
-    group: 'History',
-    command: 'navigate',
-    params: { url: q },
-    url: q
-  }
-}
-
-/** Relevance score of an entry against the lower-cased query: a title prefix beats
- * a title substring beats a match anywhere in the searchable text. 0 = no match. */
-function score(entry: PaletteEntry, q: string): number {
-  const title = entry.title.toLowerCase()
-  if (title.startsWith(q)) return 3
-  if (title.includes(q)) return 2
-  const hay =
-    `${title} ${entry.subtitle ?? ''} ${entry.keywords ?? ''} ${entry.group}`.toLowerCase()
-  return hay.includes(q) ? 1 : 0
-}
-
-/** Filter + rank entries for a query. Empty query keeps the source order; a query
- * ranks the best matches first, ties broken by source order (a stable sort). */
-function filterEntries(entries: PaletteEntry[], query: string): PaletteEntry[] {
-  const q = query.trim().toLowerCase()
-  if (!q) return entries
-  return entries
-    .map((e, i) => ({ e, i, s: score(e, q) }))
-    .filter((x) => x.s > 0)
-    .sort((a, b) => b.s - a.s || a.i - b.i)
-    .map((x) => x.e)
-}
-
 /** The command palette: a searchable overlay listing runnable actions and
  * navigation targets. Picking one runs its registry command on the same bus as
  * the toolbar and socket.
  *
  * Two modes share this surface (see CLAUDE.md "tout pilotable"): 'launcher' (Cmd+K)
  * lists everything and opens picked pages in a NEW tab; 'address' (typed in the URL
- * bar) lists only navigation targets, prepends a "go to / search" row, and opens
- * picks in the CURRENT tab. Cmd+Enter (or Cmd+click) flips the target in both.
+ * bar) lists only navigation targets and opens picks in the CURRENT tab. Both offer
+ * a "go to / search" row for what you typed — leading in address mode, trailing in
+ * launcher. Cmd+Enter (or Cmd+click) flips the target in both. Which rows show up in
+ * which order is buildPaletteList's job (palette-list.ts).
  *
  * The parent mounts this only while open, so its state starts fresh each opening. */
 function CommandPalette({ onClose, mode, initialQuery }: Props): React.JSX.Element {
@@ -126,13 +64,7 @@ function CommandPalette({ onClose, mode, initialQuery }: Props): React.JSX.Eleme
     })()
   }, [])
 
-  const filtered = useMemo(() => {
-    // Address mode narrows to navigation targets and prepends the "go to" row.
-    const source = mode === 'address' ? entries.filter((e) => ADDRESS_GROUPS.has(e.group)) : entries
-    const ranked = filterEntries(source, query)
-    if (mode === 'address' && query.trim() !== '') return [goToEntry(query), ...ranked]
-    return ranked
-  }, [entries, query, mode])
+  const filtered = useMemo(() => buildPaletteList(entries, query, mode), [entries, query, mode])
 
   // Clamp the selection at read time so a shrinking list never leaves it out of
   // range (avoids a setState-in-effect just to re-clamp).

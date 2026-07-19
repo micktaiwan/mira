@@ -89,6 +89,35 @@ describe('copy-tab-id', () => {
   })
 })
 
+describe('copy-active-url', () => {
+  it("writes the active tab's url to the clipboard and flashes a toast", () => {
+    const { ctx, clipboardWrites, toasts } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', { url: 'https://example.com/x' }, ctx)
+    expect(registry.execute('copy-active-url', {}, ctx)).toEqual({
+      ok: true,
+      url: 'https://example.com/x'
+    })
+    expect(clipboardWrites).toEqual(['https://example.com/x'])
+    expect(toasts).toEqual(['Copied!'])
+  })
+
+  it('copies nothing and stays silent when there is no url to copy', () => {
+    // The address bar fires this on focus, which includes the case where nothing
+    // is active: an empty clipboard write plus a "Copied!" toast would be a
+    // visible lie.
+    const { ctx, clipboardWrites, toasts } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('close-tab', { id: 'tab-1' }, ctx) // no tab left → nothing active
+    expect(registry.execute('copy-active-url', {}, ctx)).toEqual({
+      ok: false,
+      error: 'no url to copy'
+    })
+    expect(clipboardWrites).toEqual([])
+    expect(toasts).toEqual([])
+  })
+})
+
 describe('close-tab', () => {
   it('closes the active tab and activates its neighbor', () => {
     const { ctx, tabState } = makeContext()
