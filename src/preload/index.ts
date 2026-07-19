@@ -23,11 +23,11 @@ const mira = {
     ipcRenderer.on('mira:profile-renamed', listener)
     return () => ipcRenderer.removeListener('mira:profile-renamed', listener)
   },
-  // Main pushes the new theme color (a hex, or null when cleared) when this
-  // window's profile color changes, so the chrome re-tints without a reload.
-  // Returns an unsubscribe function.
-  onProfileThemeChanged: (callback: (color: string | null) => void): (() => void) => {
-    const listener = (_event: unknown, color: string | null): void => callback(color)
+  // Main pushes the profile's resolved theme (a small color object, or null when
+  // cleared) when it changes, so the chrome repaints without a reload. Returns an
+  // unsubscribe function.
+  onProfileThemeChanged: (callback: (theme: unknown) => void): (() => void) => {
+    const listener = (_event: unknown, theme: unknown): void => callback(theme)
     ipcRenderer.on('mira:profile-theme', listener)
     return () => ipcRenderer.removeListener('mira:profile-theme', listener)
   },
@@ -45,6 +45,14 @@ const mira = {
     const listener = (): void => callback()
     ipcRenderer.on('mira:permissions-changed', listener)
     return () => ipcRenderer.removeListener('mira:permissions-changed', listener)
+  },
+  // Main pings the profile's windows whenever a file download changes (starts,
+  // progresses, finishes), so the status bar re-polls its download stats without a
+  // busy timer. Returns an unsubscribe function.
+  onDownloadsChanged: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('mira:downloads-changed', listener)
+    return () => ipcRenderer.removeListener('mira:downloads-changed', listener)
   },
   // Main pushes this window's tab strip (tabs, active id, panel state) on every
   // change — the chrome holds no tab state, it just renders what main sends.

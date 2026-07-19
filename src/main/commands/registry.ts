@@ -27,11 +27,12 @@ export interface NavigableContents {
   setZoomLevel: (level: number) => unknown
 }
 
-/** A profile as seen by a command: a stable id, its display label, and its
- * optional theme color (a #rrggbb hex tinting the profile window's chrome). */
+/** A profile as seen by a command: a stable id, its display label, the id of
+ * its chrome theme (see theme-store.ts), and an optional legacy tint color. */
 export interface ProfileInfo {
   id: string
   label: string
+  themeId?: string
   color?: string
 }
 

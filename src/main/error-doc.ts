@@ -8,6 +8,8 @@
 // buildErrorPage / errorPageUrl are pure and tested; profiles.ts listens to
 // did-fail-load and calls in (see wireView).
 
+import { docThemeVars, type DocTheme } from './doc-theme'
+
 /** What profiles.ts knows about a failed load, straight from did-fail-load. */
 export interface LoadError {
   /** The URL whose load failed (did-fail-load's validatedURL). */
@@ -16,6 +18,9 @@ export interface LoadError {
   errorCode: number
   /** Chromium error name, e.g. "ERR_NAME_NOT_RESOLVED". */
   errorDescription: string
+  /** The active profile's resolved theme, so the error page matches the chrome.
+   * Absent falls back to the default dark theme. */
+  theme?: DocTheme
 }
 
 /** A marker embedded in the page as an HTML comment. Its letters survive URL
@@ -104,19 +109,19 @@ export function buildErrorPage(err: LoadError): string {
 <!--${ERROR_MARKER}-->
 <head><meta charset="utf-8"><title>${escapeHtml(headline)}</title><style>
   :root {
-    --bg: #1b1b1f;
-    --card: #222226;
-    --line: #32363f;
-    --t1: rgba(255, 255, 245, 0.86);
-    --t2: rgba(235, 235, 245, 0.6);
-    --t3: rgba(235, 235, 245, 0.38);
-    --accent: #8aa0ff;
+    ${docThemeVars(err.theme)}
+    --bg: var(--surface);
+    --card: var(--surface-raised);
+    --line: var(--border-subtle);
+    --t1: var(--text);
+    --t2: var(--text-muted);
+    --t3: var(--text-faint);
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
   body {
     background:
-      radial-gradient(1200px 600px at 50% -10%, rgba(138, 160, 255, 0.08), transparent 60%),
+      radial-gradient(1200px 600px at 50% -10%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 60%),
       var(--bg);
     color: var(--t1);
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;

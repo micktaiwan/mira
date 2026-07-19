@@ -14,5 +14,17 @@
          and no prompt ever appears (verified from a live locationd capture). -->
     <key>com.apple.security.personal-information.location</key>
     <true/>
+    <!-- Required so the hardened runtime lets AVFoundation DELIVER camera/mic
+         frames. Without these, the exact same failure mode as location above:
+         getUserMedia resolves and the MediaStreamTrack reports readyState "live",
+         but macOS silently delivers ZERO frames — the <video> stays 0x0/readyState 0
+         and MediaStreamTrackProcessor emits no frame (verified live on the packaged
+         build). The NSCamera/NSMicrophoneUsageDescription strings (Info.plist, see
+         electron-builder.yml extendInfo) are NOT enough on a hardened runtime; the
+         entitlement is the missing half. -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
   </dict>
 </plist>

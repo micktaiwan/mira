@@ -8,7 +8,7 @@ import ResizeHandle from './ResizeHandle'
 import ExtensionActions from './features/extensions/ExtensionActions'
 import FindBar from './features/find/FindBar'
 import MediaGallery from './features/media/MediaGallery'
-import { applyProfileColor, initialProfileColor } from './features/profile-theme/profile-theme'
+import { applyTheme, initialTheme } from './features/profile-theme/profile-theme'
 import type { SkillPaneState, TabFolder } from '../../preload/index.d'
 
 // Panel width bounds — must match SIDEBAR_WIDTH / SKILL_PANE_WIDTH in
@@ -124,11 +124,12 @@ function App(): React.JSX.Element {
   const [sidebarWidth, setSidebarWidth] = useState(240)
   const [skillPaneWidth, setSkillPaneWidth] = useState(360)
 
-  // Tint the chrome with this window's profile color: seeded from the chrome
-  // URL (?color=…), re-tinted live when it changes in Settings.
+  // Paint the chrome with this window's profile theme: seeded from the chrome
+  // URL (?theme=…) before first paint, repainted live when it changes in
+  // Settings or over the socket.
   useEffect(() => {
-    applyProfileColor(initialProfileColor())
-    return window.mira.onProfileThemeChanged(applyProfileColor)
+    applyTheme(initialTheme())
+    return window.mira.onProfileThemeChanged(applyTheme)
   }, [])
 
   // Mirror the active tab's URL into the bar, unless the user is editing it.
@@ -140,7 +141,15 @@ function App(): React.JSX.Element {
     // same-tab push (live title/favicon) do we keep the field's edits untouched.
     const tabChanged = nextActiveId !== syncedActiveIdRef.current
     syncedActiveIdRef.current = nextActiveId
-    const barFocused = document.activeElement === addressInputRef.current
+    // "Editing" means the chrome genuinely holds focus AND the bar is the active
+    // element — not just that it's activeElement. A WebContentsView is a native
+    // layer, not a DOM node: clicking into the page (e.g. a YouTube video, which
+    // then navigates in-page) steals OS focus without firing a DOM blur, so
+    // document.activeElement stays the address input. Without the hasFocus() gate
+    // that stale focus would wrongly suppress the URL sync, and the bar would keep
+    // showing the old page after every same-tab (SPA) navigation.
+    const barFocused =
+      document.hasFocus() && document.activeElement === addressInputRef.current
     if (shouldSyncAddressBar(tabChanged, barFocused)) setUrl(active)
   }
 
@@ -458,6 +467,12 @@ function App(): React.JSX.Element {
                   query: v
                 })
               }}
+              onFocus={(e) => {
+                // Focusing the bar selects the whole address so lifting it costs
+                // one Cmd+C. We do NOT copy on focus: that clobbered the clipboard
+                // and broke the inverse case (clicking the bar to paste a url).
+                e.target.select()
+              }}
               onBlur={() => setUrl(activeUrlRef.current)}
               spellCheck={false}
               autoComplete="off"
@@ -469,6 +484,35 @@ function App(): React.JSX.Element {
             starts fresh each time; sits in the toolbar row, beside the address
             bar (an overlay over the page would be hidden by the native view). */}
           {findOpen && <FindBar focusSeq={findFocusSeq} onClose={closeFindBar} />}
+          {/* Audio button: appears only while at least one tab is playing sound.
+            Clicking pops a native menu listing those tabs (show-audio-menu);
+            picking one focuses it. A native menu, not a CSS popover, so it is not
+            clipped by the WebContentsView (main-native-gotchas #3). */}
+          {tabs.some((t) => t.audible) && (
+            <button
+              type="button"
+              className="nav-button audio-button"
+              title="Tabs playing audio"
+              aria-label="Tabs playing audio"
+              onClick={() => window.mira.command('show-audio-menu')}
+            >
+              <svg width="17" height="17" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <path d="M8 2.6 4.4 5.5H1.9v5h2.5L8 13.4z" fill="currentColor" />
+                <path
+                  d="M10.6 6a2.6 2.6 0 0 1 0 4"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                />
+                <path
+                  d="M12.3 4.1a5 5 0 0 1 0 7.8"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+          )}
           <button
             type="button"
             className={`nav-button star-button${currentBookmark ? ' active' : ''}`}

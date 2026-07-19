@@ -26,6 +26,7 @@ import {
   parseProfileArg,
   type Profile
 } from './profile-store'
+import { normalizeThemes, type Theme } from './theme-store'
 import { normalizeSessions, type PersistedSessions } from './session-store'
 import { normalizeBookmarks, type BookmarkTree } from './bookmark-store'
 import { normalizeHistory, type HistoryEntry } from './history-store'
@@ -90,16 +91,20 @@ const STATUS_BAR_HEIGHT = 24
 function loadRenderer(
   window: BrowserWindow,
   profile: Profile,
-  effectivePartition: string | undefined
+  effectivePartition: string | undefined,
+  theme: Theme
 ): void {
   // The default profile lives on the default session, which has no partition
   // name — pass the alias the resolver in extensions.ts maps back to it. For an
   // unlocked encrypted profile `effectivePartition` is its per-unlock nonce
   // partition, so <browser-action-list> binds to the SAME session the tabs use.
   const partition = effectivePartition ?? partitionForId(profile.id) ?? DEFAULT_SESSION_ALIAS
+  // The resolved theme is baked into the chrome URL so it applies before first
+  // paint (no flash of the default dark theme). Live changes arrive later via the
+  // mira:profile-theme push (see profile-theme.ts).
   const search =
     `profile=${encodeURIComponent(profile.id)}&label=${encodeURIComponent(profile.label)}&partition=${encodeURIComponent(partition)}` +
-    (profile.color ? `&color=${encodeURIComponent(profile.color)}` : '')
+    `&theme=${encodeURIComponent(JSON.stringify(theme))}`
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     window.loadURL(`${process.env['ELECTRON_RENDERER_URL']}?${search}`)
   } else {
@@ -150,6 +155,15 @@ app.whenReady().then(async () => {
 
   // App user model id (Windows taskbar grouping; harmless on macOS).
   electronApp.setAppUserModelId('com.mira.app')
+
+  // NOTE: enabling the macOS Touch ID platform authenticator for WebAuthn
+  // (app.configureWebAuthn + a keychain-access-groups entitlement) is what makes
+  // isUserVerifyingPlatformAuthenticatorAvailable() true and gives sites like Google
+  // Photos' locked folder an instant Touch ID prompt instead of a slow ~10s passkey
+  // probe. It's NOT wired up because the keychain-access-groups entitlement is
+  // AMFI-restricted: on this Apple Development signing with no provisioning profile,
+  // any binary carrying it is SIGKILLed at launch (verified 2026-07-19). It needs an
+  // embedded macOS provisioning profile that authorizes the keychain group first.
 
   // Present as a plain Chrome, not an Electron app. Electron's default UA appends
   // "<appName>/<version> Electron/<version>" tokens (here "Mira/1.0.0 Electron/41…"),
@@ -205,6 +219,24 @@ app.whenReady().then(async () => {
       writeFileSync(profilesPath, JSON.stringify(profiles, null, 2))
     } catch (error) {
       console.error('[mira] failed to persist profiles', error)
+    }
+  }
+
+  // Custom chrome themes are persisted to userData/themes.json (built-ins live in
+  // code and are never written). Bad/missing file degrades to just the built-ins.
+  const themesPath = join(app.getPath('userData'), 'themes.json')
+  const loadThemes = (): Theme[] => {
+    try {
+      return normalizeThemes(JSON.parse(readFileSync(themesPath, 'utf8')))
+    } catch {
+      return normalizeThemes([])
+    }
+  }
+  const persistThemes = (themes: Theme[]): void => {
+    try {
+      writeFileSync(themesPath, JSON.stringify(themes, null, 2))
+    } catch (error) {
+      console.error('[mira] failed to persist themes', error)
     }
   }
 
@@ -356,6 +388,8 @@ app.whenReady().then(async () => {
     ...(process.platform === 'linux' ? { icon } : {}),
     initialProfiles: loadProfiles(),
     persist: persistProfiles,
+    initialThemes: loadThemes(),
+    persistThemes,
     initialSessions: loadSessions(),
     persistSessions,
     loadProfileBookmarks,
@@ -443,6 +477,7 @@ app.whenReady().then(async () => {
       newTab: () => runDetached('new-tab', {}, profiles.contextForFocused()),
       duplicateTab: () => runDetached('duplicate-active-tab', {}, profiles.contextForFocused()),
       closeTab: () => runDetached('close-active-tab', {}, profiles.contextForFocused()),
+      forgetSite: () => runDetached('forget-site', {}, profiles.contextForFocused()),
       reopenTab: () => runDetached('reopen-closed-tab', {}, profiles.contextForFocused()),
       discardTab: () => runDetached('discard-active-tab', {}, profiles.contextForFocused()),
       wakeAllTabs: () => runDetached('wake-all-tabs', {}, profiles.contextForFocused()),

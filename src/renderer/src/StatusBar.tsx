@@ -39,6 +39,12 @@ interface Status {
   downloads: number
   /** Epoch ms the earliest active download started, for the elapsed clock. */
   downloadingSince: number | null
+  /** Native browser file downloads in flight (a page-triggered file save, distinct
+   * from the yt-dlp video grabs) — the "know when a download finishes" indicator. */
+  files: number
+  /** Aggregate percent across the in-flight file downloads, or null when the
+   * server(s) sent no size. */
+  filePercent: number | null
 }
 
 const EMPTY: Status = {
@@ -51,7 +57,9 @@ const EMPTY: Status = {
   mediaCount: null,
   mediaText: '',
   downloads: 0,
-  downloadingSince: null
+  downloadingSince: null,
+  files: 0,
+  filePercent: null
 }
 
 /** m:ss for an elapsed-ms span. */
@@ -116,10 +124,11 @@ export default function StatusBar(): React.JSX.Element {
     let alive = true
     let debounce: ReturnType<typeof setTimeout> | null = null
     const poll = async (): Promise<void> => {
-      const [res, cookieRes, mediaRes] = (await Promise.all([
+      const [res, cookieRes, mediaRes, dlRes] = (await Promise.all([
         window.mira.command('get-status'),
         window.mira.command('count-active-cookies'),
-        window.mira.command('get-media-stats')
+        window.mira.command('get-media-stats'),
+        window.mira.command('get-download-stats')
       ])) as [
         {
           ok: boolean
@@ -135,9 +144,17 @@ export default function StatusBar(): React.JSX.Element {
           text?: string
           downloads?: number
           downloadingSince?: number | null
+        },
+        {
+          ok: boolean
+          active?: number
+          receivedBytes?: number
+          totalBytes?: number
         }
       ]
       if (!alive || !res.ok) return
+      const totalBytes = dlRes.ok ? (dlRes.totalBytes ?? 0) : 0
+      const receivedBytes = dlRes.ok ? (dlRes.receivedBytes ?? 0) : 0
       setStatus({
         memoryText: res.memoryText ?? '',
         processes: res.memory?.processes ?? null,
@@ -148,7 +165,10 @@ export default function StatusBar(): React.JSX.Element {
         mediaCount: mediaRes.ok ? (mediaRes.count ?? null) : null,
         mediaText: mediaRes.ok ? (mediaRes.text ?? '') : '',
         downloads: mediaRes.ok ? (mediaRes.downloads ?? 0) : 0,
-        downloadingSince: mediaRes.ok ? (mediaRes.downloadingSince ?? null) : null
+        downloadingSince: mediaRes.ok ? (mediaRes.downloadingSince ?? null) : null,
+        files: dlRes.ok ? (dlRes.active ?? 0) : 0,
+        filePercent:
+          totalBytes > 0 ? Math.min(100, Math.round((receivedBytes / totalBytes) * 100)) : null
       })
     }
     // get-status walks every process (getAppMetrics), so coalesce bursts of tab
@@ -164,12 +184,22 @@ export default function StatusBar(): React.JSX.Element {
     // Poll memory on a slow timer; re-poll (debounced) when the tab strip changes
     // so the tab counts stay live (open / close / wake a tab).
     const id = setInterval(() => void poll(), 5000)
-    const unsub = window.mira.onTabsChanged(() => pollSoon())
+    // Feature-detect the preload subscriptions: during dev, React Fast Refresh can
+    // swap in newer renderer code while the window still holds an older preload
+    // bundle (preload only re-runs on a full page reload / window recreation). A
+    // missing method must degrade to a no-op, never blank the whole chrome.
+    const subscribe = (fn?: (cb: () => void) => () => void): (() => void) =>
+      fn ? fn(() => pollSoon()) : () => {}
+    const unsub = subscribe(window.mira.onTabsChanged)
+    // A download starting / progressing / finishing pushes this, so the indicator
+    // updates promptly instead of waiting for the 5s memory tick.
+    const unsubDl = subscribe(window.mira.onDownloadsChanged)
     return () => {
       alive = false
       clearInterval(id)
       if (debounce) clearTimeout(debounce)
       unsub()
+      unsubDl()
     }
   }, [])
 
@@ -202,6 +232,20 @@ export default function StatusBar(): React.JSX.Element {
     void window.mira.command('hide-tooltip')
   }
 
+  // Reveal the most recent download in Finder (open it if it already completed) —
+  // the status indicator's click target. Resolves the id via list-downloads so the
+  // bar holds no download state itself.
+  const revealLatestDownload = async (): Promise<void> => {
+    const res = (await window.mira.command('list-downloads')) as {
+      ok: boolean
+      downloads?: Array<{ id: string; state: string }>
+    }
+    const latest = res.ok ? res.downloads?.[0] : undefined
+    if (!latest) return
+    const command = latest.state === 'completed' ? 'open-download' : 'reveal-download'
+    void window.mira.command(command, { id: latest.id })
+  }
+
   const {
     tabs,
     processes,
@@ -210,7 +254,9 @@ export default function StatusBar(): React.JSX.Element {
     mediaCount,
     mediaText,
     downloads,
-    downloadingSince
+    downloadingSince,
+    files,
+    filePercent
   } = status
 
   // Tick the elapsed clock every second while a download runs (the memory poll
@@ -238,6 +284,26 @@ export default function StatusBar(): React.JSX.Element {
     <div className="status-bar">
       {hoverUrl && <span className="status-item status-hover-url">{hoverUrl}</span>}
       <div className="status-right">
+        {files > 0 && (
+          <span
+            className="status-item status-file-download status-clickable"
+            onMouseEnter={(e) =>
+              show(
+                e.currentTarget,
+                `Downloading ${files} file${files > 1 ? 's' : ''} to Downloads${
+                  filePercent != null ? ` — ${filePercent}%` : ''
+                }. Click to reveal the latest.`
+              )
+            }
+            onMouseLeave={hide}
+            onClick={() => {
+              hide()
+              void revealLatestDownload()
+            }}
+          >
+            {filePercent != null ? `⬇ ${filePercent}%` : `⬇ ${files}`}
+          </span>
+        )}
         {downloads > 0 && (
           <span
             className="status-item status-downloading status-clickable"

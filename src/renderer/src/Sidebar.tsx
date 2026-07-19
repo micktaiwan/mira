@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type DragEvent } from 'react'
 import FolderHeader, { type TabFolder } from './features/tab-folders/FolderHeader'
+import { planDrop, sameDropZone, type DropPos } from './sidebar-drag'
 
 // One tab as the chrome renders it. Structurally identical to the registry's
 // TabInfo and the pushed TabsState; kept local to the renderer (like App's and
@@ -18,6 +19,34 @@ export interface TabInfo {
   /** Id of the tab folder this tab is in, or null when loose (in no folder). The
    * sidebar groups tabs by this into the folders section vs the loose list. */
   folderId: string | null
+  /** Whether the tab is currently playing sound: shows a speaker icon on the row
+   * (and the pinned square). Live runtime flag, not persisted. */
+  audible: boolean
+}
+
+/** The speaker icon shown on a tab that is emitting sound. A monochrome inline
+ * SVG (currentColor) to match Mira's glyph chrome — no colored emoji. Rendered in
+ * the row (after the title) and as a corner badge on pinned squares. */
+function AudioIcon(): React.JSX.Element {
+  return (
+    <span className="tab-audio" aria-label="Playing audio" title="Playing audio">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+        <path d="M8 2.6 4.4 5.5H1.9v5h2.5L8 13.4z" fill="currentColor" />
+        <path
+          d="M10.6 6a2.6 2.6 0 0 1 0 4"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinecap="round"
+        />
+        <path
+          d="M12.3 4.1a5 5 0 0 1 0 7.8"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinecap="round"
+        />
+      </svg>
+    </span>
+  )
 }
 
 // The vertical tab panel on the left (Arc-style). Pure presentation: it holds no
@@ -74,8 +103,6 @@ function Favicon({ tab }: { tab: TabInfo }): React.JSX.Element {
     />
   )
 }
-
-type DropPos = 'before' | 'after'
 
 // One pinned tab: a compact square (favicon only) in the wrapping grid at the
 // head of the strip. Click selects it. Deliberately no close button — Cmd+W
@@ -135,17 +162,22 @@ function PinnedSquare({
       }}
       onDragOver={(e: DragEvent<HTMLLIElement>) => {
         e.preventDefault()
+        // Let the tile's own before/after win over the grid's "drop at the end"
+        // fallback (the grid catches only the empty trailing space).
+        e.stopPropagation()
         e.dataTransfer.dropEffect = 'move'
         const rect = e.currentTarget.getBoundingClientRect()
         onDragOver(e.clientX < rect.left + rect.width / 2 ? 'before' : 'after')
       }}
       onDrop={(e) => {
         e.preventDefault()
+        e.stopPropagation()
         onDrop()
       }}
       onDragEnd={onDragEnd}
     >
       <Favicon tab={tab} />
+      {tab.audible && <AudioIcon />}
     </li>
   )
 }
@@ -229,6 +261,7 @@ function TabRow({
       <span className="tab-title">
         {isSettings ? 'Settings' : tab.title || tab.url || 'New tab'}
       </span>
+      {tab.audible && <AudioIcon />}
     </li>
   )
 }
@@ -337,24 +370,24 @@ function Sidebar({
 
   const commitDrop = (): void => {
     if (draggingId && dropTarget) {
-      const dragged = tabs.find((t) => t.id === draggingId)
-      const over = tabs.find((t) => t.id === dropTarget.id)
-      if (dragged && over) {
-        // Dropped onto a row of another section → first change membership (join the
-        // target's folder, or go loose). Then, in BOTH cases, reorder to the drop
-        // position so the tab lands exactly where it was dropped (membership alone
-        // leaves it at its old strip index, i.e. at the end of the target folder).
-        if ((dragged.folderId ?? null) !== (over.folderId ?? null)) {
-          onMoveTabToFolder(draggingId, over.folderId ?? null)
-        }
-        const from = tabs.findIndex((t) => t.id === draggingId)
-        const overIndex = tabs.findIndex((t) => t.id === dropTarget.id)
-        const insertBefore = dropTarget.pos === 'before' ? overIndex : overIndex + 1
-        const toIndex = from < insertBefore ? insertBefore - 1 : insertBefore
-        if (toIndex !== from) onMove(draggingId, toIndex)
+      // planDrop owns the drop math AND the pinned-boundary guard: a cross-boundary
+      // drop returns null (a clean no-op) instead of a store-clamped surprise.
+      const plan = planDrop(tabs, draggingId, dropTarget)
+      if (plan) {
+        if (plan.moveToFolder) onMoveTabToFolder(plan.moveToFolder.tabId, plan.moveToFolder.folderId)
+        if (plan.move) onMove(plan.move.id, plan.move.toIndex)
       }
     }
     reset()
+  }
+
+  // Set the drop indicator on a hovered tab — but only when it shares the dragged
+  // tab's zone. A cross-boundary hover (pinned tile over a regular row, or the
+  // reverse) draws no line, since planDrop would no-op it anyway.
+  const setDropOn = (target: TabInfo, pos: DropPos): void => {
+    const dragged = draggingId ? tabs.find((t) => t.id === draggingId) : null
+    if (dragged && !sameDropZone(dragged, target)) return
+    setDropTarget({ id: target.id, pos })
   }
 
   // Drop a dragged tab onto a folder header → move it into that folder.
@@ -375,7 +408,7 @@ function Sidebar({
       onSelect={() => onSelect(t.id)}
       onContextMenu={() => onContextMenu(t.id)}
       onDragStart={() => setDraggingId(t.id)}
-      onDragOver={(pos) => setDropTarget({ id: t.id, pos })}
+      onDragOver={(pos) => setDropOn(t, pos)}
       onDrop={commitDrop}
       onDragEnd={handleDragEnd}
     />
@@ -387,7 +420,26 @@ function Sidebar({
         <span className="sidebar-new-plus">+</span> New tab
       </button>
       {pinnedTabs.length > 0 && (
-        <ul className="pinned-grid">
+        <ul
+          className="pinned-grid"
+          // The grid's empty trailing space (past the last tile, common once it
+          // wraps) is a drop target too: dropping a pinned tile there sends it to
+          // the end of the pinned block. Tiles stopPropagation, so this fires only
+          // for the gap. Guarded to pinned drags — a regular tab can't land here.
+          onDragOver={(e) => {
+            if (!draggingId) return
+            const dragged = tabs.find((t) => t.id === draggingId)
+            if (!dragged?.pinned) return
+            e.preventDefault()
+            e.dataTransfer.dropEffect = 'move'
+            const last = pinnedTabs[pinnedTabs.length - 1]
+            if (last) setDropTarget({ id: last.id, pos: 'after' })
+          }}
+          onDrop={(e) => {
+            e.preventDefault()
+            commitDrop()
+          }}
+        >
           {pinnedTabs.map((t) => (
             <PinnedSquare
               key={t.id}
@@ -398,7 +450,7 @@ function Sidebar({
               onSelect={() => onSelect(t.id)}
               onContextMenu={() => onContextMenu(t.id)}
               onDragStart={() => setDraggingId(t.id)}
-              onDragOver={(pos) => setDropTarget({ id: t.id, pos })}
+              onDragOver={(pos) => setDropOn(t, pos)}
               onDrop={commitDrop}
               onDragEnd={handleDragEnd}
             />
@@ -424,6 +476,9 @@ function Sidebar({
               // propagation); this catches drops on the header and empty space.
               onDragOver={(e) => {
                 if (!draggingId) return
+                // A pinned tab never enters a folder (main no-ops it) — don't
+                // highlight the folder as a drop target for one.
+                if (tabs.find((t) => t.id === draggingId)?.pinned) return
                 e.preventDefault()
                 e.dataTransfer.dropEffect = 'move'
                 setDropFolderId(f.id)
@@ -449,6 +504,11 @@ function Sidebar({
             </div>
           ))}
         </div>
+      )}
+      {/* A visible rule between the folders section and the loose tabs, so the
+          two groups read as distinct. Only when both sides have content. */}
+      {folders.length > 0 && looseTabs.length > 0 && (
+        <div className="tab-folders-divider" role="separator" />
       )}
       <ul className="tab-list">{looseTabs.map(renderRow)}</ul>
     </nav>

@@ -10,7 +10,13 @@
 export interface Profile {
   id: string
   label: string
-  /** Theme color as a #rrggbb hex, or absent for the neutral chrome. */
+  /** The id of the theme this profile paints its chrome with (see
+   * theme-store.ts). Absent falls back to the default theme, or to a legacy
+   * `color` if one is still set. */
+  themeId?: string
+  /** Legacy theme color as a #rrggbb hex — pre-themes profiles. Kept so old
+   * profiles keep a distinct tint until re-themed; resolved via
+   * resolveProfileTheme. New code sets `themeId`, not this. */
   color?: string
   /** True when this profile is password-protected: its data (partition + trails)
    * lives in an encrypted vault at rest and must be unlocked (mounted + copied out)
@@ -64,9 +70,10 @@ export function normalizeProfiles(raw: unknown): Profile[] {
   const list = Array.isArray(raw) ? raw : []
   for (const item of list) {
     if (!item || typeof item !== 'object') continue
-    const { id, label, color, encrypted } = item as {
+    const { id, label, themeId, color, encrypted } = item as {
       id?: unknown
       label?: unknown
+      themeId?: unknown
       color?: unknown
       encrypted?: unknown
     }
@@ -74,10 +81,11 @@ export function normalizeProfiles(raw: unknown): Profile[] {
     if (typeof label !== 'string' || label.trim() === '') continue
     if (seen.has(id)) continue
     seen.add(id)
-    // A malformed persisted color degrades to "no color", never throws.
+    // A malformed persisted color/themeId degrades to "unset", never throws.
     out.push({
       id,
       label: label.trim(),
+      ...(typeof themeId === 'string' && themeId.trim() !== '' ? { themeId: themeId.trim() } : {}),
       ...(isProfileColor(color) ? { color } : {}),
       ...(encrypted === true ? { encrypted: true } : {})
     })
@@ -124,6 +132,23 @@ export function setProfileColor(profiles: Profile[], id: string, color: string |
     if (p.id !== id) return p
     const { color: _dropped, ...rest } = p
     return color === null ? rest : { ...rest, color }
+  })
+}
+
+/** Return a new list with profile `id`'s theme set to `themeId` (or cleared
+ * with null, falling back to the default theme). Setting a theme drops any
+ * legacy `color`, so the two never fight. Throws on unknown id. */
+export function setProfileTheme(
+  profiles: Profile[],
+  id: string,
+  themeId: string | null
+): Profile[] {
+  if (!findById(profiles, id)) throw new Error(`unknown profile: ${id}`)
+  const trimmed = themeId?.trim() || null
+  return profiles.map((p) => {
+    if (p.id !== id) return p
+    const { themeId: _t, color: _c, ...rest } = p
+    return trimmed ? { ...rest, themeId: trimmed } : rest
   })
 }
 

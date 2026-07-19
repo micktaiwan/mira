@@ -43,6 +43,15 @@ function setup(): {
       ...(color ? { color } : {})
     }),
     listProfiles: () => ({ profiles: [{ id: focused, label: focused, open: true }], focused }),
+    listThemes: () => [],
+    createTheme: (input) => ({ id: 'x', name: input.name, background: input.background, text: input.text }),
+    updateTheme: (id, patch) => ({ id, name: patch.name ?? id, background: '#000', text: '#fff' }),
+    deleteTheme: (id: string) => ({ id }),
+    setProfileTheme: (id: string, themeId: string | null) => ({
+      id,
+      label: id,
+      ...(themeId ? { themeId } : {})
+    }),
     openSettings: () => {},
     getSettings: () => ({
       homeUrl: 'home',
@@ -73,6 +82,14 @@ function setup(): {
     countActiveSiteCookies: () => Promise.resolve({ url: null, count: 0 }),
     clearProfileData: (profileId?: string) => Promise.resolve({ id: profileId ?? focused }),
     clearSiteData: () => Promise.resolve(null),
+    forgetActiveSite: () =>
+      Promise.resolve({
+        domain: null,
+        cookiesRemoved: 0,
+        historyRemoved: 0,
+        closed: false,
+        tabId: null
+      }),
     getMemoryUsage: () => ({ rss: 0, processes: 1 }),
     listTabMemory: () => ({ entries: [], totalBytes: 0 }),
     getTabCounts: () => ({ total: 0, loaded: 0, asleep: 0 }),
@@ -81,6 +98,13 @@ function setup(): {
     downloadVideoUrl: async () => ({ saved: true, file: 'clip.mp4' }),
     getMediaStats: () => ({ count: 0, bytes: 0 }),
     setMediaGalleryOpen: (open) => ({ open: open ?? true }),
+    // Downloads slice: minimal stubs, not exercised by these socket-dispatch tests.
+    listDownloads: () => [],
+    cancelDownload: () => false,
+    openDownload: async () => false,
+    revealDownload: () => false,
+    clearDownloads: () => 0,
+    getDownloadStats: () => ({ active: 0, since: null, receivedBytes: 0, totalBytes: 0 }),
     // Tab slice: minimal stubs, not exercised by these socket-dispatch tests.
     newTab: (url?: string) => ({
       id: 'tab',
@@ -91,7 +115,8 @@ function setup(): {
       folderId: null,
       kind: 'web' as const,
       pinned: false,
-      keepAwake: false
+      keepAwake: false,
+      audible: false
     }),
     closeTab: () => ({ closed: true }),
     closeActiveTab: () => ({ closed: true, id: 'tab' }),
@@ -124,7 +149,8 @@ function setup(): {
           kind: 'web' as const,
           pinned: false,
           keepAwake: false,
-          folderId: null
+          folderId: null,
+          audible: false
         }
       ],
       activeId: 'tab',
@@ -132,6 +158,7 @@ function setup(): {
     }),
     toggleTabsPanel: (collapsed?: boolean) => ({ collapsed: collapsed ?? true }),
     showTabMenu: () => {},
+    showAudioMenu: () => {},
     listTabFolders: () => ({ folders: [] }),
     createTabFolder: () => ({ id: 'folder-1' }),
     renameTabFolder: () => ({ renamed: true }),

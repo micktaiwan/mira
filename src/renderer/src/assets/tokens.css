@@ -1,0 +1,109 @@
+/* The design-system token layer — the SINGLE home of every color in the chrome.
+ *
+ * Three layers, top to bottom:
+ *   1. THEME BASE   — the few colors a theme actually specifies: --surface,
+ *                     --text, --accent (+ optional --wallpaper). Set at runtime
+ *                     on <html> by features/profile-theme/profile-theme.ts from
+ *                     the active profile's theme; the values here are the
+ *                     built-in "Midnight" (dark) defaults / anti-flash fallback.
+ *   2. DERIVED      — everything else (surfaces, borders, muted text, hover
+ *                     states) computed from the base with color-mix(). This is
+ *                     what lets a theme ship as just two or three colors and
+ *                     stay internally consistent in both light and dark.
+ *   3. FIXED HUES   — identity colors that do NOT follow the theme: state
+ *                     colors (success/danger/…) and per-group palette accents.
+ *
+ * Hard rule (guarded by tokens.test.ts): raw color literals live ONLY in this
+ * file. Every other CSS file references var(--token). To add/adjust a color,
+ * edit it here — never inline a hex in a component stylesheet. */
+
+:root {
+  /* ── 1. Theme base (overridden at runtime per profile theme) ──────────── */
+  --surface: #1b1b1f;
+  --text: #ebebeb;
+  --accent: #6988e6;
+
+  /* ── 2. Derived surfaces ──────────────────────────────────────────────── */
+  --color-background: var(--surface);
+  --color-background-soft: color-mix(in srgb, var(--text) 4%, var(--surface));
+  --color-background-mute: color-mix(in srgb, var(--text) 8%, var(--surface));
+
+  /* A translucent, elevated surface for overlays that float over the page or
+     chrome (command palette, dialogs) — frosted glass in either theme. */
+  --surface-glass: color-mix(in srgb, var(--surface) 92%, transparent);
+
+  /* ── 2. Derived text ──────────────────────────────────────────────────── */
+  --color-text: var(--text);
+  /* Secondary / muted label text (was --ev-c-text-2). */
+  --text-muted: color-mix(in srgb, var(--text) 58%, var(--surface));
+  /* Faint / tertiary text and placeholders (was --ev-c-text-3). */
+  --text-faint: color-mix(in srgb, var(--text) 38%, var(--surface));
+
+  /* ── 2. Derived lines, borders, chips ─────────────────────────────────── */
+  /* From subtle to strong: hairlines and chip fills → hover borders → the
+     mid-gray used both as a heavier border and as dim label text. */
+  --border-subtle: color-mix(in srgb, var(--text) 12%, var(--surface));
+  --border: color-mix(in srgb, var(--text) 18%, var(--surface));
+  --border-strong: color-mix(in srgb, var(--text) 30%, var(--surface));
+
+  /* Overlay tints used on translucent glass surfaces (palette, thinking box),
+     independent of theme luminance — a faint lift and hairline. */
+  --overlay-soft: color-mix(in srgb, var(--text) 8%, transparent);
+  --overlay-hairline: color-mix(in srgb, var(--text) 6%, transparent);
+  --overlay-faint: color-mix(in srgb, var(--text) 3%, transparent);
+
+  /* Dim scrim behind modal overlays (backdrops). */
+  --scrim: rgba(0, 0, 0, 0.45);
+
+  /* Drop shadows and the top edge highlight on floating glass. Shadows stay
+     dark in either theme (that is how shadows read); the highlight is a light
+     rim on the overlay's top edge. */
+  --shadow-strong: rgba(0, 0, 0, 0.6);
+  --shadow-soft: rgba(0, 0, 0, 0.4);
+  --edge-highlight: rgba(255, 255, 255, 0.05);
+
+  /* Checkerboard behind transparent media thumbnails — two near-surface tints,
+     so it dims in a dark theme and lightens in a light one. */
+  --checker-a: color-mix(in srgb, var(--text) 6%, var(--surface));
+  --checker-b: color-mix(in srgb, var(--text) 2%, var(--surface));
+
+  /* ── 2. Derived accent family ─────────────────────────────────────────── */
+  --accent-strong: color-mix(in srgb, var(--accent) 78%, var(--text));
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-line: color-mix(in srgb, var(--accent) 40%, transparent);
+  /* Text drawn on top of an accent-filled surface (buttons, badges). */
+  --on-accent: #ffffff;
+
+  /* ── 3. Fixed state colors (do not follow the theme) ──────────────────── */
+  --color-success: #34c759;
+  --color-info: #3a7bd5;
+  --color-warning: #e6b325;
+  --color-danger: #e06c75;
+  --color-danger-line: color-mix(in srgb, var(--color-danger) 40%, transparent);
+  --color-danger-soft: color-mix(in srgb, var(--color-danger) 12%, transparent);
+
+  /* ── 3. Fixed per-group palette accents (Cmd+K rows) ──────────────────── */
+  --group-skills: #c084fc;
+  --group-commands: #7d8590;
+  --group-tabs: #60a5fa;
+  --group-bookmarks: #fbbf24;
+  --group-history: #4ade80;
+  --group-profiles: #f472b6;
+
+  /* ── 3. Fixed media-gallery source badges (data provenance, not theme) ── */
+  --badge-generic: rgba(0, 0, 0, 0.55);
+  --badge-dom: rgba(80, 110, 200, 0.85);
+  --badge-net: rgba(190, 120, 40, 0.85);
+  --badge-dom-net: rgba(60, 150, 90, 0.9);
+
+  /* ── Back-compat aliases ──────────────────────────────────────────────── */
+  /* The old scaffold primitive names, kept so the many existing var() uses
+     across the chrome CSS keep resolving — now theme-derived, not fixed. New
+     code should prefer the semantic names above. */
+  --ev-c-text-1: var(--color-text);
+  --ev-c-text-2: var(--text-muted);
+  --ev-c-text-3: var(--text-faint);
+  --ev-c-gray-1: var(--border-strong);
+  --ev-c-gray-2: var(--border);
+  --ev-c-gray-3: var(--border-subtle);
+}

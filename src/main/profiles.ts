@@ -24,6 +24,7 @@ import {
   screen,
   session,
   shell,
+  type DownloadItem,
   type MenuItemConstructorOptions,
   type Session,
   type WebContents
@@ -53,8 +54,16 @@ import {
 import { MediaBuffer, captureStats, fileNameFor, mergeMedia } from './media-capture'
 import { MEDIA_COLLECT_SOURCE, nearestVideoPermalinkSource, parseDomMedia } from './media-collect'
 import { ytdlpDownload } from './ytdlp'
+import {
+  DownloadTracker,
+  completionMessage,
+  numberedFilename,
+  type DownloadState
+} from './downloads'
 import { homePageUrl, isMiraHomeUrl, type HomeStats } from './home-doc'
 import { errorPageUrl, isMiraErrorUrl } from './error-doc'
+import { setActivationSuppressed } from './mac-activation'
+import { shouldSuppressActivation, type NavKind } from './activation-policy'
 import { type LlmConfig, type ChatMessage, type PageContext } from './llm'
 import { LlmRunner } from './llm-runner'
 import { type BookmarkTree } from './bookmark-store'
@@ -66,9 +75,20 @@ import {
   addProfile,
   renameProfile,
   setProfileColor as setProfileColorPure,
+  setProfileTheme as setProfileThemePure,
   findById,
   nextProfileLabel
 } from './profile-store'
+import {
+  type Theme,
+  type ThemeInput,
+  createTheme as createThemePure,
+  updateTheme as updateThemePure,
+  deleteTheme as deleteThemePure,
+  customThemes,
+  findTheme,
+  resolveProfileTheme
+} from './theme-store'
 import { vaultPlan, needsUnlock, noncePartitionDir } from './vault'
 import * as vaultService from './vault-service'
 import {
@@ -98,6 +118,7 @@ import {
   boundsOnScreen
 } from './session-store'
 import { type HistoryEntry } from './history-store'
+import { registrableDomain, hostMatchesDomain } from './domain'
 import { type PermissionGrant } from './permission-store'
 import { ProfileData } from './profile-data'
 import { shouldGrantPermission } from './permissions'
@@ -105,6 +126,7 @@ import { ensureTooltip, showTooltip, hideTooltip, destroyTooltip } from './toolt
 import { ensureToast, showToast, destroyToast } from './toast-controller'
 import { buildPageMenu } from './page-menu'
 import { buildTabMenu, type TabMenuItem } from './tab-menu'
+import { buildAudioMenu, type AudioMenuItem } from './audio-menu'
 import { buildFolderMenu, type FolderMenuItem } from './folder-menu'
 import {
   addFolder as addFolderPure,
@@ -143,6 +165,7 @@ import {
   type FullScreenEpisode
 } from './html-fullscreen'
 import { decideLocationAction, locationSettingsUrl } from './geolocation'
+import { MediaDevicePickerService } from './media-device-picker-service'
 import {
   windowSpaceLocation,
   resolveTargetSpaceId,
@@ -288,7 +311,7 @@ interface ProfileWindow {
    * closes, like a browser session's reopen history. */
   closedTabs: ClosedTab[]
   /** Recently-viewed-tabs history for THIS window: the order tabs were activated,
-   * walked by Cmd+Shift+Left / Cmd+Shift+Right (stepMruIn) like a browser's page
+   * walked by Cmd+Alt+Left / Cmd+Alt+Right (stepMruIn) like a browser's page
    * back/forward but between tabs. Deduplicated, per-window, in-memory only (a
    * focus history has no reason to survive a restart). Recorded on every active-tab
    * change (notifyExtensionsActiveTab), pruned when a tab leaves the window. */
@@ -387,6 +410,10 @@ export interface ProfileManagerDeps {
   initialProfiles: Profile[]
   /** Persist the full profile list whenever it changes (create / rename). */
   persist: (profiles: Profile[]) => void
+  /** The full theme list at startup (built-ins + persisted custom themes). */
+  initialThemes: Theme[]
+  /** Persist the CUSTOM themes whenever they change (create / update / delete). */
+  persistThemes: (themes: Theme[]) => void
   /** The persisted window sessions at startup (tabs to restore per profile). */
   initialSessions: PersistedSessions
   /** Persist every profile's window state (tabs, active tab, panel) on change,
@@ -415,7 +442,12 @@ export interface ProfileManagerDeps {
   persistSettings: (settings: AppSettings) => void
   /** Load the chrome (React) into a freshly created window for `profile`. Kept
    * as a callback so the electron-vite dev/prod URL logic stays in index.ts. */
-  loadRenderer: (window: BrowserWindow, profile: Profile, partition: string | undefined) => void
+  loadRenderer: (
+    window: BrowserWindow,
+    profile: Profile,
+    partition: string | undefined,
+    theme: Theme
+  ) => void
   /** App-wide memory footprint (all Electron processes). Owned by index.ts,
    * which has `app`; exposed on the context so `get-status` stays pilotable. */
   getMemoryUsage: () => MemoryUsage
@@ -448,6 +480,8 @@ export class ProfileManager {
 
   /** Every known profile (open or not). Mirrors profiles.json. */
   private profiles: Profile[]
+  /** Every theme (built-ins + custom). Mirrors themes.json (custom part). */
+  private themes: Theme[]
   /** Every profile's last window state (open or not). Mirrors sessions.json;
    * a closed profile keeps its saved tabs until it is reopened. */
   private sessions: PersistedSessions
@@ -458,13 +492,18 @@ export class ProfileManager {
   /** Live app settings (home URL, …). Mirrors settings.json; seeded from
    * deps.homeUrl and updated in place by set-home-url. */
   private appSettings: AppSettings
-  /** Set while stepMruIn is driving a Cmd+Shift+Left/Right cursor move: the tab
+  /** Set while stepMruIn is driving a Cmd+Alt+Left/Right cursor move: the tab
    * switch it triggers must NOT be recorded as a fresh MRU visit (that would
    * corrupt the very history we're walking). Read by recordMruVisit. */
   private mruSuppressRecord = false
   /** Debounce for persisting settings during a panel resize drag: many width
    * updates per second update the layout live, but only settle to disk once idle. */
   private settingsSaveTimer: ReturnType<typeof setTimeout> | null = null
+  /** Open window of time during which we swallow Chromium's programmatic app
+   * activation, armed around a background navigation commit (see
+   * suppressActivationBriefly / wireView). App-global — a single timer, since the
+   * activation it guards against is an app-level foreground jump. */
+  private activationSuppressTimer: ReturnType<typeof setTimeout> | null = null
   /** Each profile's browsing trails — history + web-permission grants — with their
    * debounced writes (profile-data.ts). ONE ProfileData PER PROFILE id, created
    * lazily by dataFor(): a profile's history/permissions live in its own files and
@@ -474,6 +513,9 @@ export class ProfileManager {
    * set them once per profile session and not on every tab. Keyed by partition
    * (the default session uses '' as its key). */
   private readonly permissionSessions = new Set<string>()
+  /** The camera/mic picker wiring (getUserMedia shim preload + native picker),
+   * shared across profile sessions. Lazily created so `app` is ready first. */
+  private mediaPicker: MediaDevicePickerService | null = null
   /** True once we've auto-opened the OS Location Services pane this run, so the
    * permission handler firing repeatedly doesn't reopen System Settings. */
   private locationSettingsOpened = false
@@ -509,6 +551,14 @@ export class ProfileManager {
   /** Monotonic id for activeDownloads entries (two downloads of the same url must
    * be tracked distinctly). */
   private downloadSeq = 0
+  /** Native browser file downloads (a page-triggered file save, distinct from the
+   * yt-dlp video grabs above). The pure tracker holds the records; the live
+   * DownloadItem handles (needed to cancel) are kept alongside, keyed by the same
+   * minted id. Sessions we have already hooked with will-download are recorded so
+   * the hook installs once per partition. */
+  private readonly downloadTracker = new DownloadTracker()
+  private readonly downloadItems = new Map<string, DownloadItem>()
+  private readonly downloadSessions = new Set<string>()
   /** Pending debounced flush of sessions.json (one timer for the whole app, as
    * there is a single file). null when no write is pending. */
   private saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -540,6 +590,7 @@ export class ProfileManager {
 
   constructor(private readonly deps: ProfileManagerDeps) {
     this.profiles = deps.initialProfiles
+    this.themes = deps.initialThemes
     this.sessions = deps.initialSessions
     this.appSettings = {
       homeUrl: deps.homeUrl,
@@ -925,6 +976,9 @@ export class ProfileManager {
     }
     if (!target || target.window.isDestroyed()) return
     this.newTabIn(target, trimmed, false)
+    // Opening a URL is an explicit foreground request (default-browser handoff,
+    // socket open): clear any suppression tail so the raise below is not swallowed.
+    this.endActivationSuppression()
     if (target.window.isMinimized()) target.window.restore()
     target.window.show()
     target.window.focus()
@@ -954,22 +1008,95 @@ export class ProfileManager {
     return { id: updated.id, label: updated.label }
   }
 
-  /** Set (a hex) or clear (null) a profile's theme color, persist it, and
-   * live-push the new tint to that profile's open window: the chrome read its
-   * color once from the URL at load, so a change needs a push to re-tint. */
+  /** The full theme a profile paints its chrome with (themeId → legacy color →
+   * default), resolved against the live theme list. */
+  private resolveTheme(profile: Profile): Theme {
+    return resolveProfileTheme(profile.themeId, profile.color, this.themes)
+  }
+
+  /** Live-push a profile's resolved theme to every open window of it: the chrome
+   * reads the theme once from the URL at load, so a change needs a push to
+   * repaint. */
+  private pushProfileTheme(id: string): void {
+    const profile = findById(this.profiles, id)
+    if (!profile) return
+    this.broadcastToProfile(id, 'mira:profile-theme', this.resolveTheme(profile))
+  }
+
+  /** A ProfileInfo view of a profile (id + label + themeId/legacy color). */
+  private toProfileInfo(profile: Profile): ProfileInfo {
+    return {
+      id: profile.id,
+      label: profile.label,
+      ...(profile.themeId ? { themeId: profile.themeId } : {}),
+      ...(profile.color ? { color: profile.color } : {})
+    }
+  }
+
+  /** Set (a hex) or clear (null) a profile's LEGACY tint color, persist it, and
+   * live-push the resolved theme. Kept for back-compat (set-profile-color); new
+   * callers use setProfileTheme. */
   setProfileColor(id: string, color: string | null): ProfileInfo {
     this.profiles = setProfileColorPure(this.profiles, id, color)
     this.deps.persist(this.profiles)
-    const updated = findById(this.profiles, id)!
-    // Re-tint every open window of this profile (the chrome read the color once at
-    // load).
-    this.broadcastToProfile(id, 'mira:profile-theme', updated.color ?? null)
+    this.pushProfileTheme(id)
     // Other windows' open Settings tabs refetch so their swatches stay in sync.
     this.broadcastProfilesChanged()
-    return {
-      id: updated.id,
-      label: updated.label,
-      ...(updated.color ? { color: updated.color } : {})
+    return this.toProfileInfo(findById(this.profiles, id)!)
+  }
+
+  /** Assign a theme to a profile (or clear with null → default), persist, and
+   * live-push it to that profile's open windows. Throws on unknown profile or an
+   * unknown theme id. */
+  setProfileTheme(id: string, themeId: string | null): ProfileInfo {
+    if (themeId !== null && !findTheme(this.themes, themeId)) {
+      throw new Error(`unknown theme: ${themeId}`)
+    }
+    this.profiles = setProfileThemePure(this.profiles, id, themeId)
+    this.deps.persist(this.profiles)
+    this.pushProfileTheme(id)
+    this.broadcastProfilesChanged()
+    return this.toProfileInfo(findById(this.profiles, id)!)
+  }
+
+  listThemes(): Theme[] {
+    return this.themes
+  }
+
+  /** Create a custom theme, persist the custom set, return it. */
+  createTheme(input: ThemeInput): Theme {
+    const [themes, theme] = createThemePure(this.themes, input)
+    this.themes = themes
+    this.deps.persistThemes(customThemes(this.themes))
+    this.broadcastProfilesChanged()
+    return theme
+  }
+
+  /** Update a custom theme, persist, and repaint every open window whose profile
+   * currently resolves to it. */
+  updateTheme(id: string, patch: Partial<ThemeInput>): Theme {
+    this.themes = updateThemePure(this.themes, id, patch)
+    this.deps.persistThemes(customThemes(this.themes))
+    this.repaintProfilesUsingTheme(id)
+    this.broadcastProfilesChanged()
+    return findTheme(this.themes, id)!
+  }
+
+  /** Delete a custom theme, persist, and repaint any window whose profile was on
+   * it (it now falls back to the default theme). */
+  deleteTheme(id: string): { id: string } {
+    const affected = this.profiles.filter((p) => p.themeId === id).map((p) => p.id)
+    this.themes = deleteThemePure(this.themes, id)
+    this.deps.persistThemes(customThemes(this.themes))
+    for (const pid of affected) this.pushProfileTheme(pid)
+    this.broadcastProfilesChanged()
+    return { id }
+  }
+
+  /** Repaint every open window whose profile resolves to theme `id`. */
+  private repaintProfilesUsingTheme(id: string): void {
+    for (const p of this.profiles) {
+      if (this.resolveTheme(p).id === id) this.pushProfileTheme(p.id)
     }
   }
 
@@ -1161,6 +1288,9 @@ export class ProfileManager {
     // Track focus so the menu's active-profile checkmark stays in sync — but only
     // rebuild when focus moves to a DIFFERENT profile (skip plain re-focus).
     window.on('focus', () => {
+      // A genuine focus means Mira is now foreground: drop any activation
+      // suppression tail so it never eats a real user-driven activation.
+      this.endActivationSuppression()
       // Also re-snapshot geometry: dragging a window to another virtual desktop
       // in Mission Control fires no move/resize event (same coordinates on every
       // Space), so the Space capture would otherwise wait until close. Focusing
@@ -1224,7 +1354,12 @@ export class ProfileManager {
     // webContents in materializeTab — whichever holds focus catches the key.
     this.wireTabShortcuts(profileWindow, window.webContents)
 
-    this.deps.loadRenderer(window, profile, this.effectivePartition(profile.id))
+    this.deps.loadRenderer(
+      window,
+      profile,
+      this.effectivePartition(profile.id),
+      this.resolveTheme(profile)
+    )
 
     // Extensions: register this profile's session with the extension system NOW
     // (synchronous — the instance wires its preload into the session, so it must
@@ -1351,8 +1486,8 @@ export class ProfileManager {
     pw.mru = mruRecord(pw.mru, id)
   }
 
-  /** Step the recently-viewed-tabs history (Cmd+Shift+Left = back / -1,
-   * Cmd+Shift+Right = forward / +1) and select the tab it lands on, without
+  /** Step the recently-viewed-tabs history (Cmd+Alt+Left = back / -1,
+   * Cmd+Alt+Right = forward / +1) and select the tab it lands on, without
    * recording that hop as a new visit. No-op at either end of the history. */
   private stepMruIn(pw: ProfileWindow, direction: 1 | -1): { id: string | null } {
     const { mru, id } = mruStep(pw.mru, direction)
@@ -1382,6 +1517,10 @@ export class ProfileManager {
     // loads, so a first geolocation request is answered rather than denied by the
     // default check. Once per partition (guarded inside).
     this.ensurePermissionHandlers(partition, pw.id)
+    // Route this session's file downloads straight to ~/Downloads (no OS save
+    // dialog) and track them, so the chrome shows progress + a done toast. Once
+    // per partition (guarded inside).
+    this.ensureDownloadHandler(partition, pw.id)
     const view = new WebContentsView({
       // nodeIntegrationInSubFrames: without it Electron runs preload scripts in
       // the MAIN frame only, and the extension service-worker bridge (the frame
@@ -1469,12 +1608,14 @@ export class ProfileManager {
   private blankPageUrl(pw: ProfileWindow): string {
     const total = pw.state.tabs.length
     const mem = this.deps.getMemoryUsage()
+    const profile = findById(this.profiles, pw.id)
     const stats: HomeStats = {
-      profileLabel: findById(this.profiles, pw.id)?.label ?? 'Mira',
+      profileLabel: profile?.label ?? 'Mira',
       tabCount: total,
       loadedCount: pw.views.size,
       memoryText: formatMemory(mem),
-      processCount: mem.processes
+      processCount: mem.processes,
+      ...(profile ? { theme: this.resolveTheme(profile) } : {})
     }
     return homePageUrl(stats)
   }
@@ -1522,6 +1663,18 @@ export class ProfileManager {
     this.pushTabs(pw)
     this.saveSession(pw)
     if (focusChrome && !background) {
+      // An explicit new tab (Cmd+T / socket new-tab) is meant to bring Mira
+      // forward. That used to happen for free via the new page's load activating
+      // the app — the very activation the background-reload guard now suppresses.
+      // So foreground the window explicitly here, and clear any suppression tail
+      // first so it is not swallowed. (A user Cmd+T is already foreground, so this
+      // is a no-op there; it only matters when new-tab arrives over the socket
+      // while Mira is in the background.)
+      this.endActivationSuppression()
+      if (!pw.window.isDestroyed()) {
+        pw.window.show()
+        pw.window.focus()
+      }
       const view = pw.views.get(tab.id)
       // The freshly loading page grabs keyboard focus when it commits (after
       // loadURL resolves), which steals it back from the address bar. Bounce it
@@ -1694,6 +1847,11 @@ export class ProfileManager {
     // partition ↔ profile id is 1:1 (each profile owns its session), so a grant on
     // this session is recorded into THAT profile's log.
     const ses = partition ? session.fromPartition(partition) : session.defaultSession
+    // Route this session's getUserMedia through Mira's native camera/mic picker
+    // (Electron has no per-device hook, so the choice is made in-page — see
+    // media-device-picker-service.ts). Once per session (guarded inside).
+    this.mediaPicker ??= new MediaDevicePickerService(app.getPath('userData'))
+    this.mediaPicker.attach(ses)
     ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
       const granted = shouldGrantPermission(permission)
       if (granted) this.dataFor(profileId).recordGrant(requestingOrigin, permission)
@@ -1705,6 +1863,82 @@ export class ProfileManager {
       if (granted) this.dataFor(profileId).recordGrant(originOf(details.requestingUrl), permission)
       this.maybeHandleLocation(permission)
       callback(granted)
+    })
+  }
+
+  /** Hook a profile's session for file downloads, once per partition. Chromium
+   * routes a page-triggered file save here; we set its path to ~/Downloads (so no
+   * OS save dialog appears — Mickael always saves there) and mirror the DownloadItem
+   * into the tracker, pushing progress to the chrome and a toast on completion.
+   * partition ↔ profile id is 1:1, so the captured profileId routes the toast. */
+  private ensureDownloadHandler(partition: string | undefined, profileId: string): void {
+    const key = partition ?? ''
+    if (this.downloadSessions.has(key)) return
+    this.downloadSessions.add(key)
+    const ses = partition ? session.fromPartition(partition) : session.defaultSession
+    ses.on('will-download', (_event, item) => this.trackDownload(item, profileId))
+  }
+
+  /** Take over one DownloadItem: pick a non-colliding path under ~/Downloads (which
+   * also suppresses the save dialog), register a record, and forward Electron's
+   * updated/done events into the tracker — broadcasting changes to the profile's
+   * chrome and flashing a toast when the file lands. */
+  private trackDownload(item: DownloadItem, profileId: string): void {
+    const dir = app.getPath('downloads')
+    const suggested = item.getFilename()
+    // Never overwrite: bump "name (1).ext", "name (2).ext"… until a path is free.
+    let name = suggested
+    for (let i = 1; existsSync(join(dir, name)); i++) name = numberedFilename(suggested, i)
+    const savePath = join(dir, name)
+    item.setSavePath(savePath)
+
+    const id = randomUUID()
+    const startedAt = Date.now()
+    this.downloadItems.set(id, item)
+    this.downloadTracker.add({
+      id,
+      url: item.getURL(),
+      filename: name,
+      savePath,
+      state: 'progressing',
+      receivedBytes: item.getReceivedBytes(),
+      totalBytes: item.getTotalBytes(),
+      paused: item.isPaused(),
+      startedAt,
+      updatedAt: startedAt,
+      profileId
+    })
+    this.broadcastToProfile(profileId, 'mira:downloads-changed')
+
+    item.on('updated', (_e, state) => {
+      this.downloadTracker.update(
+        id,
+        {
+          receivedBytes: item.getReceivedBytes(),
+          totalBytes: item.getTotalBytes(),
+          paused: item.isPaused(),
+          state: state === 'interrupted' ? 'interrupted' : 'progressing'
+        },
+        Date.now()
+      )
+      this.broadcastToProfile(profileId, 'mira:downloads-changed')
+    })
+
+    item.once('done', (_e, state) => {
+      const finalState: DownloadState =
+        state === 'completed' ? 'completed' : state === 'cancelled' ? 'cancelled' : 'interrupted'
+      const record = this.downloadTracker.update(
+        id,
+        { state: finalState, receivedBytes: item.getReceivedBytes(), paused: false },
+        Date.now()
+      )
+      this.downloadItems.delete(id)
+      this.broadcastToProfile(profileId, 'mira:downloads-changed')
+      // The point of the whole feature: tell Mickael the download finished.
+      if (record) {
+        const host = this.aWindowForProfile(profileId)
+        if (host) void showToast(host, completionMessage(record))
+      }
     })
   }
 
@@ -1788,6 +2022,34 @@ export class ProfileManager {
     }
   }
 
+  /** Swallow Chromium's programmatic app activation for a short window. Armed
+   * around a BACKGROUND navigation commit: a page that reloads itself (dev-server
+   * HMR full reload, meta-refresh, JS redirect) makes Chromium re-focus the
+   * renderer widget ~25 ms after commit, which activates the app and jumps Mira in
+   * front of the user's editor. The native swizzle only blocks OUR activate()
+   * call, never a user's Cmd-Tab / dock / window click, so drawing the suppression
+   * a bit wide is safe. Re-arming pushes the disarm out; a 500 ms tail comfortably
+   * covers the post-commit activation at any load speed. */
+  private suppressActivationBriefly(): void {
+    setActivationSuppressed(true)
+    if (this.activationSuppressTimer) clearTimeout(this.activationSuppressTimer)
+    this.activationSuppressTimer = setTimeout(() => {
+      this.activationSuppressTimer = null
+      setActivationSuppressed(false)
+    }, 500)
+  }
+
+  /** Cancel any active suppression at once — called when a window genuinely gains
+   * focus (the user brought Mira forward), so a pending tail never eats a real
+   * activation. */
+  private endActivationSuppression(): void {
+    if (this.activationSuppressTimer) {
+      clearTimeout(this.activationSuppressTimer)
+      this.activationSuppressTimer = null
+    }
+    setActivationSuppressed(false)
+  }
+
   /** Mirror a tab's live page state (title / url / favicon) into its metadata and
    * push the refreshed strip to the chrome. */
   private wireView(initialPw: ProfileWindow, tabId: string, wc: WebContents): void {
@@ -1827,12 +2089,45 @@ export class ProfileManager {
     wc.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
       if (!isMainFrame || errorCode === -3) return
       failedUrl = validatedURL
-      wc.loadURL(errorPageUrl({ url: validatedURL, errorCode, errorDescription }))
+      const errProfile = findById(this.profiles, owner().id)
+      wc.loadURL(
+        errorPageUrl({
+          url: validatedURL,
+          errorCode,
+          errorDescription,
+          ...(errProfile ? { theme: this.resolveTheme(errProfile) } : {})
+        })
+      )
     })
     wc.on('did-navigate-in-page', (_e, navUrl, isMainFrame) => {
       if (isMainFrame) patch({ url: mirrorUrl(navUrl) })
     })
+    // Keep a page that reloads ITSELF (dev-server HMR full reload, meta-refresh,
+    // JS redirect) from dragging the whole app to the foreground on macOS. Chromium
+    // re-focuses the renderer widget on the commit, which activates the app even
+    // while Mira sits in the background. Arm the native activation suppression only
+    // when the owner window is NOT focused (a foreground navigation the user drove
+    // must activate normally): from the navigation START (before the commit) and
+    // re-armed at the commit, so the 500 ms tail covers the post-commit activation
+    // whatever the load speed. See suppressActivationBriefly / mac-activation.ts.
+    const armIfNeeded = (nav: NavKind): void => {
+      const pw = owner()
+      if (!pw.window.isDestroyed() && shouldSuppressActivation(nav, pw.window.isFocused())) {
+        this.suppressActivationBriefly()
+      }
+    }
+    wc.on('did-start-navigation', (details) => armIfNeeded(details))
+    // Re-arm at the commit too: on a slow load the commit lands after the tail
+    // armed at navigation start has already expired, and the activation fires from
+    // the commit — so the freshest 500 ms window must start here. did-navigate is
+    // always a cross-document main-frame commit.
+    wc.on('did-navigate', () => armIfNeeded({ isMainFrame: true, isSameDocument: false }))
     wc.on('page-favicon-updated', (_e, favicons) => patch({ favicon: favicons?.[0] ?? null }))
+    // A tab starting or stopping sound: refresh the strip so the sidebar speaker
+    // icon and the toolbar audio button track it. audible is not stored on the tab
+    // (it is read live from the view in tabInfos), so this only needs to push —
+    // not patch/persist. schedulePush coalesces bursts (ad start/stop, autoplay).
+    wc.on('audio-state-changed', () => this.schedulePush(owner()))
     // Status-bar hover readout, browser-style. Two sources merged by reduceHover:
     // Chromium's native update-target-url reports the link under the cursor, and
     // the injected detector (installHoverReporter) reports JS-triggering controls
@@ -2030,7 +2325,11 @@ export class ProfileManager {
       kind: t.id === pw.settingsTabId ? 'settings' : 'web',
       pinned: t.pinned === true,
       keepAwake: t.keepAwake === true,
-      folderId: t.folderId ?? null
+      folderId: t.folderId ?? null,
+      // Live audio state read straight from the native view (like `loaded` from
+      // pw.views): true while the page emits sound. An asleep tab has no view, so
+      // it is never audible. Refreshed by the audio-state-changed push (wireView).
+      audible: pw.views.get(t.id)?.webContents.isCurrentlyAudible() === true
     }))
   }
 
@@ -2508,6 +2807,10 @@ export class ProfileManager {
   private activateTabById(tabId: string): { windowId: string; id: string } {
     const pw = this.ownerOf(tabId)
     if (!pw) throw new Error(`unknown tab: ${tabId}`)
+    // An explicit request to foreground this tab: cancel any activation
+    // suppression tail first, or the native swizzle would swallow the show/focus
+    // below if a background reload happened to arm it in the last 500 ms.
+    this.endActivationSuppression()
     // show()+focus() so the OS raises the window (and macOS un-minimizes it),
     // then select the tab so it becomes the visible WebContentsView.
     if (!pw.window.isDestroyed()) {
@@ -2943,23 +3246,25 @@ export class ProfileManager {
     // finds its CURRENT window, the chrome wc matches no view and falls back to the
     // window it was wired against.
     wc.on('before-input-event', (event, input) => {
-      if (input.type !== 'keyDown' || input.alt) return
+      if (input.type !== 'keyDown') return
       const mod = process.platform === 'darwin' ? input.meta : input.control
       if (!mod) return
       const pw = this.ownerByWebContents(wc) ?? initialPw
-      // Cmd+Up / Cmd+Down (no Shift): step the strip in its visible order.
-      if (!input.shift && input.key === 'ArrowUp') {
+      // Cmd+Up / Cmd+Down (no Shift, no Alt): step the strip in its visible order.
+      if (!input.shift && !input.alt && input.key === 'ArrowUp') {
         this.selectAdjacentTabIn(pw, -1)
         event.preventDefault()
-      } else if (!input.shift && input.key === 'ArrowDown') {
+      } else if (!input.shift && !input.alt && input.key === 'ArrowDown') {
         this.selectAdjacentTabIn(pw, 1)
         event.preventDefault()
       }
-      // Cmd+Shift+Left / Cmd+Shift+Right: back/forward through recently-viewed tabs.
-      else if (input.shift && input.key === 'ArrowLeft') {
+      // Cmd+Alt+Left / Cmd+Alt+Right: back/forward through recently-viewed tabs.
+      // (Not Cmd+Shift+arrows: those collide with macOS text selection to
+      // start/end of line, which we leave to the focused field.)
+      else if (input.alt && input.key === 'ArrowLeft') {
         this.stepMruIn(pw, -1)
         event.preventDefault()
-      } else if (input.shift && input.key === 'ArrowRight') {
+      } else if (input.alt && input.key === 'ArrowRight') {
         this.stepMruIn(pw, 1)
         event.preventDefault()
       }
@@ -3192,6 +3497,36 @@ export class ProfileManager {
     return {
       label: item.label,
       enabled: item.enabled,
+      click: () => this.deps.runCommand?.(chrome, item.command, item.params)
+    }
+  }
+
+  /** Pop the native drop-down for the toolbar audio button: this window's audible
+   * tabs (in strip order), click one to focus it. Item list from the pure, tested
+   * buildAudioMenu; the popup is the thin native part (like the tab menu). Command
+   * items route through deps.runCommand so they hit the same registry bus. No-op on
+   * a destroyed window; shows a disabled placeholder when nothing is playing. */
+  private showAudioMenuIn(pw: ProfileWindow): void {
+    if (pw.window.isDestroyed()) return
+    const chrome = pw.window.webContents
+    const audible = pw.state.tabs.filter(
+      (t) => pw.views.get(t.id)?.webContents.isCurrentlyAudible() === true
+    )
+    const items = buildAudioMenu(audible.map((t) => ({ id: t.id, title: t.title, url: t.url })))
+    const template = items.map((item) => this.audioMenuItemToTemplate(item, chrome))
+    Menu.buildFromTemplate(template).popup({ window: pw.window })
+  }
+
+  /** Convert one pure AudioMenuItem to a native menu item. Command items fire on
+   * the registry bus (select-tab); the `disabled` placeholder is a greyed, inert
+   * entry. `chrome` is captured for the click handlers. */
+  private audioMenuItemToTemplate(
+    item: AudioMenuItem,
+    chrome: WebContents
+  ): MenuItemConstructorOptions {
+    if (item.type === 'disabled') return { label: item.label, enabled: false }
+    return {
+      label: item.label,
       click: () => this.deps.runCommand?.(chrome, item.command, item.params)
     }
   }
@@ -3498,9 +3833,7 @@ export class ProfileManager {
   } {
     return {
       profiles: this.profiles.map((p) => ({
-        id: p.id,
-        label: p.label,
-        ...(p.color ? { color: p.color } : {}),
+        ...this.toProfileInfo(p),
         open: this.windowsForProfile(p.id).length > 0
       })),
       focused: this.focusedId()
@@ -3748,11 +4081,7 @@ export class ProfileManager {
         if (!target) return null
         const profile = findById(this.profiles, target.id)
         if (!profile) return null
-        return {
-          id: profile.id,
-          label: profile.label,
-          ...(profile.color ? { color: profile.color } : {})
-        }
+        return this.toProfileInfo(profile)
       },
       // Magnifier slice — the native edge of the persistent optical zoom. The
       // active web tab is the target; the pure math lives in magnifier.ts.
@@ -3778,6 +4107,10 @@ export class ProfileManager {
         if (view) evalInWebContents(view.webContents, MAGNIFIER_FLASH).catch(() => {})
       },
       focusApp: () => {
+        // The user explicitly asked for Mira: drop any activation suppression tail
+        // so the swizzle lets this app.focus through even right after a background
+        // reload armed it.
+        this.endActivationSuppression()
         // Fired by the global shortcut while another app is frontmost, so the
         // target is usually the "any open window" fallback, not a focused one.
         if (target && !target.window.isDestroyed()) {
@@ -3802,6 +4135,11 @@ export class ProfileManager {
       renameProfile: (id, label) => this.renameProfile(id, label),
       setProfileColor: (id, color) => this.setProfileColor(id, color),
       listProfiles: () => this.listProfiles(),
+      listThemes: () => this.listThemes(),
+      createTheme: (input) => this.createTheme(input),
+      updateTheme: (id, patch) => this.updateTheme(id, patch),
+      deleteTheme: (id) => this.deleteTheme(id),
+      setProfileTheme: (id, themeId) => this.setProfileTheme(id, themeId),
       openSettings: (section?: string) => {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
         this.openSettingsTabIn(target, section)
@@ -3903,6 +4241,68 @@ export class ProfileManager {
         })
         return { host: parsed.host, cookiesRemoved: cookies.length }
       },
+      forgetActiveSite: async () => {
+        // Deep clean the active tab's whole domain, then close the tab. Resolve
+        // the site + its OWN session (so we wipe exactly what this page uses)
+        // BEFORE closing, since closing tears the view down.
+        const empty = { domain: null, cookiesRemoved: 0, historyRemoved: 0, closed: false, tabId: null }
+        if (!target || target.window.isDestroyed()) return empty
+        const activeId = target.state.activeId
+        if (!activeId || activeId === target.settingsTabId) return empty
+        const view = target.views.get(activeId)
+        if (!view) return empty
+        const url = view.webContents.getURL()
+        if (!/^https?:/.test(url)) return empty
+        const domain = registrableDomain(new URL(url).hostname)
+        if (domain === '') return empty
+        const sess = view.webContents.session
+
+        // 1. Cookies for the registrable domain AND every subdomain. Enumerate the
+        // whole jar and remove by domain match, so a.example.com / example.com /
+        // www.example.com all go, not just the exact host of this page.
+        const allCookies = await sess.cookies.get({})
+        const domainCookies = allCookies.filter(
+          (c) => c.domain !== undefined && hostMatchesDomain(c.domain, domain)
+        )
+        for (const c of domainCookies) {
+          const host = (c.domain ?? '').replace(/^\./, '')
+          const path = c.path ?? '/'
+          await sess.cookies.remove(`${c.secure ? 'https' : 'http'}://${host}${path}`, c.name)
+        }
+
+        // 2. Origin storage (localStorage, IndexedDB, service workers, cache, …)
+        // for the domain and its subdomains. clearData with third-parties-included
+        // matches by registrable domain, so subdomain storage is cleared too.
+        // Cookies are excluded here — step 1 owns them (and gives the exact count).
+        await sess.clearData({
+          origins: [`https://${domain}`, `http://${domain}`, new URL(url).origin],
+          originMatchingMode: 'third-parties-included',
+          dataTypes: [
+            'backgroundFetch',
+            'cache',
+            'fileSystems',
+            'indexedDB',
+            'localStorage',
+            'serviceWorkers',
+            'webSQL'
+          ]
+        })
+
+        // 3. History for the domain + subdomains (profile-scoped, persisted now).
+        const { removed: historyRemoved } = profileData().removeHistoryForDomain(domain)
+
+        // 4. Close the tab (direct close, no pinned double-press arming: a forget
+        // is an explicit destructive action).
+        this.closeTabIn(target, activeId)
+
+        return {
+          domain,
+          cookiesRemoved: domainCookies.length,
+          historyRemoved,
+          closed: true,
+          tabId: activeId
+        }
+      },
       getSpacesState: () => {
         const displays = spacesLayout()
         let windowLocation: SpaceLocation | null = null
@@ -3995,6 +4395,29 @@ export class ProfileManager {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
         return this.setMediaGalleryOpenIn(target, open)
       },
+      // Downloads slice: the tracker is app-wide (a download outlives its window),
+      // so these ignore `target` and address downloads by their minted id.
+      listDownloads: () => this.downloadTracker.list(),
+      cancelDownload: (id) => {
+        const item = this.downloadItems.get(id)
+        if (!item) return false
+        item.cancel()
+        return true
+      },
+      openDownload: async (id) => {
+        const record = this.downloadTracker.get(id)
+        if (!record || record.state !== 'completed' || !existsSync(record.savePath)) return false
+        // shell.openPath resolves '' on success, or an error string.
+        return (await shell.openPath(record.savePath)) === ''
+      },
+      revealDownload: (id) => {
+        const record = this.downloadTracker.get(id)
+        if (!record || !existsSync(record.savePath)) return false
+        shell.showItemInFolder(record.savePath)
+        return true
+      },
+      clearDownloads: () => this.downloadTracker.clearInactive(),
+      getDownloadStats: () => this.downloadTracker.stats(),
       openFindBar: () => {
         // Guard first: the find bar is useless without a page to search.
         activeWebContents()
@@ -4184,14 +4607,15 @@ export class ProfileManager {
           background
         )
         // A freshly opened tab is always materialized (loaded), a web tab, never
-        // born pinned, kept-awake, or in a folder.
+        // born pinned, kept-awake, in a folder, or (yet) making sound.
         return {
           ...tab,
           loaded: true,
           kind: 'web',
           pinned: false,
           keepAwake: false,
-          folderId: null
+          folderId: null,
+          audible: false
         }
       },
       closeTab: (id) => {
@@ -4280,6 +4704,10 @@ export class ProfileManager {
       showTabMenu: (tabId) => {
         if (!target) throw new Error('no target window')
         this.showTabMenuIn(target, tabId)
+      },
+      showAudioMenu: () => {
+        if (!target) throw new Error('no target window')
+        this.showAudioMenuIn(target)
       },
       listTabFolders: () => ({ folders: target ? target.folders : [] }),
       createTabFolder: (title, tabId) => {

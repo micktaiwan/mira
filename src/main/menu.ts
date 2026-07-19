@@ -40,6 +40,10 @@ export interface AppMenuHandlers {
    * the window — window closing moves to Cmd+Shift+W (see the File menu). */
   newTab: () => void
   closeTab: () => void
+  /** Close the active tab AND wipe every trace of its site (Cmd+Alt+W): cookies,
+   * storage and history for the tab's registrable domain and all its subdomains.
+   * Wired to the forget-site command; flashes a confirming toast. */
+  forgetSite: () => void
   /** Duplicate the active tab (Cmd+Shift+D): open a copy of the current page
    * right under it and focus it. Wired to the duplicate-active-tab command. */
   duplicateTab: () => void
@@ -173,6 +177,11 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
       },
       { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => handlers.closeTab() },
       {
+        label: 'Close Tab & Forget Site',
+        accelerator: 'CmdOrCtrl+Alt+W',
+        click: () => handlers.forgetSite()
+      },
+      {
         label: 'Reopen Closed Tab',
         accelerator: 'CmdOrCtrl+Shift+T',
         click: () => handlers.reopenTab()
@@ -213,13 +222,13 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
       // the keys are handled by the before-input-event hook (wireTabShortcuts).
       {
         label: 'Back to Recent Tab',
-        accelerator: 'CmdOrCtrl+Shift+Left',
+        accelerator: 'CmdOrCtrl+Alt+Left',
         registerAccelerator: false,
         click: () => handlers.recentTabBack()
       },
       {
         label: 'Forward to Recent Tab',
-        accelerator: 'CmdOrCtrl+Shift+Right',
+        accelerator: 'CmdOrCtrl+Alt+Right',
         registerAccelerator: false,
         click: () => handlers.recentTabForward()
       },

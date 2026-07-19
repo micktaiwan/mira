@@ -11,7 +11,7 @@
   align-items: flex-start;
   /* Drop below the toolbar so the address bar stays visible/uncovered. */
   padding-top: calc(var(--toolbar-height) + 8vh);
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--scrim);
   -webkit-app-region: no-drag;
 }
 
@@ -21,20 +21,20 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: rgba(30, 30, 34, 0.96);
+  background: var(--surface-glass);
   backdrop-filter: blur(24px) saturate(1.2);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--overlay-soft);
   border-radius: 14px;
   box-shadow:
-    0 0 0 0.5px rgba(0, 0, 0, 0.6),
-    0 24px 64px rgba(0, 0, 0, 0.6),
-    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    0 0 0 0.5px var(--shadow-strong),
+    0 24px 64px var(--shadow-strong),
+    inset 0 1px 0 var(--edge-highlight);
 }
 
 .palette-input {
   flex-shrink: 0;
   border: none;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid var(--overlay-hairline);
   background: transparent;
   color: var(--color-text);
   font-size: 15px;
@@ -65,26 +65,26 @@
 
 /* Per-group accent color, keyed on the row's data-group attribute. */
 .palette-row[data-group='skills'] {
-  --row-accent: #c084fc;
+  --row-accent: var(--group-skills);
 }
 .palette-row[data-group='commands'] {
-  --row-accent: #7d8590;
+  --row-accent: var(--group-commands);
 }
 .palette-row[data-group='tabs'] {
-  --row-accent: #60a5fa;
+  --row-accent: var(--group-tabs);
 }
 .palette-row[data-group='bookmarks'] {
-  --row-accent: #fbbf24;
+  --row-accent: var(--group-bookmarks);
 }
 .palette-row[data-group='history'] {
-  --row-accent: #4ade80;
+  --row-accent: var(--group-history);
 }
 .palette-row[data-group='profiles'] {
-  --row-accent: #f472b6;
+  --row-accent: var(--group-profiles);
 }
 
 .palette-row {
-  --row-accent: #7d8590;
+  --row-accent: var(--group-commands);
   -webkit-app-region: no-drag;
   width: 100%;
   display: flex;
@@ -100,7 +100,7 @@
 }
 
 .palette-row.selected {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--overlay-soft);
 }
 
 .palette-icon {
@@ -148,8 +148,8 @@
   flex-shrink: 0;
   padding: 1px 6px;
   border-radius: 5px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--overlay-soft);
+  background: var(--overlay-faint);
   color: var(--ev-c-text-2);
   font-size: 11px;
   font-family: ui-monospace, 'SF Mono', Menlo, monospace;
@@ -164,7 +164,7 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: color-mix(in srgb, var(--row-accent) 80%, white);
+  color: color-mix(in srgb, var(--row-accent) 72%, var(--text));
   background: color-mix(in srgb, var(--row-accent) 14%, transparent);
   /* Only reveal the tag on the highlighted row — the icon color already
      carries the group identity; a badge on every row is visual noise. */

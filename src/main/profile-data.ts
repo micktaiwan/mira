@@ -15,7 +15,8 @@ import {
   type HistoryEntry,
   recordVisit as recordVisitPure,
   recentHistory,
-  searchHistory as searchHistoryPure
+  searchHistory as searchHistoryPure,
+  removeHistoryForDomain as removeHistoryForDomainPure
 } from './history-store'
 import {
   type PermissionGrant,
@@ -86,6 +87,22 @@ export class ProfileData {
     }
     this.deps.persistHistory(this.history)
     return { cleared }
+  }
+
+  /** Drop every history entry belonging to the registrable domain `base` (the
+   * base host and all its subdomains) and write NOW, cancelling any pending
+   * flush so the removal is durable even if the app quits right after. Returns
+   * how many entries were removed. Powers the "forget this site" deep clean. */
+  removeHistoryForDomain(base: string): { removed: number } {
+    const { list, removed } = removeHistoryForDomainPure(this.history, base)
+    if (removed === 0) return { removed: 0 }
+    this.history = list
+    if (this.historyTimer) {
+      clearTimeout(this.historyTimer)
+      this.historyTimer = null
+    }
+    this.deps.persistHistory(this.history)
+    return { removed }
   }
 
   private scheduleHistoryFlush(): void {
