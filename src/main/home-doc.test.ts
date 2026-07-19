@@ -44,6 +44,23 @@ describe('buildHomePage', () => {
     expect(html).toContain('&lt;img src=x')
   })
 
+  it('lists the corrected / added keyboard shortcuts', () => {
+    const html = buildHomePage(base)
+    // The forget-site command (Cmd+Alt+W) and the shortcuts previously missing.
+    expect(html).toContain('<kbd>⌘⌥W</kbd>') // Close + forget site
+    expect(html).toContain('<kbd>⌘⇧R</kbd>') // Hard reload
+    expect(html).toContain('<kbd>⌘⌥← →</kbd>') // Recent tabs
+    // Wake all tabs is Cmd+Shift+A, NOT Cmd+Shift+R (the old bug).
+    expect(html).toMatch(/Wake all tabs<\/span><kbd>⌘⇧A<\/kbd>/)
+  })
+
+  it('renders the shortcuts panel as a collapsed <details>', () => {
+    const html = buildHomePage(base)
+    // Collapsible (no `open` attribute) so a blank tab is not flooded at once.
+    expect(html).toContain('<details class="shortcuts">')
+    expect(html).not.toContain('<details class="shortcuts" open>')
+  })
+
   it('is a self-contained document with the home marker', () => {
     const html = buildHomePage(base)
     expect(html.startsWith('<!doctype html>')).toBe(true)
