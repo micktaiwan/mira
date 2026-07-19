@@ -154,26 +154,66 @@ export function buildHomePage(stats: HomeStats): string {
   .card .sub { font-size: 12px; color: var(--t2); margin-top: 4px; }
   .foot { margin-top: 26px; color: var(--t3); font-size: 12px; letter-spacing: 0.02em; }
   /* Keyboard-shortcut reference: the "new user, what can I press?" panel. Static
-   * (baked at build time), grouped by task, four columns collapsing to two/one. */
+   * (baked at build time), grouped by task, four columns collapsing to two/one.
+   * Collapsible via a native <details> (no script) and collapsed by default, so a
+   * blank tab stays calm — the cards + clock are the hero, the full ~28-shortcut
+   * list is one click away instead of dumped all at once. */
   .shortcuts {
-    margin-top: 40px;
-    text-align: left;
+    margin-top: 34px;
     border-top: 1px solid var(--line);
-    padding-top: 26px;
+    padding-top: 22px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
   }
-  .shortcuts h2 {
+  .shortcuts > summary {
+    list-style: none;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 16px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--t2);
+    background: color-mix(in srgb, var(--card) 55%, transparent);
+    transition: border-color 0.2s ease, color 0.2s ease, background 0.2s ease;
+  }
+  .shortcuts > summary::-webkit-details-marker { display: none; }
+  .shortcuts > summary:hover { border-color: var(--border); color: var(--t1); }
+  .shortcuts[open] > summary { color: var(--t1); border-color: var(--border); }
+  .sc-title {
     font-size: 11px;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.09em;
-    color: var(--t3);
-    font-weight: 600;
-    margin: 0 0 20px;
-    text-align: center;
   }
+  .sc-hint { font-size: 12px; color: var(--t3); }
+  .shortcuts[open] > summary .sc-hint { display: none; }
+  .sc-caret {
+    width: 7px; height: 7px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(-45deg);
+    transition: transform 0.2s ease;
+    opacity: 0.7;
+  }
+  .shortcuts[open] > summary .sc-caret { transform: rotate(45deg); }
   .sc-grid {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
     gap: 8px 28px;
+    width: 100%;
+    margin-top: 24px;
+    text-align: left;
+    animation: sc-reveal 0.22s ease;
+  }
+  /* Author display:grid above beats the UA rule that hides a closed <details>'s
+   * content, so hide the grid explicitly while collapsed (higher specificity). */
+  .shortcuts:not([open]) > .sc-grid { display: none; }
+  @keyframes sc-reveal {
+    from { opacity: 0; transform: translateY(-5px); }
+    to   { opacity: 1; transform: none; }
   }
   .sc-col h3 {
     font-size: 12px;
@@ -245,26 +285,33 @@ export function buildHomePage(stats: HomeStats): string {
         <div class="sub">${escapeHtml(procNote)}</div>
       </div>
     </div>
-    <div class="shortcuts">
-      <h2>Keyboard shortcuts</h2>
+    <details class="shortcuts">
+      <summary>
+        <span class="sc-title">Keyboard shortcuts</span>
+        <span class="sc-hint">show all</span>
+        <span class="sc-caret" aria-hidden="true"></span>
+      </summary>
       <div class="sc-grid">
         <div class="sc-col">
           <h3>Tabs</h3>
           <div class="sc-row"><span class="desc">New tab</span><kbd>⌘T</kbd></div>
           <div class="sc-row"><span class="desc">Close tab</span><kbd>⌘W</kbd></div>
+          <div class="sc-row"><span class="desc">Close + forget site</span><kbd>⌘⌥W</kbd></div>
           <div class="sc-row"><span class="desc">Reopen closed</span><kbd>⌘⇧T</kbd></div>
           <div class="sc-row"><span class="desc">Duplicate tab</span><kbd>⌘⇧D</kbd></div>
           <div class="sc-row"><span class="desc">Prev / next</span><kbd>⌘↑ ↓</kbd></div>
+          <div class="sc-row"><span class="desc">Recent tabs</span><kbd>⌘⌥← →</kbd></div>
           <div class="sc-row"><span class="desc">Sleep tab (free RAM)</span><kbd>⌘S</kbd></div>
-          <div class="sc-row"><span class="desc">Wake all tabs</span><kbd>⌘⇧R</kbd></div>
+          <div class="sc-row"><span class="desc">Wake all tabs</span><kbd>⌘⇧A</kbd></div>
         </div>
         <div class="sc-col">
           <h3>Navigate</h3>
           <div class="sc-row"><span class="desc">Command palette</span><kbd>⌘K</kbd></div>
           <div class="sc-row"><span class="desc">Back / forward</span><kbd>⌘← →</kbd></div>
           <div class="sc-row"><span class="desc">Reload</span><kbd>⌘R</kbd></div>
+          <div class="sc-row"><span class="desc">Hard reload</span><kbd>⌘⇧R</kbd></div>
           <div class="sc-row"><span class="desc">Find in page</span><kbd>⌘F</kbd></div>
-          <div class="sc-row"><span class="desc">Find next / prev</span><kbd>⌘G</kbd></div>
+          <div class="sc-row"><span class="desc">Find next / prev</span><kbd>⌘G ⌘⇧G</kbd></div>
           <div class="sc-row"><span class="desc">Add to favorites</span><kbd>⌘D</kbd></div>
           <div class="sc-row"><span class="desc">Zoom in / out / reset</span><kbd>⌘= − 0</kbd></div>
         </div>
@@ -282,13 +329,14 @@ export function buildHomePage(stats: HomeStats): string {
           <h3>System-wide</h3>
           <div class="sc-row"><span class="desc">Focus Mira</span><kbd>⌘⇧M</kbd></div>
           <div class="sc-row"><span class="desc">Media gallery</span><kbd>⌘⌥⇧M</kbd></div>
+          <div class="sc-row"><span class="desc">Magnifier</span><kbd>⌘ + scroll</kbd></div>
           <h3 style="margin-top:16px">Getting started</h3>
           <div class="sc-row"><span class="desc">Type a URL or search in the bar above</span></div>
           <div class="sc-row"><span class="desc">Press ⌘K for any command</span></div>
           <div class="sc-row"><span class="desc">Switch profiles from the menu bar</span></div>
         </div>
       </div>
-    </div>
+    </details>
     <div class="foot">Type an address above, or press ⌘K to search</div>
   </div>
   <script>
