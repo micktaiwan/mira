@@ -41,16 +41,11 @@ import type {
   ProfileInfo,
   SkillPaneState,
   TabInfo,
-  TabMemoryEntry,
-  TabMemoryReport
+  TabMemoryReport,
+  RawFrame,
+  RawTab
 } from './commands'
-import {
-  closedSkillPane,
-  formatMemory,
-  nextZen,
-  rankTabMemory,
-  totalDistinctMemory
-} from './commands'
+import { closedSkillPane, formatMemory, nextZen, buildTabMemoryReport } from './commands'
 import { MediaBuffer, captureStats, fileNameFor, mergeMedia } from './media-capture'
 import { MEDIA_COLLECT_SOURCE, nearestVideoPermalinkSource, parseDomMedia } from './media-collect'
 import { ytdlpDownload } from './ytdlp'
@@ -90,6 +85,7 @@ import {
   resolveProfileTheme
 } from './theme-store'
 import { vaultPlan, needsUnlock, noncePartitionDir } from './vault'
+import { computeDiskUsage } from './disk-usage'
 import * as vaultService from './vault-service'
 import {
   type TabState,
@@ -2387,6 +2383,59 @@ export class ProfileManager {
     }, ProfileManager.LAYOUT_THROTTLE_MS)
   }
 
+  /** Deep-clean everything for a registrable `domain` in a given session + profile
+   * data: cookies (domain AND every subdomain), origin storage, and history
+   * entries. Pure of any tab/UI — callable for the active tab (after capturing its
+   * session) or for any profile by id (forget-domain command). Cookie removal is
+   * parallelised (the old serial await-per-cookie loop was the bulk of the delay).
+   * `extraOrigin` adds one more origin to the storage wipe (the page's exact
+   * origin, e.g. a `www.` host) on top of the bare-domain origins. */
+  private async forgetDomainData(
+    sess: Session,
+    pdata: ProfileData,
+    domain: string,
+    extraOrigin?: string
+  ): Promise<{ cookiesRemoved: number; historyRemoved: number }> {
+    // 1. Cookies for the registrable domain AND every subdomain. Enumerate the
+    // whole jar, match by domain, remove in parallel.
+    const allCookies = await sess.cookies.get({})
+    const domainCookies = allCookies.filter(
+      (c) => c.domain !== undefined && hostMatchesDomain(c.domain, domain)
+    )
+    await Promise.all(
+      domainCookies.map((c) => {
+        const host = (c.domain ?? '').replace(/^\./, '')
+        const path = c.path ?? '/'
+        return sess.cookies.remove(`${c.secure ? 'https' : 'http'}://${host}${path}`, c.name)
+      })
+    )
+
+    // 2. Origin storage (localStorage, IndexedDB, service workers, cache, …) for
+    // the domain and its subdomains. third-parties-included matches by
+    // registrable domain, so subdomain storage goes too. Cookies excluded here —
+    // step 1 owns them (and gives the exact count).
+    const origins = [`https://${domain}`, `http://${domain}`]
+    if (extraOrigin) origins.push(extraOrigin)
+    await sess.clearData({
+      origins,
+      originMatchingMode: 'third-parties-included',
+      dataTypes: [
+        'backgroundFetch',
+        'cache',
+        'fileSystems',
+        'indexedDB',
+        'localStorage',
+        'serviceWorkers',
+        'webSQL'
+      ]
+    })
+
+    // 3. History for the domain + subdomains (profile-scoped, persisted now).
+    const { removed: historyRemoved } = pdata.removeHistoryForDomain(domain)
+
+    return { cookiesRemoved: domainCookies.length, historyRemoved }
+  }
+
   private closeTabIn(pw: ProfileWindow, id: string): { closed: boolean } {
     const index = pw.state.tabs.findIndex((t) => t.id === id)
     if (index === -1) throw new Error(`unknown tab: ${id}`)
@@ -3849,40 +3898,52 @@ export class ProfileManager {
   listTabMemory(): TabMemoryReport {
     const memoryByPid = new Map<number, number>()
     for (const m of this.deps.getProcessMemory()) memoryByPid.set(m.pid, m.bytes)
-    // First pass builds the entries and counts how many tabs sit on each pid.
-    const raw: Array<Omit<TabMemoryEntry, 'shared'>> = []
-    const tabsPerPid = new Map<number, number>()
+    const allPids = [...memoryByPid.keys()]
+    // Gather each loaded tab's full frame subtree: the main frame plus every
+    // out-of-process (cross-origin) subframe, each on its own renderer under
+    // site-per-process. The pure builder collapses these to distinct processes,
+    // sums them per tab, and buckets every non-tab process into `otherBytes`.
+    const tabs: RawTab[] = []
     for (const pw of this.openById.values()) {
       const label = findById(this.profiles, pw.id)?.label ?? pw.id
       for (const tab of pw.state.tabs) {
         const view = pw.views.get(tab.id)
-        if (!view) continue // asleep: no process, no footprint (Settings has no view either)
-        let pid: number
+        if (!view) continue // asleep: no view, no process, no footprint
+        const frames: RawFrame[] = []
         try {
-          pid = view.webContents.getOSProcessId()
+          const main = view.webContents.mainFrame
+          // framesInSubtree includes the main frame as its first element.
+          for (const f of main.framesInSubtree) {
+            let pid: number
+            try {
+              // osProcessId is the OS pid getAppMetrics keys on; processId is
+              // Chromium's INTERNAL id and never matches the metrics — using it
+              // left every tab at 0 bytes and dumped all memory into `other`.
+              pid = f.osProcessId
+            } catch {
+              continue // a frame torn down mid-walk — skip it
+            }
+            if (!pid) continue // process not attached yet (frame still spawning)
+            frames.push({ pid, url: f.url, main: f === main })
+          }
         } catch {
-          continue // a view torn down mid-walk — skip it
+          continue // the view's webContents died mid-walk — skip the tab
         }
-        if (!pid) continue // process not attached yet (page still spawning)
-        tabsPerPid.set(pid, (tabsPerPid.get(pid) ?? 0) + 1)
-        raw.push({
+        if (frames.length === 0) continue
+        tabs.push({
           tabId: tab.id,
           profileId: pw.id,
           profileLabel: label,
           title: tab.title || tab.url || 'Untitled',
           url: tab.url,
           favicon: tab.favicon,
-          pid,
-          processMemoryBytes: memoryByPid.get(pid) ?? 0,
-          active: pw.state.activeId === tab.id
+          active: pw.state.activeId === tab.id,
+          keepAwake: tab.keepAwake === true,
+          frames
         })
       }
     }
-    const entries: TabMemoryEntry[] = raw.map((e) => ({
-      ...e,
-      shared: tabsPerPid.get(e.pid) ?? 1
-    }))
-    return { entries: rankTabMemory(entries), totalBytes: totalDistinctMemory(entries) }
+    return buildTabMemoryReport(tabs, memoryByPid, allPids)
   }
 
   /** Discard a tab by its globally-unique id, in whichever open profile window
@@ -4196,6 +4257,11 @@ export class ProfileManager {
         this.applyPanelWidths()
         return { ...this.appSettings }
       },
+      diskUsage: () =>
+        computeDiskUsage(
+          this.deps.userDataDir,
+          this.profiles.map((p) => ({ id: p.id, label: p.label, encrypted: p.encrypted }))
+        ),
       cookieJarForProfile: (id) => {
         // The cookie jar is the profile's session partition (its own cookie jar,
         // see profile-store.ts). It exists whether or not the window is open, so
@@ -4297,11 +4363,19 @@ export class ProfileManager {
         })
         return { host: parsed.host, cookiesRemoved: cookies.length }
       },
-      forgetActiveSite: async () => {
-        // Deep clean the active tab's whole domain, then close the tab. Resolve
-        // the site + its OWN session (so we wipe exactly what this page uses)
-        // BEFORE closing, since closing tears the view down.
-        const empty = { domain: null, cookiesRemoved: 0, historyRemoved: 0, closed: false, tabId: null }
+      forgetActiveSite: () => {
+        // Resolve the site + its OWN session BEFORE closing (closing tears the
+        // view down; the session is the profile partition and survives). Then
+        // close the tab and return IMMEDIATELY — the actual wipe (cookies +
+        // storage + history) runs in the background via `done`, so the UI never
+        // blocks on it. The command layer flashes toast #1 now and toast #2 when
+        // `done` resolves.
+        const empty = {
+          domain: null,
+          closed: false,
+          tabId: null,
+          done: Promise.resolve({ cookiesRemoved: 0, historyRemoved: 0 })
+        }
         if (!target || target.window.isDestroyed()) return empty
         const activeId = target.state.activeId
         if (!activeId || activeId === target.settingsTabId) return empty
@@ -4312,52 +4386,33 @@ export class ProfileManager {
         const domain = registrableDomain(new URL(url).hostname)
         if (domain === '') return empty
         const sess = view.webContents.session
-
-        // 1. Cookies for the registrable domain AND every subdomain. Enumerate the
-        // whole jar and remove by domain match, so a.example.com / example.com /
-        // www.example.com all go, not just the exact host of this page.
-        const allCookies = await sess.cookies.get({})
-        const domainCookies = allCookies.filter(
-          (c) => c.domain !== undefined && hostMatchesDomain(c.domain, domain)
-        )
-        for (const c of domainCookies) {
-          const host = (c.domain ?? '').replace(/^\./, '')
-          const path = c.path ?? '/'
-          await sess.cookies.remove(`${c.secure ? 'https' : 'http'}://${host}${path}`, c.name)
-        }
-
-        // 2. Origin storage (localStorage, IndexedDB, service workers, cache, …)
-        // for the domain and its subdomains. clearData with third-parties-included
-        // matches by registrable domain, so subdomain storage is cleared too.
-        // Cookies are excluded here — step 1 owns them (and gives the exact count).
-        await sess.clearData({
-          origins: [`https://${domain}`, `http://${domain}`, new URL(url).origin],
-          originMatchingMode: 'third-parties-included',
-          dataTypes: [
-            'backgroundFetch',
-            'cache',
-            'fileSystems',
-            'indexedDB',
-            'localStorage',
-            'serviceWorkers',
-            'webSQL'
-          ]
-        })
-
-        // 3. History for the domain + subdomains (profile-scoped, persisted now).
-        const { removed: historyRemoved } = profileData().removeHistoryForDomain(domain)
-
-        // 4. Close the tab (direct close, no pinned double-press arming: a forget
-        // is an explicit destructive action).
+        const pdata = this.dataFor(target.id)
+        const origin = new URL(url).origin
+        // Close now for instant feedback; wipe detached (never awaited by the UI).
         this.closeTabIn(target, activeId)
-
-        return {
-          domain,
-          cookiesRemoved: domainCookies.length,
-          historyRemoved,
-          closed: true,
-          tabId: activeId
+        const done = this.forgetDomainData(sess, pdata, domain, origin)
+        return { domain, closed: true, tabId: activeId, done }
+      },
+      forgetDomain: async (domainInput, profileId) => {
+        // Tab-independent, UI-independent: wipe a registrable domain in a profile.
+        // Accept a bare domain, a hostname, or a full URL. Defaults to the target
+        // window's profile; an explicit profileId targets any profile.
+        let host = domainInput.trim()
+        try {
+          host = /^[a-z]+:\/\//i.test(host)
+            ? new URL(host).hostname
+            : new URL(`https://${host}`).hostname
+        } catch {
+          return { domain: null, cookiesRemoved: 0, historyRemoved: 0 }
         }
+        const domain = registrableDomain(host)
+        if (domain === '') return { domain: null, cookiesRemoved: 0, historyRemoved: 0 }
+        const id =
+          profileId ?? (target && !target.window.isDestroyed() ? target.id : DEFAULT_PROFILE_ID)
+        const sess = this.sessionFor(id)
+        const pdata = this.dataFor(id)
+        const { cookiesRemoved, historyRemoved } = await this.forgetDomainData(sess, pdata, domain)
+        return { domain, cookiesRemoved, historyRemoved }
       },
       getSpacesState: () => {
         const displays = spacesLayout()

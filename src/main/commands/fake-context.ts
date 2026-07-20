@@ -11,7 +11,7 @@ import type {
   ServiceWorkerLogEntry,
   SkillPaneState
 } from '.'
-import { rankTabMemory, selectServiceWorkerLogs, totalDistinctMemory } from '.'
+import { buildTabMemoryReport, selectServiceWorkerLogs } from '.'
 import type { CookieSetDetails } from '../chrome-import'
 import type { TooltipRect } from '../tooltip'
 import type { SkillSource } from '../skills'
@@ -552,6 +552,21 @@ export function makeContext(
       state.homeUrl = url.trim()
       return appSettings()
     },
+    diskUsage: () => ({
+      root: '/fake/userData',
+      total: 0,
+      reclaimable: 0,
+      entries: [],
+      profiles: state.profiles.map((p) => ({
+        id: p.id,
+        label: p.label,
+        encrypted: false,
+        partition: 0,
+        reclaimable: 0,
+        vault: 0,
+        total: 0
+      }))
+    }),
     cookieJarForProfile: (id: string) => {
       if (!state.profiles.some((p) => p.id === id)) throw new Error(`unknown profile: ${id}`)
       const jar = cookiesSet.get(id) ?? []
@@ -604,12 +619,17 @@ export function makeContext(
     },
     forgetActiveSite: () => {
       const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
-      const empty = { domain: null, cookiesRemoved: 0, historyRemoved: 0, closed: false, tabId: null }
+      const empty = {
+        domain: null,
+        closed: false,
+        tabId: null,
+        done: Promise.resolve({ cookiesRemoved: 0, historyRemoved: 0 })
+      }
       if (!active || active.id === state.settingsTabId || !/^https?:\/\//.test(active.url)) {
-        return Promise.resolve(empty)
+        return empty
       }
       const domain = registrableDomain(new URL(active.url).hostname)
-      if (domain === '') return Promise.resolve(empty)
+      if (domain === '') return empty
       // Model the cookie wipe: empty the focused profile's recorded jar.
       const jar = state.focused ? (cookiesSet.get(state.focused) ?? []) : []
       const cookiesRemoved = jar.length
@@ -617,7 +637,7 @@ export function makeContext(
       // History for the domain + subdomains.
       const { list, removed: historyRemoved } = removeHistoryForDomain(state.history, domain)
       state.history = list
-      // Close the tab.
+      // Close the tab immediately (the real impl wipes in the background).
       const tabId = active.id
       rememberClosed(tabId)
       const wasActive = state.tabs.activeId === tabId
@@ -625,26 +645,52 @@ export function makeContext(
       state.mru = mruPrune(state.mru, tabId)
       if (wasActive) recordMru(state.tabs.activeId)
       if (state.closeArmedId === tabId) state.closeArmedId = null
-      return Promise.resolve({ domain, cookiesRemoved, historyRemoved, closed: true, tabId })
+      return { domain, closed: true, tabId, done: Promise.resolve({ cookiesRemoved, historyRemoved }) }
+    },
+    forgetDomain: (domainInput: string, _profileId?: string) => {
+      let host = domainInput.trim()
+      try {
+        host = /^[a-z]+:\/\//i.test(host)
+          ? new URL(host).hostname
+          : new URL(`https://${host}`).hostname
+      } catch {
+        return Promise.resolve({ domain: null, cookiesRemoved: 0, historyRemoved: 0 })
+      }
+      const domain = registrableDomain(host)
+      if (domain === '') return Promise.resolve({ domain: null, cookiesRemoved: 0, historyRemoved: 0 })
+      // Model the wipe on the focused profile's recorded jar (the fake jar is not
+      // domain-indexed) + history for the domain + subdomains.
+      const jar = state.focused ? (cookiesSet.get(state.focused) ?? []) : []
+      const cookiesRemoved = jar.length
+      if (state.focused) cookiesSet.set(state.focused, [])
+      const { list, removed: historyRemoved } = removeHistoryForDomain(state.history, domain)
+      state.history = list
+      return Promise.resolve({ domain, cookiesRemoved, historyRemoved })
     },
     getMemoryUsage: () => ({ rss: 123 * 1024 * 1024, processes: 4 }),
-    // The fake has no real renderer processes: give each tab a distinct canned
-    // footprint (heavier the further down the strip) on its own pid, then run the
-    // same pure rank/total the manager uses — enough to exercise list-tab-memory.
+    // The fake has no real renderer processes: give each tab a single main-frame
+    // process (heavier the further down the strip) on its own pid, plus one canned
+    // "other" process (a stand-in for extensions/GPU), then run the same pure
+    // builder the manager uses — enough to exercise list-tab-memory.
     listTabMemory: () => {
-      const raw = state.tabs.tabs.map((t, i) => ({
-        tabId: t.id,
-        profileId: state.focused ?? 'default',
-        profileLabel: state.focused ?? 'default',
-        title: t.title || t.url || 'Untitled',
-        url: t.url,
-        favicon: t.favicon,
-        pid: 1000 + i,
-        processMemoryBytes: (i + 1) * 10 * 1024 * 1024,
-        shared: 1,
-        active: state.tabs.activeId === t.id
-      }))
-      return { entries: rankTabMemory(raw), totalBytes: totalDistinctMemory(raw) }
+      const memoryByPid = new Map<number, number>()
+      const tabs = state.tabs.tabs.map((t, i) => {
+        const pid = 1000 + i
+        memoryByPid.set(pid, (i + 1) * 10 * 1024 * 1024)
+        return {
+          tabId: t.id,
+          profileId: state.focused ?? 'default',
+          profileLabel: state.focused ?? 'default',
+          title: t.title || t.url || 'Untitled',
+          url: t.url,
+          favicon: t.favicon,
+          active: state.tabs.activeId === t.id,
+          keepAwake: t.keepAwake === true,
+          frames: [{ pid, url: t.url, main: true }]
+        }
+      })
+      memoryByPid.set(9999, 5 * 1024 * 1024) // a non-tab process (extension/GPU)
+      return buildTabMemoryReport(tabs, memoryByPid, [...memoryByPid.keys()])
     },
     getTabCounts: () => {
       // The fake has no lazy-load, so every tab counts as loaded.

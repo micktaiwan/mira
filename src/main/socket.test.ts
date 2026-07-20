@@ -78,21 +78,21 @@ function setup(): {
       sidebarWidth: 240,
       skillPaneWidth: 360
     }),
+    diskUsage: () => ({ root: '/fake', total: 0, reclaimable: 0, entries: [], profiles: [] }),
     cookieJarForProfile: () => ({ set: () => Promise.resolve() }),
     countActiveSiteCookies: () => Promise.resolve({ url: null, count: 0 }),
     readActiveSiteCookies: () => Promise.resolve({ url: null, cookie: '', count: 0 }),
     clearProfileData: (profileId?: string) => Promise.resolve({ id: profileId ?? focused }),
     clearSiteData: () => Promise.resolve(null),
-    forgetActiveSite: () =>
-      Promise.resolve({
-        domain: null,
-        cookiesRemoved: 0,
-        historyRemoved: 0,
-        closed: false,
-        tabId: null
-      }),
+    forgetActiveSite: () => ({
+      domain: null,
+      closed: false,
+      tabId: null,
+      done: Promise.resolve({ cookiesRemoved: 0, historyRemoved: 0 })
+    }),
+    forgetDomain: () => Promise.resolve({ domain: null, cookiesRemoved: 0, historyRemoved: 0 }),
     getMemoryUsage: () => ({ rss: 0, processes: 1 }),
-    listTabMemory: () => ({ entries: [], totalBytes: 0 }),
+    listTabMemory: () => ({ entries: [], tabsBytes: 0, otherBytes: 0, totalBytes: 0 }),
     getTabCounts: () => ({ total: 0, loaded: 0, asleep: 0 }),
     collectMedia: async () => [],
     downloadMedia: async () => ({ saved: 0, failed: [] }),

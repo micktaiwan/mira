@@ -264,7 +264,9 @@ A profile marked `encrypted` keeps its data (browsing trails + session partition
 | `dump-cookies`         | `url?`                                                    | read the active site's cookie string (`name=value; …`, HttpOnly included) from the session — result `{url, cookie, count}`; `url?` targets another site. The `cookie` value is a live session secret. Errors: `no active site to read` |
 | `clear-site-data`      | `url?`                                                    | cookies + storage for one site (default: active site) |
 | `clear-data`           | `profile?`                                                | wipe a profile's browsing data                        |
-| `forget-site`          | —                                                         | close the active tab AND wipe its whole registrable domain (cookies + storage + history, all subdomains); Cmd+Alt+W, flashes a toast |
+| `disk-usage`           | —                                                         | read-only: Mira's on-disk footprint under userData — result `{usage}` with a top-level `entries` breakdown and a per-profile rollup (`partition`, `reclaimable` cache, `vault`, `total`). Sizes are apparent bytes |
+| `forget-site`          | —                                                         | close the active tab AND wipe its whole registrable domain (cookies + storage + history, all subdomains); Cmd+Alt+W. **Non-blocking**: the tab closes and a toast fires immediately, the wipe runs in the background, a second toast confirms when done |
+| `forget-domain`        | `domain`, `profileId?`                                    | wipe a registrable domain (cookies + storage + history, all subdomains) in a profile's session — no tab, no UI; awaits and returns `{domain, cookiesRemoved, historyRemoved}`. `domain` accepts a bare domain, hostname, or full URL. Defaults to the target window's profile. Errors: `"domain" is required`, `invalid domain: <x>` |
 
 ### Extensions
 

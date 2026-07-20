@@ -261,8 +261,7 @@ function ProfileRow({
   const status = profile.open ? (focused ? 'focused' : 'open') : 'closed'
   // The theme this profile currently resolves to (its themeId, else the default),
   // for the picker's value and preview dot.
-  const currentTheme =
-    themes.find((t) => t.id === profile.themeId) ??
+  const currentTheme = themes.find((t) => t.id === profile.themeId) ??
     themes.find((t) => t.id === DEFAULT_THEME_ID) ??
     themes[0] ?? { id: DEFAULT_THEME_ID, name: 'Midnight', background: '#1b1b1f', text: '#ebebeb' }
 
@@ -287,7 +286,10 @@ function ProfileRow({
         <span
           className="profile-theme-dot"
           style={
-            { '--dot-bg': currentTheme.background, '--dot-fg': currentTheme.text } as React.CSSProperties
+            {
+              '--dot-bg': currentTheme.background,
+              '--dot-fg': currentTheme.text
+            } as React.CSSProperties
           }
           aria-hidden
         />
@@ -504,7 +506,11 @@ function ThemesManager({
           <div className="theme-form-colors">
             <label className="theme-color-field">
               Background
-              <input type="color" value={background} onChange={(e) => setBackground(e.target.value)} />
+              <input
+                type="color"
+                value={background}
+                onChange={(e) => setBackground(e.target.value)}
+              />
             </label>
             <label className="theme-color-field">
               Text
@@ -680,8 +686,127 @@ function ProfilesSection(): React.JSX.Element {
   )
 }
 
-/** The "Data" sub-section: wipe the current profile's browsing data (cookies,
- * cache, storage). Destructive, so it uses a two-step confirm. */
+/** One top-level entry under userData (mirrors DiskEntry in main). */
+interface DiskEntry {
+  name: string
+  bytes: number
+  reclaimable: boolean
+}
+
+/** A profile's footprint (mirrors ProfileDiskUsage in main). */
+interface ProfileDiskUsage {
+  id: string
+  label: string
+  encrypted: boolean
+  partition: number
+  reclaimable: number
+  vault: number
+  total: number
+}
+
+/** The disk-usage report (mirrors DiskUsageReport in main). */
+interface DiskUsageReport {
+  root: string
+  total: number
+  reclaimable: number
+  entries: DiskEntry[]
+  profiles: ProfileDiskUsage[]
+}
+
+/** Disk-usage analysis: Mira's on-disk footprint under userData, broken down by
+ * top-level entry and by profile. Read-only (v1 analyses; clearing lives below).
+ * Fetched on mount, with a manual refresh (the walk takes a moment). */
+function DiskUsage(): React.JSX.Element {
+  const [report, setReport] = useState<DiskUsageReport | null>(null)
+  // Starts true so the first mount reads as "Scanning…"; the fetch flips it.
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    // All setState happens inside the async callback (never synchronously in the
+    // effect body) so we don't trigger a cascading re-render.
+    void run('disk-usage').then((res) => {
+      if (cancelled) return
+      if (res.ok) {
+        setReport(res.usage as DiskUsageReport)
+        setError(null)
+      } else setError(String(res.error))
+      setLoading(false)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [refreshKey])
+
+  const refresh = (): void => {
+    setLoading(true)
+    setRefreshKey((k) => k + 1)
+  }
+
+  const max = report ? Math.max(1, ...report.entries.map((e) => e.bytes)) : 1
+
+  return (
+    <div className="disk-usage">
+      <div className="settings-section-head">
+        <h2 className="themes-title">Disk usage</h2>
+        <button className="btn btn-ghost" onClick={refresh} disabled={loading}>
+          {loading ? 'Scanning…' : 'Refresh'}
+        </button>
+      </div>
+      {error && <p className="settings-error">{error}</p>}
+      {report && (
+        <>
+          <p className="settings-hint">
+            {formatBytes(report.total)} total, of which {formatBytes(report.reclaimable)} is
+            regenerable cache (safe to clear). Sizes are approximate.
+          </p>
+
+          <h3 className="disk-subhead">By profile</h3>
+          <ul className="disk-list">
+            {report.profiles.map((p) => (
+              <li key={p.id} className="disk-row">
+                <span className="disk-name">
+                  {p.label}
+                  {p.encrypted && <span className="disk-tag">vault</span>}
+                </span>
+                <span className="disk-detail">
+                  {p.vault > 0 && `${formatBytes(p.vault)} vault · `}
+                  {formatBytes(p.reclaimable)} cache
+                </span>
+                <span className="disk-size">{formatBytes(p.total)}</span>
+              </li>
+            ))}
+          </ul>
+
+          <h3 className="disk-subhead">By folder</h3>
+          <ul className="disk-list">
+            {report.entries.map((e) => (
+              <li key={e.name} className="disk-row">
+                <span className="disk-name">
+                  {e.name}
+                  {e.reclaimable && <span className="disk-tag disk-tag-cache">cache</span>}
+                </span>
+                <span className="disk-bar-track">
+                  <span
+                    className={`disk-bar${e.reclaimable ? ' disk-bar-cache' : ''}`}
+                    style={{ width: `${Math.max(2, (e.bytes / max) * 100)}%` }}
+                  />
+                </span>
+                <span className="disk-size">{formatBytes(e.bytes)}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** The "Data" sub-section: analyse Mira's disk footprint, and wipe the current
+ * profile's browsing data (cookies, cache, storage). The wipe is destructive, so
+ * it uses a two-step confirm. */
 function DataSection(): React.JSX.Element {
   const [confirming, setConfirming] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
@@ -699,6 +824,7 @@ function DataSection(): React.JSX.Element {
 
   return (
     <div className="settings-section">
+      <DiskUsage />
       <div className="settings-section-head">
         {confirming ? (
           <>
@@ -884,6 +1010,14 @@ function PermissionsSection(): React.JSX.Element {
   )
 }
 
+interface TabProcess {
+  pid: number
+  bytes: number
+  label: string
+  main: boolean
+  shared: number
+}
+
 interface TabMemoryEntry {
   tabId: string
   profileId: string
@@ -892,9 +1026,10 @@ interface TabMemoryEntry {
   url: string
   favicon: string | null
   pid: number
+  processes: TabProcess[]
   processMemoryBytes: number
-  shared: number
   active: boolean
+  keepAwake: boolean
 }
 
 /** Client-side byte formatter (main has its own; the command returns raw bytes so
@@ -924,6 +1059,8 @@ function hostOf(url: string): string {
  * each process once. */
 function TabsMemorySection(): React.JSX.Element {
   const [entries, setEntries] = useState<TabMemoryEntry[]>([])
+  const [tabsBytes, setTabsBytes] = useState(0)
+  const [otherBytes, setOtherBytes] = useState(0)
   const [totalBytes, setTotalBytes] = useState(0)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -934,6 +1071,8 @@ function TabsMemorySection(): React.JSX.Element {
     setLoading(false)
     if (res.ok) {
       setEntries((res.entries as TabMemoryEntry[]) ?? [])
+      setTabsBytes(Number(res.tabsBytes ?? 0))
+      setOtherBytes(Number(res.otherBytes ?? 0))
       setTotalBytes(Number(res.totalBytes ?? 0))
       setError(null)
     } else {
@@ -960,23 +1099,26 @@ function TabsMemorySection(): React.JSX.Element {
     // snapshot on every profile change — otherwise a closed profile's tabs stay
     // frozen on screen until a manual Refresh.
     return window.mira.onProfilesChanged(load)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (
     <div className="settings-section">
       <p className="settings-hint">
-        Every loaded tab across all open profiles, ranked by the memory of its renderer process
-        (heaviest first). Sleeping tabs are not shown — they hold no process. When several same-site
-        tabs share one process, each row notes it and the total counts that process once.
+        Every loaded tab across all open profiles, ranked by total memory (heaviest first). A tab is
+        not one process: under site-per-process its main frame plus every cross-origin subframe
+        (embeds, OAuth iframes) each get their own renderer, listed under the row. Sleeping tabs are
+        not shown — they hold no process. Everything that backs no tab (extensions, service workers,
+        GPU, the app itself) is folded into the “other processes” total so the grand total matches
+        the status bar.
       </p>
       <div className="settings-section-head">
         <button className="btn btn-ghost" onClick={() => void load()} disabled={loading}>
           {loading ? 'Reading…' : 'Refresh'}
         </button>
         <span className="settings-hint tab-mem-total">
-          {entries.length} loaded {entries.length === 1 ? 'tab' : 'tabs'} · {formatBytes(totalBytes)}{' '}
-          total
+          {entries.length} loaded {entries.length === 1 ? 'tab' : 'tabs'} ·{' '}
+          {formatBytes(tabsBytes)} + {formatBytes(otherBytes)} other ={' '}
+          <strong>{formatBytes(totalBytes)}</strong>
         </span>
       </div>
       {error && <p className="settings-error">{error}</p>}
@@ -1010,21 +1152,44 @@ function TabsMemorySection(): React.JSX.Element {
                     {e.active && <span className="tab-mem-badge tab-mem-active">active</span>}
                   </div>
                   <span className="tab-mem-host">{hostOf(e.url)}</span>
+                  {e.processes.length > 1 && (
+                    <ul className="tab-mem-procs">
+                      {e.processes.map((p) => (
+                        <li key={p.pid} className="tab-mem-proc">
+                          <span className="tab-mem-proc-label">
+                            {p.main ? '▸ main frame' : `↳ ${p.label}`}
+                            {p.shared > 1 && (
+                              <span
+                                className="tab-mem-shared"
+                                title={`Shared by ${p.shared} tabs`}
+                              >
+                                shared ×{p.shared}
+                              </span>
+                            )}
+                          </span>
+                          <span className="tab-mem-proc-size">{formatBytes(p.bytes)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </td>
                 <td className="tab-mem-profile">{e.profileLabel}</td>
                 <td className="tab-mem-size">
-                  {formatBytes(e.processMemoryBytes)}
-                  {e.shared > 1 && (
-                    <span className="tab-mem-shared" title={`Shared by ${e.shared} tabs`}>
-                      shared ×{e.shared}
-                    </span>
+                  <strong>{formatBytes(e.processMemoryBytes)}</strong>
+                  {e.processes.length > 1 && (
+                    <span className="tab-mem-proc-count">{e.processes.length} processes</span>
                   )}
                 </td>
                 <td className="tab-mem-actions">
                   <button
                     className="btn btn-ghost"
                     onClick={() => void sleep(e.tabId)}
-                    title="Put this tab to sleep (Cmd+S): frees its memory, keeps the tab"
+                    disabled={e.keepAwake}
+                    title={
+                      e.keepAwake
+                        ? "Keep-awake tab can't sleep"
+                        : 'Put this tab to sleep (Cmd+S): frees its memory, keeps the tab'
+                    }
                   >
                     Sleep
                   </button>
@@ -1032,6 +1197,24 @@ function TabsMemorySection(): React.JSX.Element {
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr className="tab-mem-foot">
+              <td />
+              <td className="tab-mem-tab">Other processes (extensions, workers, GPU, app)</td>
+              <td className="tab-mem-profile" />
+              <td className="tab-mem-size">{formatBytes(otherBytes)}</td>
+              <td className="tab-mem-actions" />
+            </tr>
+            <tr className="tab-mem-foot tab-mem-foot-total">
+              <td />
+              <td className="tab-mem-tab">Total (app-wide)</td>
+              <td className="tab-mem-profile" />
+              <td className="tab-mem-size">
+                <strong>{formatBytes(totalBytes)}</strong>
+              </td>
+              <td className="tab-mem-actions" />
+            </tr>
+          </tfoot>
         </table>
       )}
     </div>
