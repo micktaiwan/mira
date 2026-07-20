@@ -41,3 +41,18 @@ export function decideWindowOpen(details: WindowOpenDetails): WindowOpenDecision
   const referrer = details.referrer?.url || undefined
   return { kind: 'tab', url: details.url, referrer }
 }
+
+/** Same decision, but for a window.open coming from an EXTENSION page (a
+ * browser-action popup, an option page…). The extra 'ignore' outcome means "not
+ * an extension page, leave Electron's default alone" — the caller sets a global
+ * window-open handler on every webContents, so it must recognize the ones it has
+ * no business touching. Pure so it is unit-testable without Electron. */
+export type ExtensionWindowOpenDecision = { kind: 'ignore' } | WindowOpenDecision
+
+export function decideExtensionWindowOpen(
+  openerUrl: string,
+  details: WindowOpenDetails
+): ExtensionWindowOpenDecision {
+  if (!openerUrl.startsWith('chrome-extension://')) return { kind: 'ignore' }
+  return decideWindowOpen(details)
+}

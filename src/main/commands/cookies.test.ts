@@ -100,6 +100,33 @@ describe('count-active-cookies command', () => {
   })
 })
 
+describe('dump-cookies command', () => {
+  it('returns the active site cookie string (name=value; …) and count', async () => {
+    mockedRows.mockReturnValue([row({ name: 'li_at', value: 'AAA' }), row({ name: 'JSESSIONID', value: 'ajax:1' })])
+    const fake = makeContext()
+    const reg = createCommandRegistry()
+    await reg.execute('import-cookies', { to: 'default', profileDir: 'Default' }, fake.ctx)
+    fake.ctx.newTab('https://www.linkedin.com/feed/')
+
+    const res = (await reg.execute('dump-cookies', {}, fake.ctx)) as Extract<
+      CommandResult,
+      { ok: true }
+    >
+    expect(res).toMatchObject({
+      ok: true,
+      url: 'https://www.linkedin.com/feed/',
+      cookie: 'li_at=AAA; JSESSIONID=ajax:1',
+      count: 2
+    })
+  })
+
+  it('errors when there is no web page to read', async () => {
+    const { ctx } = makeContext() // active tab url is the non-http "home"
+    const res = await createCommandRegistry().execute('dump-cookies', {}, ctx)
+    expect(res).toEqual({ ok: false, error: expect.stringContaining('no active site') })
+  })
+})
+
 describe('clear-data command', () => {
   it('clears the focused profile by default and reports which one', async () => {
     mockedRows.mockReturnValue([row({ name: 'a' }), row({ name: 'b' })])
