@@ -54,6 +54,15 @@ export interface CookieContext {
    * URL; pass `url` to target another site. Returns the host cleared and how many
    * cookies were removed, or null when there is no web page to act on. */
   clearSiteData: (url?: string) => Promise<{ host: string; cookiesRemoved: number } | null>
+  /** Read the cookie string the active tab's site would send: the `name=value;
+   * …` join over the session's cookies for the URL. Read from the session, so it
+   * includes HttpOnly cookies the page's `document.cookie` cannot see (e.g. a
+   * login session token). Defaults to the active tab's URL; pass `url` to target
+   * another site on the target window's session. `url` is null and `cookie` ''
+   * when there is no web page to act on. The value is a live session secret. */
+  readActiveSiteCookies: (
+    url?: string
+  ) => Promise<{ url: string | null; cookie: string; count: number }>
 }
 
 export interface ImportCookiesParams {
@@ -115,6 +124,22 @@ export const cookieCommands: CommandMap<CommandContext> = {
     try {
       const { url, count } = await ctx.countActiveSiteCookies()
       return { ok: true, url, count }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // Read-only: the cookie string the active tab's site would send, HttpOnly
+  // included (read from the session, not document.cookie). Purpose: hand a
+  // logged-in session to an external tool without re-authenticating. No `url` →
+  // the active tab's site. Treat the returned `cookie` as a secret: it is the
+  // live session, equivalent to the login itself.
+  'dump-cookies': async (ctx, params) => {
+    const { url } = (params ?? {}) as { url?: string }
+    try {
+      const { url: site, cookie, count } = await ctx.readActiveSiteCookies(url)
+      if (!site) return { ok: false, error: 'no active site to read' }
+      return { ok: true, url: site, cookie, count }
     } catch (error) {
       return fail(error)
     }

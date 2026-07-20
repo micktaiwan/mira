@@ -261,6 +261,7 @@ A profile marked `encrypted` keeps its data (browsing trails + session partition
 | ---------------------- | --------------------------------------------------------- | ----------------------------------------------------- |
 | `import-cookies`       | `to`, `profileDir`, `userDataDir?`, `safeStorageService?` | import Chrome cookies into a Mira profile             |
 | `count-active-cookies` | —                                                         | cookies the active site would send                    |
+| `dump-cookies`         | `url?`                                                    | read the active site's cookie string (`name=value; …`, HttpOnly included) from the session — result `{url, cookie, count}`; `url?` targets another site. The `cookie` value is a live session secret. Errors: `no active site to read` |
 | `clear-site-data`      | `url?`                                                    | cookies + storage for one site (default: active site) |
 | `clear-data`           | `profile?`                                                | wipe a profile's browsing data                        |
 | `forget-site`          | —                                                         | close the active tab AND wipe its whole registrable domain (cookies + storage + history, all subdomains); Cmd+Alt+W, flashes a toast |

@@ -142,7 +142,7 @@ import {
   type TabFolders
 } from './tab-folder-store'
 import { dockRight } from './devtools-layout'
-import { decideWindowOpen } from './window-open'
+import { decideWindowOpen, decideExtensionWindowOpen, type WindowOpenDetails } from './window-open'
 import { installHoverReporter, reduceHover, hoverText, EMPTY_HOVER, type HoverEvent } from './hover'
 import { evalInWebContents } from './cdp-eval'
 import { keyToDispatchEvents } from './input-keys'
@@ -3908,6 +3908,36 @@ export class ProfileManager {
     return null
   }
 
+  /** Window-open handler for extension pages (browser-action popups, option
+   * pages…). The electron-chrome-extensions lib creates its browser-action popup
+   * as a bare BrowserWindow with NO window-open handler, so a `window.open(url,
+   * "_blank")` from inside it (e.g. lemlist's "Get started" link → linkedin.com)
+   * escapes into an unmanaged OS window while the popup self-closes on blur —
+   * "a popup that opens and closes instantly". We route it into a Mira tab
+   * instead, mirroring what tab views do (see the tab setWindowOpenHandler).
+   * OAuth/SSO popups (disposition new-window/new-popup) are left as real windows
+   * so window.opener survives. Returns null when this wc is not an extension
+   * page, so index.ts leaves Electron's default untouched for everything else. */
+  handleExtensionWindowOpen(
+    openerWc: WebContents,
+    details: WindowOpenDetails
+  ): { action: 'deny' } | { action: 'allow' } | null {
+    const decision = decideExtensionWindowOpen(openerWc.getURL(), details)
+    // Not an extension page → leave Electron's default alone (index.ts allows).
+    if (decision.kind === 'ignore') return null
+    // Keep OAuth/SSO popups as real child windows (window.opener must survive).
+    if (decision.kind === 'popup') return { action: 'allow' }
+    // The popup BrowserWindow is a child of the profile window it belongs to;
+    // fall back to the focused profile window if that link is missing.
+    const popupWin = BrowserWindow.fromWebContents(openerWc)
+    const parent = popupWin?.getParentWindow() ?? null
+    const target =
+      this.findByWindow(parent) ?? this.findByWindow(BrowserWindow.getFocusedWindow())
+    if (!target) return { action: 'allow' }
+    this.newTabIn(target, decision.url, true, undefined, false, decision.referrer)
+    return { action: 'deny' }
+  }
+
   // --- Multi-window-per-profile resolution ---
   // A profile can have several windows open at once (a torn-off tab, see
   // detach-tab). These helpers replace the old `openById.get(profileId)` (which
@@ -4187,6 +4217,32 @@ export class ProfileManager {
         if (!/^https?:/.test(url)) return { url: url || null, count: 0 }
         const cookies = await wc.session.cookies.get({ url })
         return { url, count: cookies.length }
+      },
+      readActiveSiteCookies: async (targetUrl) => {
+        // Resolve the site + session exactly like clearSiteData, but read only.
+        // An explicit url uses the target window's own session; otherwise read
+        // the active tab's url and its OWN session, so the string matches what
+        // that loaded page actually sends. Electron's cookies.get returns
+        // HttpOnly cookies too (they are absent from document.cookie), which is
+        // the whole point: a login session token like li_at is HttpOnly.
+        let url = targetUrl
+        let sess
+        if (url) {
+          sess = this.sessionFor(target?.id ?? DEFAULT_PROFILE_ID)
+        } else {
+          if (!target || target.window.isDestroyed()) return { url: null, cookie: '', count: 0 }
+          const activeId = target.state.activeId
+          if (!activeId || activeId === target.settingsTabId)
+            return { url: null, cookie: '', count: 0 }
+          const view = target.views.get(activeId)
+          if (!view) return { url: null, cookie: '', count: 0 }
+          url = view.webContents.getURL()
+          sess = view.webContents.session
+        }
+        if (!/^https?:/.test(url)) return { url: url || null, cookie: '', count: 0 }
+        const cookies = await sess.cookies.get({ url })
+        const cookie = cookies.map((c) => `${c.name}=${c.value}`).join('; ')
+        return { url, cookie, count: cookies.length }
       },
       clearProfileData: async (profileId) => {
         // Default to the target window's profile (Settings / palette clear "this

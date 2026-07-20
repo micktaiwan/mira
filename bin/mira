@@ -24,6 +24,7 @@
 //   mira nav <url> [--new-tab|-n]   navigate the active tab in place (--new-tab: open a fresh tab instead)
 //   mira open <url>                 open <url> in a NEW tab, leaving the current tab untouched
 //   mira windows                    list open windows (id / profile / tabs), * = focused
+//   mira cookies [--url <url>]      print the active site's cookie string (HttpOnly incl.); for export KONDO_COOKIE="$(mira cookies)"
 //   mira commands                   list every command the running build knows
 //   mira call <command> [--params '<json>']   generic passthrough to any command
 //   mira <command> [--params '<json>']        same, shorthand
@@ -211,6 +212,16 @@ async function main() {
         return process.exit(0)
       }
       return die('use: pass <id>, --url <substr>, or --active', 2)
+    }
+
+    case 'cookies':
+    case 'dump-cookies': {
+      // Prints the bare cookie string (name=value; …) for the active tab's site,
+      // HttpOnly included, so it pipes straight into an env var:
+      //   export KONDO_COOKIE="$(mira cookies)"
+      // --url targets another site; --json returns the {url,cookie,count} envelope.
+      const params = typeof flags.url === 'string' ? { url: flags.url } : {}
+      return send({ command: 'dump-cookies', params }, { json, pretty: (r) => r.cookie })
     }
 
     case 'call': {

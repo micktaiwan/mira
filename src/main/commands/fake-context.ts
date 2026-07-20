@@ -571,6 +571,17 @@ export function makeContext(
       const jar = state.focused ? (cookiesSet.get(state.focused) ?? []) : []
       return Promise.resolve({ url, count: url ? jar.length : 0 })
     },
+    readActiveSiteCookies: (url?: string) => {
+      // Resolve the site like the real one, then join the focused profile's
+      // recorded jar into a name=value string (mirrors the per-url session read).
+      const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
+      const site = url ?? (active && active.id !== state.settingsTabId ? active.url : null)
+      if (!site || !/^https?:\/\//.test(site))
+        return Promise.resolve({ url: null, cookie: '', count: 0 })
+      const jar = state.focused ? (cookiesSet.get(state.focused) ?? []) : []
+      const cookie = jar.map((c) => `${c.name}=${c.value}`).join('; ')
+      return Promise.resolve({ url: site, cookie, count: jar.length })
+    },
     clearProfileData: (profileId?: string) => {
       const id = profileId ?? state.focused
       if (!id) throw new Error('no target profile')

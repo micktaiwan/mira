@@ -80,6 +80,7 @@ function setup(): {
     }),
     cookieJarForProfile: () => ({ set: () => Promise.resolve() }),
     countActiveSiteCookies: () => Promise.resolve({ url: null, count: 0 }),
+    readActiveSiteCookies: () => Promise.resolve({ url: null, cookie: '', count: 0 }),
     clearProfileData: (profileId?: string) => Promise.resolve({ id: profileId ?? focused }),
     clearSiteData: () => Promise.resolve(null),
     forgetActiveSite: () =>

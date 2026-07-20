@@ -426,6 +426,20 @@ app.whenReady().then(async () => {
     runCommand: (wc, name, params) => runDetached(name, params, profiles.contextForChrome(wc))
   })
 
+  // Extension pages (browser-action popups, option pages) are created by the
+  // electron-chrome-extensions lib as bare BrowserWindows with no window-open
+  // handler — so a window.open("_blank") from inside one (lemlist's "Get started"
+  // → linkedin.com) escapes into an unmanaged OS window while the popup closes on
+  // blur. Route those into a Mira tab instead. The handler no-ops (returns null)
+  // for any non-extension wc, and tab views install their own handler right after
+  // creation which overrides this one — so nothing else changes.
+  app.on('web-contents-created', (_event, wc) => {
+    wc.setWindowOpenHandler((details) => {
+      const decision = profiles.handleExtensionWindowOpen(wc, details)
+      return decision ?? { action: 'allow' }
+    })
+  })
+
   // Menu accelerators and context-menu clicks are fire-and-forget: nothing
   // awaits their result, so an async command (load-extension, import-cookies)
   // that rejects would surface as an unhandled rejection. Route them through
