@@ -64,6 +64,7 @@ import {
 } from './extension-capabilities'
 import { ExtensionCaptureService } from './extension-capture'
 import { ExtensionCommandsService } from './extension-commands'
+import { formatExtTabLog } from './extensions-tab-log'
 import { OffscreenHostService } from './extension-offscreen'
 import {
   type DisabledExtensions,
@@ -154,6 +155,11 @@ export class ExtensionsService {
   private captureService: ExtensionCaptureService | null = null
   /** Extension keyboard shortcuts (manifest `commands`). */
   private readonly commandsService = new ExtensionCommandsService()
+  /** WebContents whose navigations we already hooked for the [mira-ext-tab]
+   * forensic log — addTab can fire twice for one wc (e.g. moving a tab between
+   * windows: removeTab then addTab in profiles.ts), and the navigation
+   * listeners must attach only once. A WeakSet so a closed tab's wc is GC'd. */
+  private readonly tabLogHooked = new WeakSet<WebContents>()
 
   constructor(private readonly deps: ExtensionsServiceDeps) {
     this.sideloaded = deps.initialSideloaded
@@ -1035,17 +1041,44 @@ export class ExtensionsService {
    * session has no extension system (never happens in practice — ensureFor runs
    * at window create — but a guard beats a crash). */
   addTab(wc: WebContents, window: BaseWindow): void {
+    this.instrumentTabLogging(wc)
+    console.log(formatExtTabLog('add', wc.id, safeTabUrl(wc)))
     this.bySession.get(wc.session)?.addTab(wc, window)
   }
 
   /** Tell the extension system the active tab changed (chrome.tabs.onActivated). */
   selectTab(wc: WebContents): void {
+    console.log(formatExtTabLog('select', wc.id, safeTabUrl(wc)))
     this.bySession.get(wc.session)?.selectTab(wc)
   }
 
   /** Untrack a tab about to be closed or discarded. */
   removeTab(wc: WebContents): void {
+    console.log(formatExtTabLog('remove', wc.id, safeTabUrl(wc)))
     this.bySession.get(wc.session)?.removeTab(wc)
+  }
+
+  /** Emit a `[mira-ext-tab]` line for every navigation of a tracked tab, once
+   * per webContents (guarded by tabLogHooked). These navigations are what the
+   * extensions lib turns into chrome.tabs.onUpdated — the signal an extension
+   * like Claap uses to notice a meeting page left the call. Logging them (plus
+   * add/select/remove) to the rotating main log is the only way to tell, after
+   * the fact, whether Mira delivered the event an extension appears to have
+   * missed. Best-effort and cheap: one console line per event. */
+  private instrumentTabLogging(wc: WebContents): void {
+    if (this.tabLogHooked.has(wc)) return
+    this.tabLogHooked.add(wc)
+    wc.on('did-navigate', (_event, url) => {
+      console.log(formatExtTabLog('navigate', wc.id, url))
+    })
+    wc.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+      // SPA (history API) url changes — how Google Meet moves to its "you left
+      // the call" state without a full document load. Main frame only.
+      if (isMainFrame) console.log(formatExtTabLog('navigate-in-page', wc.id, url))
+    })
+    wc.once('destroyed', () => {
+      console.log(formatExtTabLog('destroyed', wc.id, ''))
+    })
   }
 
   /** The extensions' items for a right-click on `wc` (chrome.contextMenus):
@@ -1090,6 +1123,16 @@ const SW_CONSOLE_BUFFER_LIMIT = 2000
  * for readable [mira-sw] lifecycle logs. */
 function idFromScope(scope: string): string {
   return scope.replace(/^chrome-extension:\/\//, '').replace(/\/$/, '')
+}
+
+/** The current url of `wc` for a [mira-ext-tab] log line, never throwing: a
+ * destroyed webContents (removeTab on close) can't be queried. */
+function safeTabUrl(wc: WebContents): string {
+  try {
+    return wc.isDestroyed() ? '(destroyed)' : wc.getURL()
+  } catch {
+    return '(unknown)'
+  }
 }
 
 // --- DNR enforcement helpers (pure, module scope) --------------------------

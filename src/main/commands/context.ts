@@ -11,6 +11,7 @@ import type { AudioContext } from './audio'
 import type { BookmarkContext } from './bookmarks'
 import type { CookieContext } from './cookies'
 import type { DevtoolsContext } from './devtools'
+import type { DiskContext } from './disk'
 import type { DownloadsContext } from './downloads'
 import type { ExtensionsContext } from './extensions'
 import type { FindContext } from './find'
@@ -46,6 +47,7 @@ export type CommandContext = AppContext &
   BookmarkContext &
   CookieContext &
   DevtoolsContext &
+  DiskContext &
   DownloadsContext &
   ExtensionsContext &
   FindContext &

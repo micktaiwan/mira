@@ -19,6 +19,7 @@ import { audioCommands } from './audio'
 import { bookmarksCommands } from './bookmarks'
 import { cookieCommands } from './cookies'
 import { devtoolsCommands } from './devtools'
+import { diskCommands } from './disk'
 import { downloadsCommands } from './downloads'
 import { extensionsCommands } from './extensions'
 import { findCommands } from './find'
@@ -58,6 +59,14 @@ export type { BookmarkContext } from './bookmarks'
 export type { BookmarkNode, BookmarkUrl, BookmarkFolder, BookmarkTree } from '../bookmark-store'
 export type { CookieContext, CookieSink, ImportCookiesParams } from './cookies'
 export type { DevtoolsContext } from './devtools'
+export type { DiskContext } from './disk'
+export type {
+  DiskUsageReport,
+  DiskEntry,
+  ProfileDiskUsage,
+  ProfileForDisk
+} from '../disk-usage'
+export { formatDiskBytes } from '../disk-usage'
 export type { DownloadsContext, DownloadRecord, DownloadState, DownloadStats } from './downloads'
 export type {
   ExtensionsContext,
@@ -101,8 +110,15 @@ export type { DisplaySpaces, SpaceEntry, SpaceLocation } from '../spaces'
 export type { StatusContext, MemoryUsage, TabCounts } from './status'
 export type { TabFoldersContext } from './tab-folders'
 export type { TabFolder, TabFolders } from '../tab-folder-store'
-export type { TabMemoryContext, TabMemoryEntry, TabMemoryReport } from './tab-memory'
-export { formatBytes, rankTabMemory, totalDistinctMemory } from './tab-memory'
+export type {
+  TabMemoryContext,
+  TabMemoryEntry,
+  TabMemoryReport,
+  TabProcess,
+  RawFrame,
+  RawTab
+} from './tab-memory'
+export { formatBytes, rankTabMemory, buildTabMemoryReport, hostOf } from './tab-memory'
 export type { TabDetachContext, WindowInfo } from './tab-detach'
 export type { TabMenuContext } from './tab-menu'
 export type { TabsContext, TabInfo, TabKind } from './tabs'
@@ -123,6 +139,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...bookmarksCommands,
     ...cookieCommands,
     ...devtoolsCommands,
+    ...diskCommands,
     ...downloadsCommands,
     ...extensionsCommands,
     ...findCommands,

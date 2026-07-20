@@ -25,6 +25,7 @@
 //   mira open <url>                 open <url> in a NEW tab, leaving the current tab untouched
 //   mira windows                    list open windows (id / profile / tabs), * = focused
 //   mira cookies [--url <url>]      print the active site's cookie string (HttpOnly incl.); for export KONDO_COOKIE="$(mira cookies)"
+//   mira forget <domain> [--profile <id>]  wipe a domain's cookies + storage + history (all subdomains); no tab needed
 //   mira commands                   list every command the running build knows
 //   mira call <command> [--params '<json>']   generic passthrough to any command
 //   mira <command> [--params '<json>']        same, shorthand
@@ -222,6 +223,19 @@ async function main() {
       // --url targets another site; --json returns the {url,cookie,count} envelope.
       const params = typeof flags.url === 'string' ? { url: flags.url } : {}
       return send({ command: 'dump-cookies', params }, { json, pretty: (r) => r.cookie })
+    }
+
+    case 'forget': {
+      // Wipe a domain's cookies + storage + history (all subdomains) in a
+      // profile, no tab required: mira forget linkedin.com [--profile <id>]
+      const domain = positionals[0]
+      if (!domain) return die('forget needs a domain (e.g. mira forget linkedin.com)', 2)
+      const params = { domain }
+      if (typeof flags.profile === 'string') params.profileId = flags.profile
+      return send(
+        { command: 'forget-domain', params },
+        { json, pretty: (r) => `cleared ${r.domain}: ${r.cookiesRemoved} cookies, ${r.historyRemoved} history` }
+      )
     }
 
     case 'call': {

@@ -614,7 +614,7 @@ body {
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
-  color: var(--ev-c-gray-1);
+  color: var(--text-muted);
   font-size: 13px;
   padding: 6px 10px;
   cursor: pointer;
@@ -649,7 +649,7 @@ body {
 
 .settings-field-label {
   font-size: 12px;
-  color: var(--ev-c-gray-1);
+  color: var(--text-muted);
 }
 
 .settings-input {
@@ -680,7 +680,7 @@ body {
 }
 
 .settings-hint {
-  color: var(--ev-c-gray-1);
+  color: var(--text-muted);
   font-size: 12px;
   margin-bottom: 16px;
   max-width: 42ch;
@@ -690,6 +690,97 @@ body {
   color: var(--color-danger);
   font-size: 12px;
   margin-bottom: 12px;
+}
+
+/* Disk-usage analysis in the Data section: a headline, a by-profile list and a
+   by-folder breakdown with proportional bars. */
+.disk-usage {
+  margin-bottom: 24px;
+}
+
+.disk-subhead {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 12px 0 6px;
+}
+
+.disk-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 52ch;
+}
+
+.disk-row {
+  display: grid;
+  grid-template-columns: minmax(9ch, 1fr) 2fr auto;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  padding: 3px 0;
+}
+
+.disk-name {
+  color: var(--color-text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.disk-detail {
+  color: var(--text-faint);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.disk-size {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.disk-tag {
+  font-size: 10px;
+  color: var(--text-faint);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  line-height: 1.4;
+}
+
+.disk-tag-cache {
+  color: var(--color-warning);
+  border-color: var(--color-warning);
+  opacity: 0.7;
+}
+
+.disk-bar-track {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--color-background-mute);
+  overflow: hidden;
+}
+
+.disk-bar {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+
+.disk-bar-cache {
+  background: var(--color-warning);
 }
 
 .profile-list {
@@ -1118,6 +1209,56 @@ body {
   white-space: nowrap;
 }
 
+/* Per-tab process breakdown: main frame + out-of-process subframes, listed
+   under the tab row. */
+.tab-mem-procs {
+  list-style: none;
+  margin: 6px 0 0 24px;
+  padding: 0;
+  max-width: 460px;
+  border-left: 1px solid var(--ev-c-gray-3);
+}
+
+.tab-mem-proc {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 0 2px 10px;
+  font-size: 11px;
+  color: var(--ev-c-gray-1);
+}
+
+.tab-mem-proc-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tab-mem-proc-size {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.tab-mem-proc-count {
+  display: block;
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--ev-c-gray-1);
+}
+
+/* Footer: the non-tab bucket and the app-wide total. */
+.tab-mem-foot td {
+  color: var(--ev-c-gray-1);
+  border-bottom: none;
+}
+
+.tab-mem-foot-total td {
+  border-top: 1px solid var(--ev-c-gray-3);
+  color: var(--color-text);
+}
+
 .btn {
   -webkit-app-region: no-drag;
   flex-shrink: 0;
@@ -1134,6 +1275,15 @@ body {
 
 .btn:hover {
   filter: brightness(1.08);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn:disabled:hover {
+  filter: none;
 }
 
 .btn-ghost {
