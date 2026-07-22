@@ -35,5 +35,18 @@
     <array>
       <string>ZMKDR6H89Y.com.mickaelfm.mira.webauthn</string>
     </array>
+    <!-- keychain-access-groups is only HONORED at runtime when the process also
+         carries application-identifier (+ team-identifier): macOS validates the
+         keychain group's team prefix against it. Xcode adds these automatically;
+         electron-builder does not, so without them Chromium's FIDO layer reports
+         "keychain-access-group entitlement is missing or incorrect" and the Touch ID
+         create()/get() hangs with no prompt (verified 2026-07-22). Both are
+         AMFI-restricted but authorized by build/embedded.provisionprofile
+         (application-identifier ZMKDR6H89Y.com.mickaelfm.mira, team ZMKDR6H89Y). MAIN
+         ONLY — the profile-less helpers must not carry them (see the inherit plist). -->
+    <key>com.apple.application-identifier</key>
+    <string>ZMKDR6H89Y.com.mickaelfm.mira</string>
+    <key>com.apple.developer.team-identifier</key>
+    <string>ZMKDR6H89Y</string>
   </dict>
 </plist>
