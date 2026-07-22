@@ -1,4 +1,8 @@
-appId: com.mira.app
+# Bundle id: com.mira.app was arbitrary AND is already registered to another Apple
+# team (Apple refuses to register it to ours), so it can't carry a provisioning
+# profile. com.mickaelfm.mira is registrable under the free personal team ZMKDR6H89Y,
+# which is required for the WebAuthn keychain-access-groups entitlement (webauthn.ts).
+appId: com.mickaelfm.mira
 productName: Mira
 directories:
   buildResources: build
@@ -51,6 +55,17 @@ nsis:
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  # Development signing (not distribution): Mira is a personal, non-distributed build,
+  # and only a development-signed app with an embedded provisioning profile can carry the
+  # AMFI-restricted keychain-access-groups entitlement (WebAuthn Touch ID, see webauthn.ts).
+  # `type: development` makes electron-builder accept the "Apple Development" cert; without
+  # it, it looks for a "Developer ID Application" cert we don't have. identity pins that
+  # exact cert. provisioningProfile is minted from the free personal team (ZMKDR6H89Y) and
+  # EXPIRES 7 DAYS after creation — re-mint + rebuild weekly (see build/embedded.provisionprofile).
+  type: development
+  identity: "Apple Development: faivrem@gmail.com (23L76N6978)"
+  provisioningProfile: build/embedded.provisionprofile
+  entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   # extendInfo must be a MAP, not a list: electron-builder's list form mangles a
   # nested value (CFBundleURLTypes landed under a bogus numeric key). Map form
@@ -70,7 +85,7 @@ mac:
     # it in the default-browser picker and routes clicked links to the 'open-url'
     # event (see src/main/index.ts). Without this, Mira can't be set as default.
     CFBundleURLTypes:
-      - CFBundleURLName: com.mira.app.web
+      - CFBundleURLName: com.mickaelfm.mira.web
         CFBundleTypeRole: Viewer
         CFBundleURLSchemes:
           - http

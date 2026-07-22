@@ -17,6 +17,9 @@ export interface TabInfo {
   /** Whether the tab is currently playing sound (live runtime flag, not persisted).
    * Drives the sidebar's speaker icon and the toolbar audio button. */
   audible: boolean
+  /** Whether the tab's main frame is currently loading (live runtime flag).
+   * Drives the toolbar reload spinner beside the address bar. */
+  loading: boolean
 }
 
 /** A tab folder (metadata): the sidebar groups tabs by folderId; this carries the

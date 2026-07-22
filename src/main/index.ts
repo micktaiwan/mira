@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, mkdirSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { createCommandRegistry, type CommandContext } from './commands'
-import { startCommandSocket, cleanupSocket } from './socket'
+import { startCommandSocket, cleanupSocket, type CommandSocketHandle } from './socket'
 import { forwardToRunningInstance } from './single-instance'
 import { ProfileManager, DEFAULT_PROFILE_ID } from './profiles'
 import { CHROME_PARTITION, DEFAULT_SESSION_ALIAS } from './chrome-session'
@@ -34,11 +34,15 @@ import { normalizePermissions, type PermissionGrant } from './permission-store'
 import { normalizeSettings, type AppSettings } from './settings-store'
 import { buildAppMenu } from './menu'
 import { installStealth } from './stealth'
+import { installTouchIdWebAuthn } from './webauthn'
 import { aboutPanelOptions } from './about'
 
 // External control socket (see CLAUDE.md, "tout pilotable"). Override with the
 // MIRA_SOCKET env var; defaults to a fixed path for the single-instance case.
 const SOCKET_PATH = process.env.MIRA_SOCKET ?? '/tmp/mira.sock'
+// Held so will-quit can stop the socket's vanish watchdog BEFORE unlinking the
+// file — otherwise the watchdog would see the file gone and re-bind it.
+let commandSocket: CommandSocketHandle | null = null
 
 // Default-browser handoff. When Mira is the system default browser, macOS hands it
 // clicked links via the 'open-url' event — which can fire BEFORE whenReady on a
@@ -154,16 +158,14 @@ app.whenReady().then(async () => {
   }
 
   // App user model id (Windows taskbar grouping; harmless on macOS).
-  electronApp.setAppUserModelId('com.mira.app')
+  electronApp.setAppUserModelId('com.mickaelfm.mira')
 
-  // NOTE: enabling the macOS Touch ID platform authenticator for WebAuthn
-  // (app.configureWebAuthn + a keychain-access-groups entitlement) is what makes
-  // isUserVerifyingPlatformAuthenticatorAvailable() true and gives sites like Google
-  // Photos' locked folder an instant Touch ID prompt instead of a slow ~10s passkey
-  // probe. It's NOT wired up because the keychain-access-groups entitlement is
-  // AMFI-restricted: on this Apple Development signing with no provisioning profile,
-  // any binary carrying it is SIGKILLed at launch (verified 2026-07-19). It needs an
-  // embedded macOS provisioning profile that authorizes the keychain group first.
+  // Enable the macOS Touch ID platform authenticator for WebAuthn, so passkey prompts
+  // (e.g. Google's "Use your passkey to confirm it's really you") can be satisfied with a
+  // fingerprint instead of hanging on an unavailable authenticator. No-op in dev — the
+  // keychain-access-groups entitlement it needs only exists in the signed packaged build.
+  // See webauthn.ts for the full story (entitlement, provisioning profile, isolation).
+  installTouchIdWebAuthn()
 
   // Present as a plain Chrome, not an Electron app. Electron's default UA appends
   // "<appName>/<version> Electron/<version>" tokens (here "Mira/1.0.0 Electron/41…"),
@@ -527,7 +529,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('command', (event, name: string, params?: unknown) => {
     return registry.execute(name, params, profiles.contextForChrome(event.sender))
   })
-  startCommandSocket(SOCKET_PATH, registry, () => profiles.contextForFocused())
+  commandSocket = startCommandSocket(SOCKET_PATH, registry, () => profiles.contextForFocused())
   console.log(`[mira] control socket listening on ${SOCKET_PATH}`)
 
   // System-wide shortcut to summon Mira from any app (like Panorama's
@@ -621,6 +623,8 @@ app.on('window-all-closed', () => {
 // the global shortcut back to the system.
 app.on('will-quit', () => {
   globalShortcut.unregisterAll()
+  // Stop the watchdog first, or it would re-bind the file cleanupSocket removes.
+  commandSocket?.close()
   cleanupSocket(SOCKET_PATH)
 })
 

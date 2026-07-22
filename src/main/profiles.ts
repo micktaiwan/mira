@@ -46,6 +46,7 @@ import type {
   RawTab
 } from './commands'
 import { closedSkillPane, formatMemory, nextZen, buildTabMemoryReport } from './commands'
+import { PageConsoleStore, draftFromCdpMessage } from './page-console'
 import { MediaBuffer, captureStats, fileNameFor, mergeMedia } from './media-capture'
 import { MEDIA_COLLECT_SOURCE, nearestVideoPermalinkSource, parseDomMedia } from './media-collect'
 import { ytdlpDownload } from './ytdlp'
@@ -211,6 +212,27 @@ const REVEAL_COOKIES_SCRIPT = `(async () => {
   }
   return false
 })()`
+
+/** Whether closing a window should quit the whole app: true only when it is the
+ * app's LAST open window and the close is user-driven. `remainingWindows` is how
+ * many stay open AFTER this one goes (0 = it was the last). We skip the quit when
+ * the app is already quitting (before-quit drives its own shutdown) or a bulk
+ * vault lock is closing windows programmatically (lockAllVaults, not a real close).
+ * Closing the last profile's last window then quits Mira, instead of leaving it
+ * running window-less on macOS. */
+export function shouldQuitAfterWindowClose(opts: {
+  remainingWindows: number
+  quitting: boolean
+  lockingAll: boolean
+  scriptClosing: boolean
+}): boolean {
+  return (
+    opts.remainingWindows === 0 &&
+    !opts.quitting &&
+    !opts.lockingAll &&
+    !opts.scriptClosing
+  )
+}
 
 /** The scheme+host of a URL (e.g. "https://www.google.com") for the permission
  * grant log, or the raw string if it can't be parsed. Keeps one row per site
@@ -540,6 +562,17 @@ export class ProfileManager {
    * profile), so this is NOT keyed by profile id — use windowsForProfile /
    * aWindowForProfile to resolve a profile's window(s). */
   private readonly openById = new Map<string, ProfileWindow>()
+  /** Per-tab web-page console capture (console.* calls + browser-emitted lines:
+   * failed loads, CORS, CSP, uncaught exceptions), tailed off each tab's CDP
+   * debugger. Read back by the get-console command; dropped when a tab is torn
+   * down. See page-console.ts. */
+  private readonly pageConsole = new PageConsoleStore()
+  /** Windows currently being closed programmatically by closeProfile (socket/MCP
+   * `close-profile`), NOT by a user. A script closing the last profile must not
+   * quit the whole app — only a real user close does. Agents wanting to quit call
+   * the explicit `quit` command instead. Entries are dropped as each window's
+   * 'close' fires (WeakSet also GC-clears them). */
+  private readonly scriptClosingWindows = new WeakSet<BrowserWindow>()
   /** yt-dlp video downloads in flight, keyed by a unique id, with when each
    * started. A download runs in a background process (independent of any UI), so
    * this lets the status bar show one is running and how long it has taken. */
@@ -925,8 +958,8 @@ export class ProfileManager {
    * 'close'/'closed' handlers snapshot geometry and do the bookkeeping, and the
    * profile auto-locks if it was an unlocked vault (once its LAST window is gone).
    * A profile may have several windows (a tear-off) — all are closed. Other
-   * profiles' windows are untouched, and on macOS the app keeps running with no
-   * window (window-all-closed does not quit). `closed` is false when the id is
+   * profiles' windows are untouched. If this closes the app's LAST window, Mira
+   * quits (see the 'close' handler in create). `closed` is false when the id is
    * known but not currently open. Throws on an unknown id. */
   closeProfile(id: string): { id: string; closed: boolean } {
     if (!findById(this.profiles, id)) throw new Error(`unknown profile: ${id}`)
@@ -934,7 +967,12 @@ export class ProfileManager {
     if (windows.length === 0) return { id, closed: false }
     // window.close() drives the same path as clicking the red button / Cmd+Shift+W:
     // the 'closed' handler (see create) does the not-open bookkeeping and auto-lock.
-    for (const pw of windows) pw.window.close()
+    // Tag them as script-closed FIRST so closing the last profile this way does NOT
+    // quit Mira (that is reserved for a user close; agents use the `quit` command).
+    for (const pw of windows) {
+      this.scriptClosingWindows.add(pw.window)
+      pw.window.close()
+    }
     return { id, closed: true }
   }
 
@@ -1299,7 +1337,36 @@ export class ProfileManager {
     // 'close' fires while the window is still alive — snapshot its final geometry
     // (position + size + maximized/fullscreen) here, since it can't be read once
     // destroyed. 'closed' then persists tabs and drops it from the open map.
-    window.on('close', () => this.saveSession(profileWindow))
+    window.on('close', () => {
+      this.saveSession(profileWindow)
+      // Destroy every tab's webContents here, while the window is still alive.
+      // Tabs are WebContentsView layers we hold refs to in `pw.views`, NOT child
+      // BrowserWindows — Electron does NOT auto-destroy them with the parent, so a
+      // tab playing audio (e.g. a video) keeps its webContents alive and audible
+      // after the window is gone, with no visible tab to stop it. Closing each
+      // webContents (as closeTab does) releases the audio. Do it before 'closed',
+      // which fires once the native window is already destroyed.
+      for (const view of profileWindow.views.values()) view.webContents.close()
+      // Quit Mira when its LAST window closes (e.g. Cmd+Shift+W on the last
+      // profile), rather than lingering window-less on macOS. This fires BEFORE
+      // 'closed', so app.quit() → 'before-quit' → beginQuit() flips `quitting`
+      // first: the 'closed' handler below then takes the quit branch (keeps the
+      // open flag, skips its own auto-lock) and the graceful before-quit path
+      // handles any unlocked vault. `openById` still holds this closing window
+      // here, so size 1 means it is the last one.
+      const scriptClosing = this.scriptClosingWindows.has(window)
+      this.scriptClosingWindows.delete(window)
+      if (
+        shouldQuitAfterWindowClose({
+          remainingWindows: this.openById.size - 1,
+          quitting: this.quitting,
+          lockingAll: this.lockingAll,
+          scriptClosing
+        })
+      ) {
+        app.quit()
+      }
+    })
     window.on('closed', () => {
       // Drop this window from the open map FIRST, so the "does the profile still
       // have other windows?" check below excludes the one that just closed.
@@ -2048,7 +2115,35 @@ export class ProfileManager {
 
   /** Mirror a tab's live page state (title / url / favicon) into its metadata and
    * push the refreshed strip to the chrome. */
+  /** Tail a tab's web-page console into the per-tab ring buffer. Two CDP sources
+   * cover the whole DevTools Console: `Runtime` (the page's own console.* calls +
+   * uncaught exceptions) and `Log` (browser-emitted lines the page never logged
+   * itself — failed loads / 403, CORS blocks, CSP, deprecations).
+   *
+   * Mira already attaches a CDP debugger to every content view for the stealth
+   * shim (stealth.ts, synchronously on web-contents-created, before this runs),
+   * so we only ENABLE those two domains and subscribe to messages — never attach
+   * or detach (that would fight stealth / exec-js on the shared transport). The
+   * enables are idempotent and best-effort; re-asserted once after the first load
+   * in case the attach hadn't landed when a freshly-created view's first sync
+   * load committed. */
+  private wirePageConsole(tabId: string, wc: WebContents): void {
+    const enable = (): void => {
+      if (!wc.debugger.isAttached()) return
+      wc.debugger.sendCommand('Runtime.enable').catch(() => {})
+      wc.debugger.sendCommand('Log.enable').catch(() => {})
+    }
+    enable()
+    wc.once('did-finish-load', enable)
+    wc.debugger.on('message', (_event, method, params) => {
+      const draft = draftFromCdpMessage(method, params)
+      if (draft) this.pageConsole.record(tabId, draft)
+    })
+  }
+
   private wireView(initialPw: ProfileWindow, tabId: string, wc: WebContents): void {
+    // Tail this tab's page console into the ring buffer (read by get-console).
+    this.wirePageConsole(tabId, wc)
     // Resolve the window that OWNS this tab at event time, not the one it was born
     // in: a torn-off tab keeps these handlers but now lives in another window (see
     // detach-tab / ownerOf). Falls back to the birth window while the strip is
@@ -2124,6 +2219,13 @@ export class ProfileManager {
     // (it is read live from the view in tabInfos), so this only needs to push —
     // not patch/persist. schedulePush coalesces bursts (ad start/stop, autoplay).
     wc.on('audio-state-changed', () => this.schedulePush(owner()))
+    // Main-frame load start/stop drives the toolbar reload spinner (TabInfo.loading,
+    // read live in tabInfos). Push immediately (not debounced) so the spinner
+    // appears the instant a reload/navigation begins and clears the instant it
+    // ends — the renderer holds it visible for a floor duration so a fast reload
+    // is still perceptible.
+    wc.on('did-start-loading', () => this.pushTabs(owner()))
+    wc.on('did-stop-loading', () => this.pushTabs(owner()))
     // Status-bar hover readout, browser-style. Two sources merged by reduceHover:
     // Chromium's native update-target-url reports the link under the cursor, and
     // the injected detector (installHoverReporter) reports JS-triggering controls
@@ -2325,7 +2427,11 @@ export class ProfileManager {
       // Live audio state read straight from the native view (like `loaded` from
       // pw.views): true while the page emits sound. An asleep tab has no view, so
       // it is never audible. Refreshed by the audio-state-changed push (wireView).
-      audible: pw.views.get(t.id)?.webContents.isCurrentlyAudible() === true
+      audible: pw.views.get(t.id)?.webContents.isCurrentlyAudible() === true,
+      // Live loading state, same source: true while the main frame is fetching a
+      // page. Drives the toolbar reload spinner. An asleep tab has no view, so it
+      // is never loading. Refreshed by the did-start/did-stop-loading push.
+      loading: pw.views.get(t.id)?.webContents.isLoadingMainFrame() === true
     }))
   }
 
@@ -2459,6 +2565,9 @@ export class ProfileManager {
     // the neighbor that inherits focus is recorded by the notifyExtensionsActiveTab
     // call below (the normal active-change path), so the MRU cursor follows focus.
     pw.mru = mruPrune(pw.mru, id)
+    // The tab id is gone for good now — free its captured console (a discard, by
+    // contrast, keeps the id and re-wires on wake, so its history is preserved).
+    this.pageConsole.drop(id)
     if (pw.closeArmedId === id) pw.closeArmedId = null
     // Closing the Settings tab frees the singleton slot so it can reopen later.
     if (id === pw.settingsTabId) pw.settingsTabId = null
@@ -4215,6 +4324,10 @@ export class ProfileManager {
         // on macOS; stealing app focus is the documented way.
         app.focus({ steal: true })
       },
+      // Explicit quit for scripts/agents: app.quit() runs the graceful shutdown
+      // (before-quit flushes sessions and re-locks any unlocked vault). Closing
+      // the last profile does NOT quit, so this is the only programmatic exit.
+      quitApp: () => app.quit(),
       // Default-browser handoff: openUrl does its OWN targeting (an explicit
       // profileId, else the last-focused profile), independent of this context's
       // target window — the command may arrive over the socket while a different
@@ -4718,7 +4831,9 @@ export class ProfileManager {
           background
         )
         // A freshly opened tab is always materialized (loaded), a web tab, never
-        // born pinned, kept-awake, in a folder, or (yet) making sound.
+        // born pinned, kept-awake, in a folder, or (yet) making sound. `loading`
+        // in this command result is the "not yet" default like `audible`; the
+        // live spinner is driven by the pushed tab state (tabInfos), not this.
         return {
           ...tab,
           loaded: true,
@@ -4726,7 +4841,8 @@ export class ProfileManager {
           pinned: false,
           keepAwake: false,
           folderId: null,
-          audible: false
+          audible: false,
+          loading: false
         }
       },
       closeTab: (id) => {
@@ -4921,6 +5037,26 @@ export class ProfileManager {
         const profileId = query.profileId ?? target?.id
         if (!profileId) throw new Error('no target window')
         return this.deps.extensions.serviceWorkerConsole(this.sessionFor(profileId), query)
+      },
+      readPageConsole: (query) => {
+        const { tabId, ...rest } = query
+        if (tabId !== undefined) {
+          // The buffer is keyed by tabId and survives a discard, so a live
+          // webContents isn't required — an asleep tab still has its history.
+          // Just confirm the id belongs to some open window (awake or asleep);
+          // unknown is an error, mirroring exec-js.
+          const known = [...this.openById.values()].some(
+            (pw) =>
+              !pw.window.isDestroyed() &&
+              (pw.views.has(tabId) || pw.state.tabs.some((t) => t.id === tabId))
+          )
+          if (!known) throw new Error(`unknown tab: ${tabId}`)
+          return this.pageConsole.read(tabId, rest)
+        }
+        if (!target || target.window.isDestroyed()) throw new Error('no target window')
+        const activeId = target.state.activeId
+        if (!activeId || activeId === target.settingsTabId) throw new Error('no active web page')
+        return this.pageConsole.read(activeId, rest)
       }
     }
   }

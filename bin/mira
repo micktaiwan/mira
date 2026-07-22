@@ -14,16 +14,18 @@
 // `export MIRA_TAB=<id>` line to pin a tab for the rest of the shell session.
 //
 // Usage:
-//   mira tabs                       list tabs (id / title / url), * = active
+//   mira tabs                       list tabs (id / title / url), * = active, z = asleep, ♪ = playing sound
 //   mira use --url <substr>         resolve a tab by url, print export MIRA_TAB=<id>
 //   mira use --active               pin the focused window's active tab
 //   mira use <id>                   pin an explicit id
 //   mira exec <code|-|@file>        run JS in the pinned/active tab
 //   mira press <key> [--mod a,b]    send a real keypress (e.g. e, Enter, ArrowDown)
 //   mira reload                     reload the pinned (via exec-js) or active tab
+//   mira console [--level e][--limit n][--since seq]  captured page console (console.* + 403/CORS/CSP/exceptions)
 //   mira nav <url> [--new-tab|-n]   navigate the active tab in place (--new-tab: open a fresh tab instead)
 //   mira open <url>                 open <url> in a NEW tab, leaving the current tab untouched
 //   mira windows                    list open windows (id / profile / tabs), * = focused
+//   mira quit                       quit Mira entirely (close-profile never quits; this is the explicit exit)
 //   mira cookies [--url <url>]      print the active site's cookie string (HttpOnly incl.); for export KONDO_COOKIE="$(mira cookies)"
 //   mira forget <domain> [--profile <id>]  wipe a domain's cookies + storage + history (all subdomains); no tab needed
 //   mira commands                   list every command the running build knows
@@ -43,7 +45,9 @@ import {
   buildReload,
   buildPress,
   buildCall,
+  buildConsole,
   formatTabs,
+  formatConsole,
   formatWindows,
   resolveCode
 } from '../src/cli/mira-core.mjs'
@@ -163,6 +167,15 @@ async function main() {
 
     case 'reload':
       return send(buildReload(tabId), { json })
+
+    case 'console':
+      // Read the captured web-page console (console.* + browser lines: failed
+      // loads/403, CORS, CSP, exceptions) of the pinned/active tab. Flags:
+      // --level <verbose|info|warning|error>, --limit <n>, --since <seq>.
+      return send(buildConsole(tabId, { level: flags.level, limit: flags.limit, since: flags.since }), {
+        json,
+        pretty: (r) => formatConsole(r.messages)
+      })
 
     case 'windows':
       return send(

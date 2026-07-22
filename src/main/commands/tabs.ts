@@ -40,6 +40,11 @@ export interface TabInfo {
    * sidebar shows a speaker icon for it, and the toolbar audio button lists these
    * tabs. Always false for an asleep tab (no view to be audible). */
   audible: boolean
+  /** Whether the tab's main frame is currently loading (its WebContentsView is
+   * fetching a page). A live runtime flag read from the native view, not
+   * persisted: the toolbar shows a spinner beside the address bar while true.
+   * Always false for an asleep tab (no view to be loading). */
+  loading: boolean
 }
 
 /** Tabs capability slice: create / close / select / list tabs of the target
@@ -135,6 +140,19 @@ export interface NewTabParams {
 
 export interface TabIdParams {
   id: string
+  /** Alias for `id`, so a caller can pass the same key the page-bound commands
+   * use (exec-js / get-console / press-key all take `tabId`). */
+  tabId?: string
+}
+
+/** Read a tab id from either `id` (canonical) or `tabId` (the alias the
+ * page-bound commands use), trimmed. Returns '' when neither is a non-empty
+ * string. Removes the friction of remembering which key a given tab command
+ * wants. */
+export function tabIdOf(params: unknown): string {
+  const p = (params ?? {}) as { id?: unknown; tabId?: unknown }
+  const raw = typeof p.id === 'string' && p.id.trim() !== '' ? p.id : p.tabId
+  return typeof raw === 'string' ? raw.trim() : ''
 }
 
 export interface MoveTabParams {
@@ -169,13 +187,11 @@ export const tabsCommands: CommandMap<CommandContext> = {
   },
 
   'close-tab': (ctx, params) => {
-    const { id } = (params ?? {}) as Partial<TabIdParams>
-    if (typeof id !== 'string' || id.trim() === '') {
-      return { ok: false, error: 'missing "id"' }
-    }
+    const id = tabIdOf(params)
+    if (id === '') return { ok: false, error: 'missing "id" (or "tabId")' }
     try {
-      ctx.closeTab(id.trim())
-      return { ok: true, id: id.trim() }
+      ctx.closeTab(id)
+      return { ok: true, id }
     } catch (error) {
       return fail(error)
     }
@@ -206,13 +222,11 @@ export const tabsCommands: CommandMap<CommandContext> = {
   // Discard a specific tab's page (id) but keep the tab: frees its renderer
   // process while leaving it in the strip, ready to reload when selected.
   'discard-tab': (ctx, params) => {
-    const { id } = (params ?? {}) as Partial<TabIdParams>
-    if (typeof id !== 'string' || id.trim() === '') {
-      return { ok: false, error: 'missing "id"' }
-    }
+    const id = tabIdOf(params)
+    if (id === '') return { ok: false, error: 'missing "id" (or "tabId")' }
     try {
-      const { discarded } = ctx.discardTab(id.trim())
-      return { ok: true, discarded, id: id.trim() }
+      const { discarded } = ctx.discardTab(id)
+      return { ok: true, discarded, id }
     } catch (error) {
       return fail(error)
     }
@@ -242,12 +256,10 @@ export const tabsCommands: CommandMap<CommandContext> = {
   },
 
   'select-tab': (ctx, params) => {
-    const { id } = (params ?? {}) as Partial<TabIdParams>
-    if (typeof id !== 'string' || id.trim() === '') {
-      return { ok: false, error: 'missing "id"' }
-    }
+    const id = tabIdOf(params)
+    if (id === '') return { ok: false, error: 'missing "id" (or "tabId")' }
     try {
-      const { id: selected } = ctx.selectTab(id.trim())
+      const { id: selected } = ctx.selectTab(id)
       return { ok: true, id: selected }
     } catch (error) {
       return fail(error)
@@ -299,12 +311,10 @@ export const tabsCommands: CommandMap<CommandContext> = {
   // tab from the keyboard, press Cmd+W twice in a row (see close-active-tab);
   // an explicit close-tab by id still closes it immediately.
   'pin-tab': (ctx, params) => {
-    const { id } = (params ?? {}) as Partial<TabIdParams>
-    if (typeof id !== 'string' || id.trim() === '') {
-      return { ok: false, error: 'missing "id"' }
-    }
+    const id = tabIdOf(params)
+    if (id === '') return { ok: false, error: 'missing "id" (or "tabId")' }
     try {
-      const result = ctx.pinTab(id.trim())
+      const result = ctx.pinTab(id)
       return { ok: true, ...result }
     } catch (error) {
       return fail(error)
@@ -313,12 +323,10 @@ export const tabsCommands: CommandMap<CommandContext> = {
 
   // Unpin a tab: it drops back to the head of the regular list.
   'unpin-tab': (ctx, params) => {
-    const { id } = (params ?? {}) as Partial<TabIdParams>
-    if (typeof id !== 'string' || id.trim() === '') {
-      return { ok: false, error: 'missing "id"' }
-    }
+    const id = tabIdOf(params)
+    if (id === '') return { ok: false, error: 'missing "id" (or "tabId")' }
     try {
-      const result = ctx.unpinTab(id.trim())
+      const result = ctx.unpinTab(id)
       return { ok: true, ...result }
     } catch (error) {
       return fail(error)
@@ -330,15 +338,14 @@ export const tabsCommands: CommandMap<CommandContext> = {
   // caller passes the target state explicitly (the menu already knows it), so this
   // is idempotent and pilotable from the socket / MCP.
   'set-tab-awake': (ctx, params) => {
-    const { id, keepAwake } = (params ?? {}) as Partial<SetTabAwakeParams>
-    if (typeof id !== 'string' || id.trim() === '') {
-      return { ok: false, error: 'missing "id"' }
-    }
+    const { keepAwake } = (params ?? {}) as Partial<SetTabAwakeParams>
+    const id = tabIdOf(params)
+    if (id === '') return { ok: false, error: 'missing "id" (or "tabId")' }
     if (typeof keepAwake !== 'boolean') {
       return { ok: false, error: '"keepAwake" must be a boolean' }
     }
     try {
-      const result = ctx.setTabKeepAwake(id.trim(), keepAwake)
+      const result = ctx.setTabKeepAwake(id, keepAwake)
       return { ok: true, ...result }
     } catch (error) {
       return fail(error)
@@ -346,15 +353,14 @@ export const tabsCommands: CommandMap<CommandContext> = {
   },
 
   'move-tab': (ctx, params) => {
-    const { id, toIndex } = (params ?? {}) as Partial<MoveTabParams>
-    if (typeof id !== 'string' || id.trim() === '') {
-      return { ok: false, error: 'missing "id"' }
-    }
+    const { toIndex } = (params ?? {}) as Partial<MoveTabParams>
+    const id = tabIdOf(params)
+    if (id === '') return { ok: false, error: 'missing "id" (or "tabId")' }
     if (typeof toIndex !== 'number' || !Number.isInteger(toIndex)) {
       return { ok: false, error: '"toIndex" must be an integer' }
     }
     try {
-      const { id: moved } = ctx.moveTab(id.trim(), toIndex)
+      const { id: moved } = ctx.moveTab(id, toIndex)
       return { ok: true, id: moved, toIndex }
     } catch (error) {
       return fail(error)
@@ -376,14 +382,12 @@ export const tabsCommands: CommandMap<CommandContext> = {
   // id is what every id-taking command / exec-js needs, so this hands it straight
   // to a shell or agent piloting Mira. Pilotable too — the socket can grab an id.
   'copy-tab-id': (ctx, params) => {
-    const { id } = (params ?? {}) as Partial<TabIdParams>
-    if (typeof id !== 'string' || id.trim() === '') {
-      return { ok: false, error: 'missing "id"' }
-    }
+    const id = tabIdOf(params)
+    if (id === '') return { ok: false, error: 'missing "id" (or "tabId")' }
     try {
-      ctx.writeClipboard(id.trim())
+      ctx.writeClipboard(id)
       ctx.showToast('Copied!')
-      return { ok: true, id: id.trim() }
+      return { ok: true, id }
     } catch (error) {
       return fail(error)
     }

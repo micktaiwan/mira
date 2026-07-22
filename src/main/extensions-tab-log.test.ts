@@ -17,4 +17,24 @@ describe('formatExtTabLog', () => {
       expect(formatExtTabLog(kind, 1, 'x')).toMatch(/^\[mira-ext-tab] /)
     }
   })
+
+  it('collapses a data: url to its mediatype prefix plus a length marker', () => {
+    const body = 'A'.repeat(5000)
+    const url = `data:text/html;charset=utf-8,${body}`
+    expect(formatExtTabLog('navigate', 4, url)).toBe(
+      `[mira-ext-tab] navigate wc=4 data:text/html;charset=utf-8,…(${url.length} chars)`
+    )
+  })
+
+  it('truncates any other over-long url but keeps its total length visible', () => {
+    const url = `https://example.com/${'p'.repeat(300)}`
+    const line = formatExtTabLog('navigate', 4, url)
+    expect(line).toContain(`…(${url.length} chars)`)
+    expect(line.length).toBeLessThan(url.length)
+  })
+
+  it('leaves a normal-length url untouched', () => {
+    const url = 'https://meet.google.com/abc-defg-hij'
+    expect(formatExtTabLog('navigate', 4, url)).toBe(`[mira-ext-tab] navigate wc=4 ${url}`)
+  })
 })

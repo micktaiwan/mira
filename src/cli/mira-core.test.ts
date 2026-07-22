@@ -7,7 +7,9 @@ import {
   buildReload,
   buildPress,
   buildCall,
+  buildConsole,
   formatTabs,
+  formatConsole,
   formatWindows,
   resolveCode,
   TAB_BOUND
@@ -114,6 +116,40 @@ describe('buildReload', () => {
   })
 })
 
+describe('buildConsole', () => {
+  it('reads the active tab with no filters when nothing is pinned or passed', () => {
+    expect(buildConsole(null)).toEqual({ command: 'get-console', params: {} })
+  })
+  it('targets a pinned tab and maps level/limit/since to server params', () => {
+    expect(buildConsole('t1', { level: 'error', limit: '20', since: '5' })).toEqual({
+      command: 'get-console',
+      params: { tabId: 't1', minLevel: 'error', limit: 20, sinceSeq: 5 }
+    })
+  })
+  it('ignores empty-string flags', () => {
+    expect(buildConsole('t1', { level: '', limit: '' })).toEqual({
+      command: 'get-console',
+      params: { tabId: 't1' }
+    })
+  })
+})
+
+describe('formatConsole', () => {
+  it('notes an empty capture rather than printing blank', () => {
+    expect(formatConsole([])).toBe('(no console output captured for this tab)')
+    expect(formatConsole(undefined)).toBe('(no console output captured for this tab)')
+  })
+  it('renders one line per entry with level, source, message and origin', () => {
+    const out = formatConsole([
+      { seq: 1, level: 'error', source: 'network', message: '403 Forbidden', url: 'https://a/x', lineNumber: 2 }
+    ])
+    expect(out).toContain('ERROR')
+    expect(out).toContain('[network]')
+    expect(out).toContain('403 Forbidden')
+    expect(out).toContain('(https://a/x:2)')
+  })
+})
+
 describe('buildCall — generic passthrough', () => {
   it('sends a bare command when there are no params', () => {
     expect(buildCall('focus-app', undefined, null)).toEqual({ request: { command: 'focus-app' } })
@@ -134,6 +170,11 @@ describe('buildCall — generic passthrough', () => {
       params: { id: 'x' }
     })
     expect(TAB_BOUND.has('exec-js')).toBe(true)
+    // get-console is tab-bound too, so `mira get-console` respects the pinned tab.
+    expect(buildCall('get-console', undefined, 't1').request).toEqual({
+      command: 'get-console',
+      params: { tabId: 't1' }
+    })
   })
   it('does not override a tabId the caller already set', () => {
     expect(
@@ -177,6 +218,21 @@ describe('formatTabs', () => {
     expect(lines[0].startsWith('z')).toBe(true) // asleep
     expect(lines[1].startsWith(' ')).toBe(true) // loaded, not active
     expect(lines[2].startsWith('*')).toBe(true) // active wins over asleep
+  })
+
+  it('marks an audible tab with ♪ in the second column, independent of the first', () => {
+    const out = formatTabs(
+      [
+        { id: 'a', url: 'u1', title: 't1', audible: true },
+        { id: 'b', url: 'u2', title: 't2', audible: true },
+        { id: 'c', url: 'u3', title: 't3' }
+      ],
+      'b'
+    )
+    const lines = out.split('\n')
+    expect(lines[0].startsWith(' ♪')).toBe(true) // audible, not active
+    expect(lines[1].startsWith('*♪')).toBe(true) // active AND audible
+    expect(lines[2].startsWith('  ')).toBe(true) // silent
   })
 })
 

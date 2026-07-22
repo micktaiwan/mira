@@ -44,7 +44,14 @@ export function measureScript(text: string): string {
   return `(() => {
     const el = document.getElementById('b')
     el.textContent = ${JSON.stringify(text)}
+    // The overlay window is pre-warmed at ~10px wide, so the body's containing
+    // block is far narrower than the bubble's max-width. Without a roomy layout
+    // context the inline-block shrink-to-fit collapses to the widest single word
+    // and the text wraps one word per line. Force a wide body during measurement
+    // so the bubble reaches its natural width (up to max-width) before we read it.
+    document.body.style.width = '9999px'
     const r = el.getBoundingClientRect()
+    document.body.style.width = ''
     return { width: Math.ceil(r.width) + ${2 * PAD}, height: Math.ceil(r.height) + ${2 * PAD} }
   })()`
 }

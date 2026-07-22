@@ -1,0 +1,41 @@
+/* Toolbar reload spinner (features/loading/ReloadSpinner). Sits between the
+   address bar and the right-side icon cluster. The slot has a FIXED width and is
+   always rendered, so toggling visibility never reflows the toolbar — only the
+   glyph fades in/out. The arc spins while a page is loading. */
+
+.reload-spinner {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px; /* reserved slot: matches the visual footprint of a nav-button */
+  flex: 0 0 auto;
+  color: var(--accent);
+  /* Idle: invisible but still occupying its slot. */
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.reload-spinner.active {
+  opacity: 1;
+}
+
+.reload-spinner svg {
+  animation: reload-spinner-rot 0.7s linear infinite;
+}
+
+/* Only spin while active — no wasted animation ticks on the hidden idle slot. */
+.reload-spinner:not(.active) svg {
+  animation: none;
+}
+
+@keyframes reload-spinner-rot {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reload-spinner svg {
+    animation-duration: 1.4s;
+  }
+}

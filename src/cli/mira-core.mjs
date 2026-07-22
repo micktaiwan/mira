@@ -29,7 +29,13 @@ export const SHORT_FLAGS = new Map([['n', 'new-tab']])
 /** Registry commands that accept a `tabId` param (see docs/socket.md). Only for
  * these does a resolved tab target get injected into params — injecting `tabId`
  * into e.g. select-tab (which wants `id`) would be wrong. */
-export const TAB_BOUND = new Set(['exec-js', 'collect-media', 'download-media', 'press-key'])
+export const TAB_BOUND = new Set([
+  'exec-js',
+  'collect-media',
+  'download-media',
+  'press-key',
+  'get-console'
+])
 
 /**
  * Parse an argv tail (already stripped of node + script path) into a command,
@@ -150,6 +156,49 @@ export function buildPress(key, tabId, modifiers) {
 }
 
 /**
+ * get-console plan: read the captured web-page console of the pinned/active tab
+ * (or an explicit tabId). Optional --level floors severity and --limit caps the
+ * count; both arrive as strings from the CLI and are passed through as-is (a bad
+ * value is rejected server-side with a clear error).
+ *
+ * @param {string|null} tabId
+ * @param {{ level?: unknown, limit?: unknown, since?: unknown }} [opts]
+ * @returns {{ command: string, params: object }}
+ */
+export function buildConsole(tabId, opts = {}) {
+  const params = {}
+  if (tabId) params.tabId = tabId
+  if (typeof opts.level === 'string' && opts.level !== '') params.minLevel = opts.level
+  if (opts.limit !== undefined && opts.limit !== '') params.limit = Number(opts.limit)
+  if (opts.since !== undefined && opts.since !== '') params.sinceSeq = Number(opts.since)
+  return { command: 'get-console', params }
+}
+
+/**
+ * Human-readable rendering of a get-console result: one line per captured entry,
+ * `seq  LEVEL  [source]  message` with the source url appended when present. An
+ * empty capture renders as a friendly note rather than a blank.
+ *
+ * @param {Array<{seq:number,level:string,source:string,message:string,url?:string,lineNumber?:number}>} messages
+ * @returns {string}
+ */
+export function formatConsole(messages) {
+  const list = messages ?? []
+  if (list.length === 0) return '(no console output captured for this tab)'
+  return list
+    .map((m) => {
+      const level = String(m.level ?? '')
+        .toUpperCase()
+        .padEnd(7)
+      const src = m.source ? `[${m.source}] ` : ''
+      const where = m.url ? `  (${m.url}${m.lineNumber ? ':' + m.lineNumber : ''})` : ''
+      const msg = String(m.message ?? '').replace(/\s+$/, '')
+      return `${String(m.seq).padStart(4)}  ${level}${src}${msg}${where}`
+    })
+    .join('\n')
+}
+
+/**
  * Human-readable rendering of a list-windows result: one line per window with
  * its id, profile, tab count, and a `*` on the focused one.
  *
@@ -200,8 +249,10 @@ export function buildCall(command, paramsJson, tabId) {
  * (visible) tab is marked with `*`; a tab that is asleep/discarded (`loaded ===
  * false`, so page-bound commands would fail until it is woken) with `z`; the
  * rest with a space. Knowing a tab is asleep up front saves a failed round-trip.
+ * A second column marks a tab currently playing sound with `♪` (TabInfo.audible)
+ * — the from-the-shell answer to "which tab is making noise?".
  *
- * @param {Array<{id:string,url?:string,title?:string,loaded?:boolean}>} tabs
+ * @param {Array<{id:string,url?:string,title?:string,loaded?:boolean,audible?:boolean}>} tabs
  * @param {string} [activeId]
  * @returns {string}
  */
@@ -209,8 +260,9 @@ export function formatTabs(tabs, activeId) {
   return (tabs ?? [])
     .map((t) => {
       const mark = t.id === activeId ? '*' : t.loaded === false ? 'z' : ' '
+      const sound = t.audible === true ? '♪' : ' '
       const title = (t.title ?? '').slice(0, 40).padEnd(40)
-      return `${mark} ${t.id}  ${title}  ${t.url ?? ''}`
+      return `${mark}${sound} ${t.id}  ${title}  ${t.url ?? ''}`
     })
     .join('\n')
 }

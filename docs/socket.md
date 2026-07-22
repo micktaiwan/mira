@@ -11,12 +11,13 @@ that removes the hand-built JSON, the `nc` async-read trap, and the manual
 list-tabs → filter → tabId dance:
 
 ```bash
-bin/mira tabs                                # list tabs, * = active, z = asleep
+bin/mira tabs                                # list tabs, * = active, z = asleep, ♪ = playing sound
 bin/mira windows                             # list open windows, * = focused
 eval "$(bin/mira use --url localhost:8000)"  # pin a tab → export MIRA_TAB=<uuid> (this shell only)
 bin/mira exec "document.title"               # exec-js on the pinned/active tab
 bin/mira press e                             # real keypress on the pinned/active tab (--mod meta,shift)
 bin/mira reload                              # reload the pinned tab (via exec-js) or the active one
+bin/mira console                             # captured page console (--level error, --limit 30, --since <seq>)
 bin/mira call <command> --params '<json>'    # generic passthrough to any command below
 ```
 
@@ -26,7 +27,9 @@ Pure logic + tests: `src/cli/mira-core.mjs`. The raw protocol below still underl
 
 ## Protocol
 
-- Path: `/tmp/mira.sock` (override with the `MIRA_SOCKET` env var).
+- Path: `/tmp/mira.sock` (override with the `MIRA_SOCKET` env var). If the file is
+  deleted while Mira runs (tmp cleaner, stray `rm`), a watchdog notices within ~5s
+  and re-binds it — clients just retry; no restart needed.
 - One JSON request per line; one JSON response per line.
 
 ```bash
@@ -144,6 +147,7 @@ clicks are swallowed (they'd land wrong), so it is a "look only" mode.
 | ----------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `exec-js`         | `code`, `tabId?`              | run JS in a tab's page world, return its JSON-serializable value. With `tabId` (from `list-tabs`), targets **any tab in any window**; without, the active tab. Errors: `unknown tab: <id>`, `tab is asleep: <id>`, `not a web page (Settings tab)`                             |
 | `press-key`       | `key`, `tabId?`, `modifiers?` | send a REAL keypress (CDP `Input.dispatchKeyEvent`, `isTrusted:true`) to a tab — for keyboard-driven web apps (archive with `e`, `j`/`k`, `Escape`) that ignore synthetic DOM events. `key` is a `KeyboardEvent.key` name (`e`, `Enter`, `ArrowDown`, ` `); `modifiers` ⊆ `alt | ctrl | meta | shift`. The tab is **activated first** (brought forward) so a background tab does not silently drop the key. Result `{key}`. Errors: `unknown tab`, `tab could not be made visible for input` |
+| `get-console`     | `tabId?`, `level?`, `limit?`, `sinceSeq?` | read a tab's captured web-page console (`messages[]`). Tails console.\* calls AND browser-emitted lines (failed loads/403, CORS, CSP, uncaught exceptions) into a per-tab ring buffer — the thing you'd otherwise need DevTools open to see. `level` floors severity (`verbose` \| `info` \| `warning` \| `error`), `limit` caps to the most recent N, `sinceSeq` returns only entries newer than a seq (polling). Without `tabId`, the active tab. Survives a discard (asleep tab keeps its history); dropped on real close. Each entry: `{ seq, level, message, source, url?, lineNumber? }` where `source` ∈ `console | network | security | exception | other`. Errors: `unknown tab: <id>`, `no active web page` |
 | `toggle-devtools` | —                             | open/close the inspector on the active tab                                                                                                                                                                                                                                     |
 | `inspect-cookies` | —                             | open the inspector on the active tab (if needed, never closes it) and reveal the Cookies view of the Application panel; result `{ open }`. Errors: `no active web page`                                                                                                        |
 
@@ -211,12 +215,13 @@ Every file a page triggers is saved straight to `~/Downloads` (no OS save dialog
 | ---------------------- | ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `list-profiles`        | —             | profiles + which are open + focused id                                                                                                                                                                                 |
 | `open-profile`         | `id`          | open (or focus) a profile window                                                                                                                                                                                       |
-| `close-profile`        | `id`          | close a profile's window without quitting the app (`closed:false` if it was not open)                                                                                                                                  |
+| `close-profile`        | `id`          | close a profile's window(s). Never quits the app, even when it is the last open profile (a user close via Cmd+Shift+W does quit — to quit from a script use `quit`). `closed:false` if it was not open                  |
 | `create-profile`       | `label?`      | new profile                                                                                                                                                                                                            |
 | `rename-profile`       | `id`, `label` | rename                                                                                                                                                                                                                 |
 | `set-profile-theme`    | `id`, `themeId` | assign a chrome theme to a profile (see Themes below), or null/'' to clear (→ default theme)                                                                                                                          |
 | `set-profile-color`    | `id`, `color` | legacy tint: `#rrggbb` hex, or null/'' to clear. Superseded by themes; kept for back-compat                                                                                                                            |
 | `focus-app`            | —             | bring Mira to the foreground                                                                                                                                                                                           |
+| `quit`                 | —             | quit Mira entirely (graceful: flushes sessions, re-locks any unlocked vault). The only explicit programmatic exit — `close-profile` never quits, and a user closing the last window does                                |
 | `list-spaces`          | —             | macOS virtual desktops per display, in Mission Control order, plus where the target window sits (`window: {displayId, spaceIndex}`, null when unknown). `displays: []` = no Spaces support (non-mac / addon not built) |
 | `move-window-to-space` | `spaceIndex`  | move the target window onto that desktop (0-based index on its display). `moved:false` = was already there. Persisted: the window reopens on that desktop next launch                                                  |
 

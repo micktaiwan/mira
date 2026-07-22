@@ -11,6 +11,7 @@ function setup(): {
   let focused = 'default'
   const ctx: CommandContext = {
     focusApp: () => {},
+    quitApp: () => {},
     openExternalUrl: () => {},
     getSpacesState: () => ({ displays: [], window: null }),
     moveTargetWindowToSpace: () => 'noop',
@@ -117,7 +118,8 @@ function setup(): {
       kind: 'web' as const,
       pinned: false,
       keepAwake: false,
-      audible: false
+      audible: false,
+      loading: false
     }),
     closeTab: () => ({ closed: true }),
     closeActiveTab: () => ({ closed: true, id: 'tab' }),
@@ -151,7 +153,8 @@ function setup(): {
           pinned: false,
           keepAwake: false,
           folderId: null,
-          audible: false
+          audible: false,
+          loading: false
         }
       ],
       activeId: 'tab',
@@ -239,6 +242,7 @@ function setup(): {
       Promise.resolve({ id, name: 'Fake', version: '1.0.0', path: `/ext/${id}`, enabled: true }),
     uninstallExtension: () => Promise.resolve({ removed: true }),
     readServiceWorkerConsole: () => [],
+    readPageConsole: () => [],
     // Skill pane slice: minimal stubs.
     showSkillPane: () => {},
     closeSkillPane: () => {},

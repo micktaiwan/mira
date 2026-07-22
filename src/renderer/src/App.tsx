@@ -8,6 +8,7 @@ import ResizeHandle from './ResizeHandle'
 import ExtensionActions from './features/extensions/ExtensionActions'
 import FindBar from './features/find/FindBar'
 import MediaGallery from './features/media/MediaGallery'
+import { ReloadSpinner } from './features/loading/ReloadSpinner'
 import { applyTheme, initialTheme } from './features/profile-theme/profile-theme'
 import type { SkillPaneState, TabFolder } from '../../preload/index.d'
 
@@ -372,6 +373,8 @@ function App(): React.JSX.Element {
   const settingsTab = tabs.find((t) => t.id === activeId && t.kind === 'settings')
   const settingsActive = settingsTab !== undefined
   const settingsSection = settingsTab?.url.split('/')[3]
+  // Live loading state of the active tab, driving the toolbar reload spinner.
+  const activeLoading = tabs.some((t) => t.id === activeId && t.loading)
 
   // The star reflects whether the ACTIVE tab's real url (not the edited bar text)
   // is already a favorite. Empty when there is no active tab → the star disables.
@@ -480,6 +483,11 @@ function App(): React.JSX.Element {
               autoCorrect="off"
             />
           </form>
+          {/* Reload spinner: spins while the active tab loads, in a fixed slot
+            between the address bar and the right-side icons so it never reflows
+            the toolbar. Held visible for a floor duration so a fast reload is
+            still perceptible (features/loading). */}
+          <ReloadSpinner loading={activeLoading} />
           {/* Find in page (Cmd+F). Mounted only while open so its query/tally state
             starts fresh each time; sits in the toolbar row, beside the address
             bar (an overlay over the page would be hidden by the native view). */}

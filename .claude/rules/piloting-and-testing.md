@@ -75,3 +75,7 @@ Au démarrage, Mira rouvre par défaut les profils qui étaient ouverts au derni
 Un id inconnu n'est pas fatal : Mira loggue un warning et retombe sur la restauration normale (dernier set ouvert). Parsing pur et testé dans `parseProfileArg` (`src/main/profile-store.ts`), branché au boot dans `src/main/index.ts` via `openSavedProfiles(explicitProfileId)`.
 
 Le mécanisme est implémenté et couvert par des tests unitaires ; **pas encore vérifié en vrai** l'invocation shell exacte pour injecter le flag/env dans l'app packagée (`open -a Mira --args --profile <id>` devrait passer par `--args`, l'héritage de `MIRA_PROFILE` via `open` reste à confirmer). À valider au premier usage.
+
+### Dev « scratch » : booter le seul profil de test, ses onglets restaurés
+
+`npm run dev:scratch` (script dans `package.json`) démarre `electron-vite dev` avec `MIRA_PROFILE` posé sur l'id du profil de test — c'est-à-dire boot de CE profil seul (les autres profils réels ne sont pas rouverts, ni réécrits au quit), en **restaurant ses onglets sauvegardés** (`content: 'restore'`, pas de wipe) pour reprendre les tests là où on s'est arrêté. Ça partage le userData réel (pas d'isolation) : voulu, pour garder cookies/logins/onglets du profil de test. L'id vit dans `.dev-scratch-profile` (git-excluded, absent d'un clone public — le script retombe alors sur la restauration normale, c'est OK). Ne remplace pas `npm run dev` (qui rouvre tout).
