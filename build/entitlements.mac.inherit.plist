@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <!-- Entitlements INHERITED by the child helpers (Renderer/GPU/Plugin). It is the
+       main app's entitlements (entitlements.mac.plist) MINUS keychain-access-groups.
+       Reason: keychain-access-groups is an AMFI-restricted entitlement that is only
+       valid on a binary embedding a provisioning profile that authorizes it. Only the
+       MAIN bundle embeds embedded.provisionprofile; the helpers do NOT. So a helper
+       carrying keychain-access-groups is SIGKILLed the instant it launches ("Renderer
+       process killed" ×N, then the main process crashes in pushTabs). Only the main
+       process calls app.configureWebAuthn / touches the keychain group, so the helpers
+       never need it. Verified 2026-07-22: helpers signed with the group + no profile
+       died on launch; splitting it out fixes it. -->
+  <dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.personal-information.location</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+  </dict>
+</plist>

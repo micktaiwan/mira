@@ -65,8 +65,11 @@ mac:
   type: development
   identity: "Apple Development: faivrem@gmail.com (23L76N6978)"
   provisioningProfile: build/embedded.provisionprofile
+  # Main app carries keychain-access-groups (it embeds the profile); the child
+  # helpers must NOT (no embedded profile → AMFI kills them at launch), so they
+  # inherit a profile-free copy. See build/entitlements.mac.inherit.plist.
   entitlements: build/entitlements.mac.plist
-  entitlementsInherit: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
   # extendInfo must be a MAP, not a list: electron-builder's list form mangles a
   # nested value (CFBundleURLTypes landed under a bogus numeric key). Map form
   # merges each key into Info.plist at the top level as intended.
