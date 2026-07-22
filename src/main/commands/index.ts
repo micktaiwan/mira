@@ -17,6 +17,7 @@ import type { CommandContext } from './context'
 import { appCommands } from './app'
 import { audioCommands } from './audio'
 import { bookmarksCommands } from './bookmarks'
+import { consoleCommands } from './console'
 import { cookieCommands } from './cookies'
 import { devtoolsCommands } from './devtools'
 import { diskCommands } from './disk'
@@ -57,6 +58,15 @@ export type { AppContext } from './app'
 export type { AudioContext } from './audio'
 export type { BookmarkContext } from './bookmarks'
 export type { BookmarkNode, BookmarkUrl, BookmarkFolder, BookmarkTree } from '../bookmark-store'
+export type { ConsoleContext } from './console'
+export type {
+  PageConsoleEntry,
+  PageConsoleQuery,
+  PageConsoleDraft,
+  PageLogLevel,
+  PageLogSource
+} from '../page-console'
+export { PageConsoleStore, draftFromCdpMessage, PAGE_LOG_LEVELS } from '../page-console'
 export type { CookieContext, CookieSink, ImportCookiesParams } from './cookies'
 export type { DevtoolsContext } from './devtools'
 export type { DiskContext } from './disk'
@@ -137,6 +147,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...appCommands,
     ...audioCommands,
     ...bookmarksCommands,
+    ...consoleCommands,
     ...cookieCommands,
     ...devtoolsCommands,
     ...diskCommands,

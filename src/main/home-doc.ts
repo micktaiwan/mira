@@ -300,7 +300,6 @@ export function buildHomePage(stats: HomeStats): string {
           <div class="sc-row"><span class="desc">Reopen closed</span><kbd>⌘⇧T</kbd></div>
           <div class="sc-row"><span class="desc">Duplicate tab</span><kbd>⌘⇧D</kbd></div>
           <div class="sc-row"><span class="desc">Prev / next</span><kbd>⌘↑ ↓</kbd></div>
-          <div class="sc-row"><span class="desc">Recent tabs</span><kbd>⌘⌥← →</kbd></div>
           <div class="sc-row"><span class="desc">Sleep tab (free RAM)</span><kbd>⌘S</kbd></div>
           <div class="sc-row"><span class="desc">Wake all tabs</span><kbd>⌘⇧A</kbd></div>
         </div>
@@ -308,6 +307,7 @@ export function buildHomePage(stats: HomeStats): string {
           <h3>Navigate</h3>
           <div class="sc-row"><span class="desc">Command palette</span><kbd>⌘K</kbd></div>
           <div class="sc-row"><span class="desc">Back / forward</span><kbd>⌘← →</kbd></div>
+          <div class="sc-row"><span class="desc">Recently viewed tabs</span><kbd>⌘⌥← →</kbd></div>
           <div class="sc-row"><span class="desc">Reload</span><kbd>⌘R</kbd></div>
           <div class="sc-row"><span class="desc">Hard reload</span><kbd>⌘⇧R</kbd></div>
           <div class="sc-row"><span class="desc">Find in page</span><kbd>⌘F</kbd></div>

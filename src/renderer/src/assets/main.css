@@ -6,6 +6,7 @@
 @import './extension-actions.css';
 @import './find-bar.css';
 @import './vault.css';
+@import './reload-spinner.css';
 
 :root {
   /* Must match TOOLBAR_HEIGHT in src/main/index.ts. */

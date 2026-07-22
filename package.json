@@ -18,6 +18,7 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "start": "electron-vite preview",
     "dev": "electron-vite dev",
+    "dev:scratch": "MIRA_PROFILE=$(cat .dev-scratch-profile 2>/dev/null) electron-vite dev",
     "build": "npm run typecheck && electron-vite build",
     "postinstall": "patch-package",
     "build:addon": "npm run build:addon:location && npm run build:addon:spaces && npm run build:addon:activation",

@@ -17,6 +17,7 @@ import type { TooltipRect } from '../tooltip'
 import type { SkillSource } from '../skills'
 import type { LlmConfig, ChatMessage, PageContext } from '../llm'
 import { nextZen, type PanelSnapshot } from './zen'
+import { PageConsoleStore, type PageConsoleDraft } from '../page-console'
 import {
   emptyTabState,
   addTab,
@@ -155,8 +156,13 @@ export interface FakeContext {
   extensionsFor: (profileId: string) => ExtensionInfo[]
   /** Seed a captured SW console line, as ExtensionsService's ring buffer would. */
   seedServiceWorkerLog: (entry: ServiceWorkerLogEntry) => void
+  /** Seed a captured web-page console line into a tab's buffer, as
+   * ProfileManager's PageConsoleStore would. */
+  seedPageConsole: (tabId: string, draft: PageConsoleDraft) => void
   /** One entry per focusApp call (focus-app spy). */
   focusCalls: boolean[]
+  /** One entry per quitApp call (quit spy). */
+  quitCalls: boolean[]
   /** URLs passed to openExternalUrl (open-url / open-file handoff spy). */
   externalOpens: string[]
   /** profileId passed alongside each openExternalUrl call (undefined when none). */
@@ -208,6 +214,7 @@ export function makeContext(
   const clipboardWrites: string[] = []
   const toasts: string[] = []
   const focusCalls: boolean[] = []
+  const quitCalls: boolean[] = []
   const externalOpens: string[] = []
   const externalOpenTargets: (string | undefined)[] = []
   const spaceMoves: number[] = []
@@ -303,6 +310,10 @@ export function makeContext(
     // in ExtensionsService), read back by extension-console. Seeded by tests
     // via the `seedServiceWorkerLog` handle.
     swLogs: [] as ServiceWorkerLogEntry[],
+    // Captured web-page console, per tab (mirrors PageConsoleStore in
+    // ProfileManager), read back by get-console. Seeded by tests via the
+    // `seedPageConsole` handle.
+    pageConsole: new PageConsoleStore(),
     // Per-window closed-tab stack (newest last), for reopen-closed-tab.
     closedTabs: [] as Array<{
       url: string
@@ -361,6 +372,9 @@ export function makeContext(
   const ctx: CommandContext = {
     focusApp: () => {
       focusCalls.push(true)
+    },
+    quitApp: () => {
+      quitCalls.push(true)
     },
     // Default-browser handoff: openUrl targets the last-focused profile in the
     // real manager; the fake just records the resolved url (open-url / open-file).
@@ -886,7 +900,8 @@ export function makeContext(
         pinned: false,
         keepAwake: false,
         folderId: null,
-        audible: false
+        audible: false,
+        loading: false
       }
     },
     closeTab: (id: string) => {
@@ -1077,7 +1092,8 @@ export function makeContext(
         pinned: t.pinned === true,
         keepAwake: t.keepAwake === true,
         folderId: t.folderId ?? null,
-        audible: false
+        audible: false,
+        loading: false
       })),
       activeId: state.tabs.activeId,
       panelCollapsed: state.panelCollapsed
@@ -1338,6 +1354,20 @@ export function makeContext(
       if (!query.profileId && !state.focused) throw new Error('no target window')
       return selectServiceWorkerLogs(state.swLogs, query)
     },
+    readPageConsole: (query) => {
+      // Resolve the tab like execJsInTab (unknown tab / Settings / no active
+      // page), then read its ring buffer.
+      const { tabId, ...rest } = query
+      if (tabId !== undefined) {
+        const tab = state.tabs.tabs.find((t) => t.id === tabId)
+        if (!tab) throw new Error(`unknown tab: ${tabId}`)
+        if (tab.id === state.settingsTabId) throw new Error('not a web page (Settings tab)')
+        return state.pageConsole.read(tabId, rest)
+      }
+      const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
+      if (!active || active.id === state.settingsTabId) throw new Error('no active web page')
+      return state.pageConsole.read(active.id, rest)
+    },
     listBookmarks: () => ({ tree: state.bookmarks }),
     openBookmark: (id: string) => {
       const node = findNode(state.bookmarks, id)
@@ -1390,7 +1420,12 @@ export function makeContext(
     extensionsFor: (profileId: string) => (state.extensions.get(profileId) ?? []).slice(),
     // Push a captured SW console line, as ExtensionsService's ring buffer would.
     seedServiceWorkerLog: (entry: ServiceWorkerLogEntry) => state.swLogs.push(entry),
+    // Push a captured web-page console line into a tab's buffer, as
+    // ProfileManager's PageConsoleStore would.
+    seedPageConsole: (tabId: string, draft: PageConsoleDraft) =>
+      state.pageConsole.record(tabId, draft),
     focusCalls,
+    quitCalls,
     externalOpens,
     externalOpenTargets,
     spaceMoves,

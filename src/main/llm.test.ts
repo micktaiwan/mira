@@ -4,6 +4,8 @@ import {
   buildAnthropicRequest,
   parseAnthropicResponse,
   buildClaudeCliArgs,
+  claudeBinCandidates,
+  claudeSpawnPath,
   chatSystemPrompt,
   buildAnthropicChatRequest,
   composeChatPrompt,
@@ -114,6 +116,46 @@ describe('buildClaudeCliArgs', () => {
     expect(
       buildClaudeCliArgs({ provider: 'claude-cli', model: 'claude-opus-4-8', loadMcp: true })
     ).toEqual(['-p', '--model', 'claude-opus-4-8'])
+  })
+})
+
+describe('claudeBinCandidates', () => {
+  it('probes the known install locations, home dirs first, bare name last', () => {
+    expect(claudeBinCandidates({}, '/Users/me')).toEqual([
+      '/Users/me/.local/bin/claude',
+      '/Users/me/.claude/local/claude',
+      '/opt/homebrew/bin/claude',
+      '/usr/local/bin/claude',
+      'claude'
+    ])
+  })
+
+  it('puts an explicit MIRA_CLAUDE_BIN override first', () => {
+    expect(claudeBinCandidates({ MIRA_CLAUDE_BIN: '/custom/claude' }, '/Users/me')[0]).toBe(
+      '/custom/claude'
+    )
+  })
+
+  it('ignores a blank override and a blank home', () => {
+    expect(claudeBinCandidates({ MIRA_CLAUDE_BIN: '  ' }, '')).toEqual([
+      '/opt/homebrew/bin/claude',
+      '/usr/local/bin/claude',
+      'claude'
+    ])
+  })
+})
+
+describe('claudeSpawnPath', () => {
+  it('prepends the user bin dirs to the existing PATH, deduped', () => {
+    expect(claudeSpawnPath({ PATH: '/usr/bin:/opt/homebrew/bin' }, '/Users/me')).toBe(
+      '/Users/me/.local/bin:/Users/me/.claude/local:/opt/homebrew/bin:/usr/local/bin:/usr/bin'
+    )
+  })
+
+  it('handles a missing PATH', () => {
+    expect(claudeSpawnPath({}, '/Users/me')).toBe(
+      '/Users/me/.local/bin:/Users/me/.claude/local:/opt/homebrew/bin:/usr/local/bin'
+    )
   })
 })
 

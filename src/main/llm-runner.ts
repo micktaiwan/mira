@@ -10,10 +10,14 @@
 // spawners (the module-level spawnClaudeCli / spawnClaudeCliStream defaults).
 
 import { spawn } from 'child_process'
+import { existsSync } from 'fs'
+import { homedir } from 'os'
 import {
   buildAnthropicRequest,
   buildAnthropicChatRequest,
   parseAnthropicResponse,
+  claudeBinCandidates,
+  claudeSpawnPath,
   buildClaudeCliArgs,
   buildClaudeStreamArgs,
   buildClaudeStreamInput,
@@ -99,14 +103,36 @@ export class LlmRunner {
   }
 }
 
+/** Resolve the absolute path to the `claude` binary once (memoized). A packaged /
+ * GUI-launched Mira does not inherit the shell PATH, so a bare `spawn('claude')`
+ * would ENOENT; we probe the known install locations and use the first that
+ * exists, falling back to the bare name (PATH) when none are found. Native edge
+ * (fs) over the pure candidate list; the ordering is unit-tested in llm.test. */
+let cachedClaudeBin: string | undefined
+function resolveClaudeBin(): string {
+  if (cachedClaudeBin) return cachedClaudeBin
+  const candidates = claudeBinCandidates(process.env, homedir())
+  const found = candidates.find((c) => c === 'claude' || existsSync(c))
+  cachedClaudeBin = found ?? 'claude'
+  return cachedClaudeBin
+}
+
+/** The env for the `claude` subprocess, with PATH enriched so a GUI-launched Mira
+ * (which inherits a minimal PATH) can still resolve the binary and anything it
+ * shells out to. Native edge over the pure claudeSpawnPath. */
+function claudeSpawnEnv(): NodeJS.ProcessEnv {
+  return { ...process.env, PATH: claudeSpawnPath(process.env, homedir()) }
+}
+
 /** Spawn `claude -p` and resolve its stdout. Uses the logged-in Claude Code
- * subscription (no API key). PATH must contain the `claude` binary (true under
- * `npm run dev`; a packaged build may need a resolved path — noted in track.md).
+ * subscription (no API key). The binary is resolved via resolveClaudeBin so it
+ * works even when the process PATH lacks the install dir (packaged / GUI launch).
  * The thin native edge of the runner; not unit-tested (a fake is injected). */
 export function spawnClaudeCli(config: LlmConfig, fullPrompt: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('claude', buildClaudeCliArgs(config), {
-      stdio: ['pipe', 'pipe', 'pipe']
+    const child = spawn(resolveClaudeBin(), buildClaudeCliArgs(config), {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: claudeSpawnEnv()
     })
     let out = ''
     let err = ''
@@ -134,8 +160,9 @@ export function spawnClaudeCli(config: LlmConfig, fullPrompt: string): Promise<s
  * spawnClaudeCli; used only when a screenshot is attached. Thin native edge. */
 export function spawnClaudeCliStream(config: LlmConfig, streamInput: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('claude', buildClaudeStreamArgs(config), {
-      stdio: ['pipe', 'pipe', 'pipe']
+    const child = spawn(resolveClaudeBin(), buildClaudeStreamArgs(config), {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: claudeSpawnEnv()
     })
     let out = ''
     let err = ''

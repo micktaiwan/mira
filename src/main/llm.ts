@@ -105,6 +105,49 @@ export function parseAnthropicResponse(json: unknown): string {
   return text
 }
 
+/** The ordered candidate absolute paths for the `claude` binary, most-specific
+ * first, ending with the bare name (PATH lookup) as a last resort. A packaged /
+ * GUI-launched Mira does NOT inherit the shell PATH, so a bare `spawn('claude')`
+ * hits ENOENT even though the binary is installed (it now lives under
+ * ~/.local/bin, the native-installer location). The caller probes these with an
+ * existence check and spawns the first that exists. Pure (no fs): the env and
+ * home dir are passed in so this stays unit-testable.
+ *   - MIRA_CLAUDE_BIN: explicit override, always wins.
+ *   - ~/.local/bin/claude: the current native-installer symlink.
+ *   - ~/.claude/local/claude: the older local-install location.
+ *   - /opt/homebrew, /usr/local: brew/npm-global fallbacks. */
+export function claudeBinCandidates(
+  env: NodeJS.ProcessEnv,
+  home: string
+): string[] {
+  const list: string[] = []
+  const override = env.MIRA_CLAUDE_BIN?.trim()
+  if (override) list.push(override)
+  if (home) {
+    list.push(`${home}/.local/bin/claude`)
+    list.push(`${home}/.claude/local/claude`)
+  }
+  list.push('/opt/homebrew/bin/claude', '/usr/local/bin/claude')
+  list.push('claude')
+  return list
+}
+
+/** The dirs to prepend to PATH when spawning `claude`, so a GUI-launched Mira can
+ * resolve the binary (and anything it in turn shells out to). Derived from the
+ * candidate list's directories plus the common user bin dirs. Pure. */
+export function claudeSpawnPath(env: NodeJS.ProcessEnv, home: string): string {
+  const extra = [
+    home ? `${home}/.local/bin` : '',
+    home ? `${home}/.claude/local` : '',
+    '/opt/homebrew/bin',
+    '/usr/local/bin'
+  ].filter((d) => d !== '')
+  const current = env.PATH ?? ''
+  const parts = current === '' ? [] : current.split(':')
+  const merged = [...extra, ...parts].filter((d, i, a) => a.indexOf(d) === i)
+  return merged.join(':')
+}
+
 /** The argv for `claude -p` (print / non-interactive mode). The prompt itself is
  * fed on stdin (not argv) to sidestep shell escaping and arg-length limits. Pure. */
 export function buildClaudeCliArgs(config: LlmConfig): string[] {
