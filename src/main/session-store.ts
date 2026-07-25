@@ -189,10 +189,23 @@ function normalizeWindow(value: unknown): PersistedWindow | null {
   for (const t of tabs) {
     if (t.folderId !== undefined && !knownFolders.has(t.folderId)) delete t.folderId
   }
+  // Pinned tabs must form a contiguous block at the head of the strip — the
+  // tab-store invariant every pin/move operation assumes but none enforces. A
+  // file with a stray pinned tab below regular ones (or a regular tab above the
+  // block) would replay that corruption on every boot: pinTab then inserts the
+  // new pin BEFORE the stray (not last in the grid) and moveTab's zone clamp
+  // silently refuses to place anything after it. Stable partition, so the
+  // relative order within each group is untouched; activeIndex follows its tab.
+  const clamped = Math.min(Math.max(rawIndex, 0), tabs.length - 1)
+  const activeTab = tabs[clamped]
+  const ordered = [
+    ...tabs.filter((t) => t.pinned === true),
+    ...tabs.filter((t) => t.pinned !== true)
+  ]
   return {
     windowId,
-    tabs,
-    activeIndex: Math.min(Math.max(rawIndex, 0), tabs.length - 1),
+    tabs: ordered,
+    activeIndex: ordered.indexOf(activeTab),
     panelCollapsed: v.panelCollapsed === true,
     ...(folders.length ? { folders } : {}),
     ...(bounds ? { bounds } : {}),

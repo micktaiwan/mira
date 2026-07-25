@@ -161,6 +161,53 @@ describe('normalizeSessions', () => {
     expect(normalizeSessions(raw).p[0].activeIndex).toBe(0)
   })
 
+  it('repairs a non-contiguous pinned block: pinned tabs regroup at the head, order preserved', () => {
+    // A corrupted file: a regular tab above the pinned block and a stray pinned
+    // tab below regular ones. Without repair, this order replays on every boot
+    // and breaks pinTab (new pin not last) and moveTab (clamp refuses the end).
+    const raw = {
+      p: [
+        {
+          tabs: [
+            { url: 'https://r1.test' },
+            { url: 'https://p1.test', pinned: true },
+            { url: 'https://p2.test', pinned: true },
+            { url: 'https://r2.test' },
+            { url: 'https://p3.test', pinned: true }
+          ],
+          activeIndex: 3 // r2
+        }
+      ]
+    }
+    const win = normalizeSessions(raw).p[0]
+    expect(win.tabs.map((t) => t.url)).toEqual([
+      'https://p1.test',
+      'https://p2.test',
+      'https://p3.test',
+      'https://r1.test',
+      'https://r2.test'
+    ])
+    // activeIndex follows its tab (r2) to its new position.
+    expect(win.tabs[win.activeIndex].url).toBe('https://r2.test')
+  })
+
+  it('leaves an already-contiguous strip untouched', () => {
+    const raw = {
+      p: [
+        {
+          windowId: 'w',
+          tabs: [
+            { url: 'https://p1.test', title: '', favicon: null, pinned: true },
+            { url: 'https://r1.test', title: '', favicon: null }
+          ],
+          activeIndex: 1,
+          panelCollapsed: false
+        }
+      ]
+    }
+    expect(normalizeSessions(raw)).toEqual(raw)
+  })
+
   it('keeps a true pinned flag and drops anything else', () => {
     const raw = {
       p: [

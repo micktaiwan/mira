@@ -150,7 +150,21 @@ describe('get-download-stats', () => {
       active: 2,
       since: 100,
       receivedBytes: 150,
-      totalBytes: 600
+      totalBytes: 600,
+      unseen: 1
     })
+  })
+
+  it('opening a completed download acknowledges it (unseen badge shrinks)', async () => {
+    const f = makeContext()
+    f.seedDownload(rec({ id: 'a', state: 'completed' }))
+    f.seedDownload(rec({ id: 'b', state: 'completed' }))
+    const registry = createCommandRegistry()
+    const stats = (): unknown => registry.execute('get-download-stats', {}, f.ctx)
+    expect(stats()).toMatchObject({ unseen: 2 })
+    await registry.execute('open-download', { id: 'a' }, f.ctx)
+    expect(stats()).toMatchObject({ unseen: 1 })
+    registry.execute('reveal-download', { id: 'b' }, f.ctx)
+    expect(stats()).toMatchObject({ unseen: 0 })
   })
 })

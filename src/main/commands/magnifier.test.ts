@@ -98,13 +98,53 @@ describe('magnifier-reset', () => {
 })
 
 describe('magnifier-state', () => {
-  it('reports the current zoom of the active tab', () => {
+  it('reports the current zoom of the active tab and the gesture gate', () => {
     const f = makeContext()
     const registry = createCommandRegistry()
     expect(registry.execute('magnifier-state', {}, f.ctx)).toMatchObject({
       ok: true,
       scale: 1,
-      magnified: false
+      magnified: false,
+      enabled: false
+    })
+  })
+})
+
+describe('magnifier-set-enabled', () => {
+  it('rejects a non-boolean enabled', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('magnifier-set-enabled', { enabled: 'yes' }, ctx)).toEqual({
+      ok: false,
+      error: '"enabled" must be a boolean'
+    })
+  })
+
+  it('arms and disarms the gesture explicitly', () => {
+    const f = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('magnifier-set-enabled', { enabled: true }, f.ctx)).toEqual({
+      ok: true,
+      enabled: true
+    })
+    expect(f.magnifierEnabled.value).toBe(true)
+    expect(registry.execute('magnifier-set-enabled', { enabled: false }, f.ctx)).toEqual({
+      ok: true,
+      enabled: false
+    })
+    expect(f.magnifierEnabled.value).toBe(false)
+  })
+
+  it('toggles when enabled is omitted', () => {
+    const f = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('magnifier-set-enabled', {}, f.ctx)).toEqual({
+      ok: true,
+      enabled: true
+    })
+    expect(registry.execute('magnifier-set-enabled', undefined, f.ctx)).toEqual({
+      ok: true,
+      enabled: false
     })
   })
 })

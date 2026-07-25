@@ -3,6 +3,8 @@ import { createCommandRegistry } from '.'
 import {
   toExtensionInfo,
   extensionIdFromUrl,
+  iconMimeType,
+  pickManifestIcon,
   pickServiceWorkerExtensionId,
   extensionPopoutBounds,
   serviceWorkerLogLevel,
@@ -47,6 +49,36 @@ describe('toExtensionInfo', () => {
   it('marks a paused extension as disabled', () => {
     const ext = { id: 'abc', name: 'Dark Reader', version: '4.9.0', path: '/ext/dark-reader' }
     expect(toExtensionInfo(ext, false).enabled).toBe(false)
+  })
+})
+
+describe('pickManifestIcon', () => {
+  it('picks the smallest size at or above the ideal', () => {
+    const icons = { '16': 'i16.png', '48': 'i48.png', '128': 'i128.png' }
+    expect(pickManifestIcon(icons)).toBe('i48.png')
+    expect(pickManifestIcon(icons, 64)).toBe('i128.png')
+  })
+
+  it('falls back to the largest size when all are below the ideal', () => {
+    expect(pickManifestIcon({ '16': 'i16.png', '32': 'i32.png' })).toBe('i32.png')
+  })
+
+  it('ignores malformed entries and returns null when nothing is usable', () => {
+    expect(pickManifestIcon(undefined)).toBeNull()
+    expect(pickManifestIcon('icon.png')).toBeNull()
+    expect(pickManifestIcon({})).toBeNull()
+    expect(pickManifestIcon({ big: 'x.png', '48': '' })).toBeNull()
+    expect(pickManifestIcon({ big: 'x.png', '48': 'ok.png' })).toBe('ok.png')
+  })
+})
+
+describe('iconMimeType', () => {
+  it('maps known image extensions and defaults to png', () => {
+    expect(iconMimeType('icons/icon48.png')).toBe('image/png')
+    expect(iconMimeType('icon.SVG')).toBe('image/svg+xml')
+    expect(iconMimeType('icon.jpeg')).toBe('image/jpeg')
+    expect(iconMimeType('icon.webp')).toBe('image/webp')
+    expect(iconMimeType('icon')).toBe('image/png')
   })
 })
 

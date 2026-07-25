@@ -45,6 +45,10 @@ interface Status {
   /** Aggregate percent across the in-flight file downloads, or null when the
    * server(s) sent no size. */
   filePercent: number | null
+  /** Completed file downloads not yet acknowledged (opened/revealed). Shown as a
+   * persistent "✓ n" badge — an instant download finishes before the in-flight
+   * indicator gets a single visible frame, so this is its durable trace. */
+  filesDone: number
 }
 
 const EMPTY: Status = {
@@ -59,7 +63,8 @@ const EMPTY: Status = {
   downloads: 0,
   downloadingSince: null,
   files: 0,
-  filePercent: null
+  filePercent: null,
+  filesDone: 0
 }
 
 /** m:ss for an elapsed-ms span. */
@@ -150,6 +155,7 @@ export default function StatusBar(): React.JSX.Element {
           active?: number
           receivedBytes?: number
           totalBytes?: number
+          unseen?: number
         }
       ]
       if (!alive || !res.ok) return
@@ -168,7 +174,8 @@ export default function StatusBar(): React.JSX.Element {
         downloadingSince: mediaRes.ok ? (mediaRes.downloadingSince ?? null) : null,
         files: dlRes.ok ? (dlRes.active ?? 0) : 0,
         filePercent:
-          totalBytes > 0 ? Math.min(100, Math.round((receivedBytes / totalBytes) * 100)) : null
+          totalBytes > 0 ? Math.min(100, Math.round((receivedBytes / totalBytes) * 100)) : null,
+        filesDone: dlRes.ok ? (dlRes.unseen ?? 0) : 0
       })
     }
     // get-status walks every process (getAppMetrics), so coalesce bursts of tab
@@ -233,14 +240,18 @@ export default function StatusBar(): React.JSX.Element {
   }
 
   // Reveal the most recent download in Finder (open it if it already completed) —
-  // the status indicator's click target. Resolves the id via list-downloads so the
-  // bar holds no download state itself.
+  // the status indicator's click target. Prefers the newest UNSEEN completion so
+  // clicking the "✓ n" badge walks through what just landed; opening/revealing
+  // marks it seen main-side, which shrinks the badge. Resolves the id via
+  // list-downloads so the bar holds no download state itself.
   const revealLatestDownload = async (): Promise<void> => {
     const res = (await window.mira.command('list-downloads')) as {
       ok: boolean
-      downloads?: Array<{ id: string; state: string }>
+      downloads?: Array<{ id: string; state: string; seen?: boolean }>
     }
-    const latest = res.ok ? res.downloads?.[0] : undefined
+    if (!res.ok || !res.downloads) return
+    const latest =
+      res.downloads.find((d) => d.state === 'completed' && !d.seen) ?? res.downloads[0]
     if (!latest) return
     const command = latest.state === 'completed' ? 'open-download' : 'reveal-download'
     void window.mira.command(command, { id: latest.id })
@@ -256,7 +267,8 @@ export default function StatusBar(): React.JSX.Element {
     downloads,
     downloadingSince,
     files,
-    filePercent
+    filePercent,
+    filesDone
   } = status
 
   // Tick the elapsed clock every second while a download runs (the memory poll
@@ -302,6 +314,24 @@ export default function StatusBar(): React.JSX.Element {
             }}
           >
             {filePercent != null ? `⬇ ${filePercent}%` : `⬇ ${files}`}
+          </span>
+        )}
+        {files === 0 && filesDone > 0 && (
+          <span
+            className="status-item status-file-download status-clickable"
+            onMouseEnter={(e) =>
+              show(
+                e.currentTarget,
+                `${filesDone} download${filesDone > 1 ? 's' : ''} finished — click to open the latest`
+              )
+            }
+            onMouseLeave={hide}
+            onClick={() => {
+              hide()
+              void revealLatestDownload()
+            }}
+          >
+            {`✓ ${filesDone}`}
           </span>
         )}
         {downloads > 0 && (

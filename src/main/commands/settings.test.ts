@@ -52,7 +52,8 @@ describe('get-settings', () => {
       homeUrl: 'home',
       llm: { provider: 'claude-cli' },
       sidebarWidth: 240,
-      skillPaneWidth: 360
+      skillPaneWidth: 360,
+      magnifierEnabled: false
     })
   })
 })
@@ -102,7 +103,8 @@ describe('set-llm-config', () => {
       homeUrl: 'home',
       llm: { provider: 'anthropic-api', apiKey: 'sk-x' },
       sidebarWidth: 240,
-      skillPaneWidth: 360
+      skillPaneWidth: 360,
+      magnifierEnabled: false
     })
   })
 
@@ -130,7 +132,8 @@ describe('set-home-url', () => {
       homeUrl: 'https://example.com',
       llm: { provider: 'claude-cli' },
       sidebarWidth: 240,
-      skillPaneWidth: 360
+      skillPaneWidth: 360,
+      magnifierEnabled: false
     })
   })
 
@@ -146,7 +149,8 @@ describe('set-home-url', () => {
       homeUrl: '',
       llm: { provider: 'claude-cli' },
       sidebarWidth: 240,
-      skillPaneWidth: 360
+      skillPaneWidth: 360,
+      magnifierEnabled: false
     })
   })
 

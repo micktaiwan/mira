@@ -24,6 +24,47 @@ export interface ExtensionInfo {
    * loops on a missing API (e.g. Kondo) is diagnosable from list-extensions
    * instead of guesswork. */
   gaps?: CapabilityGap[]
+  /** Data URL of the extension's manifest icon, for UI display (the crx://
+   * protocol only serves browser-action icons, so paused or actionless
+   * extensions would have none there). Omitted when the manifest declares no
+   * icon or the file is unreadable. */
+  icon?: string
+}
+
+/** Pick the manifest `icons` entry best suited for a small UI list: the
+ * smallest declared size >= `ideal`, else the largest one below it. Returns the
+ * icon path as declared (relative to the extension root, possibly with a
+ * leading slash), or null when nothing usable is declared. Pure, tested. */
+export function pickManifestIcon(icons: unknown, ideal = 48): string | null {
+  if (!icons || typeof icons !== 'object') return null
+  const entries = Object.entries(icons as Record<string, unknown>)
+    .map(([size, path]) => ({ size: Number(size), path }))
+    .filter(
+      (e): e is { size: number; path: string } =>
+        Number.isFinite(e.size) && typeof e.path === 'string' && e.path !== ''
+    )
+  if (!entries.length) return null
+  const atLeast = entries.filter((e) => e.size >= ideal).sort((a, b) => a.size - b.size)
+  if (atLeast.length) return atLeast[0].path
+  return entries.sort((a, b) => b.size - a.size)[0].path
+}
+
+/** MIME type of a manifest icon file, by file extension. PNG is the
+ * overwhelming default in real manifests, and the fallback. Pure, tested. */
+export function iconMimeType(path: string): string {
+  switch (path.toLowerCase().split('.').pop()) {
+    case 'svg':
+      return 'image/svg+xml'
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg'
+    case 'webp':
+      return 'image/webp'
+    case 'gif':
+      return 'image/gif'
+    default:
+      return 'image/png'
+  }
 }
 
 /** The four console levels Chromium reports, in ascending severity. Electron's

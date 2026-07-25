@@ -133,12 +133,29 @@ describe('DownloadTracker', () => {
       rec({ id: 'b', state: 'progressing', startedAt: 100, receivedBytes: 50, totalBytes: 200 })
     )
     t.add(rec({ id: 'c', state: 'completed', startedAt: 50, receivedBytes: 999, totalBytes: 999 }))
-    expect(t.stats()).toEqual({ active: 2, since: 100, receivedBytes: 150, totalBytes: 600 })
+    expect(t.stats()).toEqual({
+      active: 2,
+      since: 100,
+      receivedBytes: 150,
+      totalBytes: 600,
+      unseen: 1
+    })
   })
 
   it('stats reports no activity when nothing runs', () => {
     const t = new DownloadTracker()
-    t.add(rec({ id: 'a', state: 'completed' }))
-    expect(t.stats()).toEqual({ active: 0, since: null, receivedBytes: 0, totalBytes: 0 })
+    t.add(rec({ id: 'a', state: 'completed', seen: true }))
+    expect(t.stats()).toEqual({ active: 0, since: null, receivedBytes: 0, totalBytes: 0, unseen: 0 })
+  })
+
+  it('stats counts only completed-and-unseen downloads as unseen', () => {
+    const t = new DownloadTracker()
+    t.add(rec({ id: 'fresh', state: 'completed' }))
+    t.add(rec({ id: 'acked', state: 'completed', seen: true }))
+    t.add(rec({ id: 'failed', state: 'interrupted' }))
+    t.add(rec({ id: 'run', state: 'progressing' }))
+    expect(t.stats().unseen).toBe(1)
+    t.update('fresh', { seen: true }, 2000)
+    expect(t.stats().unseen).toBe(0)
   })
 })

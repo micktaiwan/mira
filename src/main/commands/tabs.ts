@@ -385,7 +385,7 @@ export const tabsCommands: CommandMap<CommandContext> = {
     const id = tabIdOf(params)
     if (id === '') return { ok: false, error: 'missing "id" (or "tabId")' }
     try {
-      ctx.writeClipboard(id)
+      ctx.writeClipboard(`TabId: ${id}`)
       ctx.showToast('Copied!')
       return { ok: true, id }
     } catch (error) {

@@ -155,9 +155,11 @@ describe('input shim', () => {
     expect(MAGNIFIER_SHIM).toContain("addEventListener('wheel'")
     expect(MAGNIFIER_SHIM).toContain("addEventListener('click'")
     expect(MAGNIFIER_SHIM).toContain('if (!state.swallowClicks) return')
-    // The two flags stay independently settable (they gate different events).
-    expect(setShimFlags(true, false)).toContain('captureWheel = true')
-    expect(setShimFlags(true, false)).toContain('swallowClicks = false')
+    // The flags stay independently settable (they gate different events).
+    expect(setShimFlags(true, false, true)).toContain('captureWheel = true')
+    expect(setShimFlags(true, false, true)).toContain('swallowClicks = false')
+    expect(setShimFlags(true, false, true)).toContain('magEnabled = true')
+    expect(setShimFlags(false, false, false)).toContain('magEnabled = false')
   })
 
   it('captures Cmd+wheel on e.metaKey read off the event, not a flag from main', () => {
@@ -165,7 +167,16 @@ describe('input shim', () => {
     // the first Cmd+scroll leak to native scroll; stuck true (its keyUp landing
     // on the chrome / another tab / another app) it swallowed ALL wheel events on
     // freshly loaded pages ("page refuses to scroll after load" bug).
-    expect(MAGNIFIER_SHIM).toContain('if (!state.captureWheel && !e.metaKey) return')
+    expect(MAGNIFIER_SHIM).toContain(
+      'if (!state.captureWheel && !(state.magEnabled && e.metaKey)) return'
+    )
+  })
+
+  it('gates the Cmd+wheel entry on the magEnabled app setting, off by default', () => {
+    // The gesture is opt-in (toolbar toggle beside the address bar): a fresh
+    // shim must NOT capture Cmd+wheel until main pushes magEnabled=true, so with
+    // the option off Cmd+scroll just scrolls the page.
+    expect(MAGNIFIER_SHIM).toContain('magEnabled: false')
   })
 
   it('freezes the scrollable ancestor chain on every captured wheel', () => {

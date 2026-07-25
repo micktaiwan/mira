@@ -90,6 +90,8 @@ export {
   selectServiceWorkerLogs,
   serviceWorkerLogLevel,
   extensionIdFromUrl,
+  iconMimeType,
+  pickManifestIcon,
   pickServiceWorkerExtensionId,
   extensionPopoutBounds,
   SW_LOG_LEVELS

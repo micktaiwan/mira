@@ -77,7 +77,7 @@ describe('copy-tab-id', () => {
     const { ctx, clipboardWrites, toasts } = makeContext()
     const registry = createCommandRegistry()
     expect(registry.execute('copy-tab-id', { id: 'tab-1' }, ctx)).toEqual({ ok: true, id: 'tab-1' })
-    expect(clipboardWrites).toEqual(['tab-1'])
+    expect(clipboardWrites).toEqual(['TabId: tab-1'])
     expect(toasts).toEqual(['Copied!'])
   })
 

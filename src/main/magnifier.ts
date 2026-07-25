@@ -192,6 +192,14 @@ export const MAG_BINDING = '__miraMagnifier'
  * addBinding function, which emits `Runtime.bindingCalled` to main. Verified
  * live (shim probe, 2026-07-11).
  *
+ * A third flag, `magEnabled`, gates the whole Cmd+wheel ENTRY from 100%: the
+ * page-zoom gesture is an app setting (off by default — it fires too easily
+ * while scrolling with Cmd held), toggled from the toolbar beside the address
+ * bar. When off, Cmd+wheel is not captured at all and scrolls the page normally.
+ * Unlike a "Cmd is held" flag this one is a stable setting, so pushing it from
+ * main has no key-state race. It only gates the entry: while already magnified,
+ * captureWheel keeps pan and Cmd+wheel-out working regardless.
+ *
  * Cmd+wheel is captured on `e.metaKey` directly, read off the wheel event
  * itself — never via a "Cmd is held" flag pushed from main. Both alternatives
  * were tried and lost a race each:
@@ -217,7 +225,7 @@ export const MAG_BINDING = '__miraMagnifier'
  * the gesture), then restores style + scroll offsets once the burst goes idle. */
 export const MAGNIFIER_SHIM = `(() => {
   if (window.__miraMag) return;
-  const state = { captureWheel: false, swallowClicks: false };
+  const state = { captureWheel: false, swallowClicks: false, magEnabled: false };
   window.__miraMag = state;
   const send = (o) => { try { window.${MAG_BINDING}(JSON.stringify(o)); } catch (e) {} };
   const frozen = [];
@@ -250,7 +258,7 @@ export const MAGNIFIER_SHIM = `(() => {
     idleTimer = setTimeout(unfreeze, 250);
   };
   window.addEventListener('wheel', (e) => {
-    if (!state.captureWheel && !e.metaKey) return;
+    if (!state.captureWheel && !(state.magEnabled && e.metaKey)) return;
     e.preventDefault();
     freeze(e.target);
     send({ t: 'wheel', dy: e.deltaY, dx: e.deltaX, meta: e.metaKey, x: e.clientX, y: e.clientY });
@@ -261,11 +269,17 @@ export const MAGNIFIER_SHIM = `(() => {
   }, { capture: true });
 })();`
 
-/** JS (run via the debugger) to set the shim's two capture flags in the page. */
-export function setShimFlags(captureWheel: boolean, swallowClicks: boolean): string {
+/** JS (run via the debugger) to set the shim's capture flags in the page:
+ * the two magnified-state flags plus the app-wide gesture gate (magEnabled). */
+export function setShimFlags(
+  captureWheel: boolean,
+  swallowClicks: boolean,
+  magEnabled: boolean
+): string {
   return (
     `window.__miraMag && (window.__miraMag.captureWheel = ${captureWheel ? 'true' : 'false'}, ` +
-    `window.__miraMag.swallowClicks = ${swallowClicks ? 'true' : 'false'});`
+    `window.__miraMag.swallowClicks = ${swallowClicks ? 'true' : 'false'}, ` +
+    `window.__miraMag.magEnabled = ${magEnabled ? 'true' : 'false'});`
   )
 }
 

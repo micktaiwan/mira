@@ -9,6 +9,7 @@ import {
   withLlm,
   withSidebarWidth,
   withSkillPaneWidth,
+  withMagnifierEnabled,
   SIDEBAR_WIDTH,
   SKILL_PANE_WIDTH,
   DEFAULT_HOME_URL
@@ -50,8 +51,17 @@ describe('normalizeSettings', () => {
       homeUrl: '',
       llm: { provider: 'anthropic-api', apiKey: 'k' },
       sidebarWidth: 300,
-      skillPaneWidth: SKILL_PANE_WIDTH.max
+      skillPaneWidth: SKILL_PANE_WIDTH.max,
+      magnifierEnabled: false
     })
+  })
+
+  it('reads magnifierEnabled only as an explicit true (off is the safe default)', () => {
+    expect(normalizeSettings({ magnifierEnabled: true }).magnifierEnabled).toBe(true)
+    expect(normalizeSettings({ magnifierEnabled: false }).magnifierEnabled).toBe(false)
+    // Legacy file without the key, or a corrupt value: the gesture stays off.
+    expect(normalizeSettings({}).magnifierEnabled).toBe(false)
+    expect(normalizeSettings({ magnifierEnabled: 'yes' }).magnifierEnabled).toBe(false)
   })
 
   it('degrades a bad/missing file to defaults', () => {
@@ -139,6 +149,18 @@ describe('withSidebarWidth / withSkillPaneWidth', () => {
       ...defaultSettings(),
       skillPaneWidth: 400
     })
+  })
+})
+
+describe('withMagnifierEnabled', () => {
+  it('arms and disarms the Cmd+scroll gesture, preserving the rest', () => {
+    const armed = withMagnifierEnabled(defaultSettings(), true)
+    expect(armed).toEqual({ ...defaultSettings(), magnifierEnabled: true })
+    expect(withMagnifierEnabled(armed, false)).toEqual(defaultSettings())
+  })
+
+  it('is off by default', () => {
+    expect(defaultSettings().magnifierEnabled).toBe(false)
   })
 })
 

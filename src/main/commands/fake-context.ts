@@ -128,6 +128,8 @@ export interface FakeContext {
   magnifierApplied: Array<{ id: string; state: MagnifierState }>
   /** View ids flashed via magnifierFlash (back-to-100% spy). */
   magnifierFlashes: string[]
+  /** The Cmd+scroll gesture gate (boxed live value, starts false). */
+  magnifierEnabled: { value: boolean }
   /** Cookies set per profile id via cookieJarForProfile (import spy). */
   cookiesSet: Map<string, CookieSetDetails[]>
   /** Code + target passed to execJsInTab (exec-js spy); tabId null = active tab. */
@@ -229,6 +231,8 @@ export function makeContext(
   const magnifierStates = new Map<string, MagnifierState>()
   const magnifierApplied: Array<{ id: string; state: MagnifierState }> = []
   const magnifierFlashes: string[] = []
+  // The Cmd+scroll gesture gate (app setting). Boxed so the ctx closures share it.
+  const magnifierEnabled = { value: false }
   // The fake Spaces world: three user desktops on one display (stable fake ids).
   const fakeSpaceIds = [101, 103, 107]
   let windowSpace = 0
@@ -359,11 +363,13 @@ export function makeContext(
     llm: LlmConfig
     sidebarWidth: number
     skillPaneWidth: number
+    magnifierEnabled: boolean
   } => ({
     homeUrl: state.homeUrl,
     llm: state.llm,
     sidebarWidth: state.sidebarWidth,
-    skillPaneWidth: state.skillPaneWidth
+    skillPaneWidth: state.skillPaneWidth,
+    magnifierEnabled: magnifierEnabled.value
   })
   // Vault (encrypted-profile) state: which fake profiles are encrypted, and which
   // are unlocked this "session". The real ones shell out to hdiutil + fs.
@@ -735,12 +741,16 @@ export function makeContext(
     openDownload: async (id: string) => {
       const record = downloads.get(id)
       if (!record || record.state !== 'completed') return false
+      // Opening acknowledges the download (clears the status bar's unseen badge),
+      // mirroring the ProfileManager.
+      downloads.update(id, { seen: true }, ++downloadClock)
       openedDownloads.push(id)
       return true
     },
     revealDownload: (id: string) => {
       const record = downloads.get(id)
       if (!record) return false
+      downloads.update(id, { seen: true }, ++downloadClock)
       revealedDownloads.push(id)
       return true
     },
@@ -795,6 +805,10 @@ export function makeContext(
     },
     magnifierFlash: (id: string) => {
       magnifierFlashes.push(id)
+    },
+    getMagnifierEnabled: () => magnifierEnabled.value,
+    setMagnifierEnabled: (enabled: boolean) => {
+      magnifierEnabled.value = enabled
     },
     hideTooltip: () => {
       tooltipHidden.push(true)
@@ -1405,6 +1419,7 @@ export function makeContext(
     tooltipHidden,
     magnifierApplied,
     magnifierFlashes,
+    magnifierEnabled,
     cookiesSet,
     execJs,
     keyPresses,

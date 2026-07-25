@@ -98,12 +98,19 @@ root, so the page does NOT reflow (unlike `zoom-in`). Normally driven by Cmd+scr
 (zoom) / scroll (pan); these commands expose the same actions. While magnified,
 clicks are swallowed (they'd land wrong), so it is a "look only" mode.
 
-| Command           | Params                         | Effect / result                                                                              |
-| ----------------- | ------------------------------ | -------------------------------------------------------------------------------------------- |
-| `magnifier-zoom`  | `deltaY`, `cursorX`, `cursorY` | zoom by a wheel delta, anchored on the cursor (surface CSS px); returns `{scale, magnified}` |
-| `magnifier-pan`   | `deltaX`, `deltaY`             | pan the loupe (surface px); returns `{magnified}`                                            |
-| `magnifier-reset` | —                              | back to 100% (flashes a frame if it was zoomed)                                              |
-| `magnifier-state` | —                              | current `{scale, originX, originY, magnified}`                                               |
+The Cmd+scroll GESTURE is gated by an app setting (`magnifierEnabled`, off by
+default — it fires too easily while scrolling with Cmd held), toggled from the
+toolbar button beside the address bar or via `magnifier-set-enabled`. The gate
+only affects the gesture entry: `magnifier-zoom` & co stay callable regardless.
+Disabling snaps any magnified tab back to 100%.
+
+| Command                 | Params                         | Effect / result                                                                              |
+| ----------------------- | ------------------------------ | -------------------------------------------------------------------------------------------- |
+| `magnifier-zoom`        | `deltaY`, `cursorX`, `cursorY` | zoom by a wheel delta, anchored on the cursor (surface CSS px); returns `{scale, magnified}` |
+| `magnifier-pan`         | `deltaX`, `deltaY`             | pan the loupe (surface px); returns `{magnified}`                                            |
+| `magnifier-reset`       | —                              | back to 100% (flashes a frame if it was zoomed)                                              |
+| `magnifier-state`       | —                              | current `{scale, originX, originY, magnified, enabled}`                                      |
+| `magnifier-set-enabled` | `enabled?` (bool)              | arm/disarm the Cmd+scroll gesture (omitted = toggle); persisted; returns `{enabled}`         |
 
 ### Find in page (active tab of the target window)
 

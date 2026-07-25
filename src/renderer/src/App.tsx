@@ -124,6 +124,10 @@ function App(): React.JSX.Element {
   // them live (CSS var + a throttled command so main reflows the web view).
   const [sidebarWidth, setSidebarWidth] = useState(240)
   const [skillPaneWidth, setSkillPaneWidth] = useState(360)
+  // The Cmd+scroll page-zoom gesture (optical magnifier), off by default — it
+  // fires too easily while scrolling with Cmd held. Armed on demand from the
+  // toolbar toggle beside the address bar; seeded from settings on mount.
+  const [magnifierEnabled, setMagnifierEnabled] = useState(false)
 
   // Paint the chrome with this window's profile theme: seeded from the chrome
   // URL (?theme=…) before first paint, repainted live when it changes in
@@ -309,6 +313,7 @@ function App(): React.JSX.Element {
       if (!res.ok) return
       if (typeof res.sidebarWidth === 'number') setSidebarWidth(res.sidebarWidth)
       if (typeof res.skillPaneWidth === 'number') setSkillPaneWidth(res.skillPaneWidth)
+      setMagnifierEnabled(res.magnifierEnabled === true)
       // Seed the chat options bar from the persisted llm config.
       const llm = res.llm as { provider?: string; model?: string; loadMcp?: boolean } | undefined
       if (llm) {
@@ -483,6 +488,39 @@ function App(): React.JSX.Element {
               autoCorrect="off"
             />
           </form>
+          {/* Page-zoom toggle: arms/disarms the Cmd+scroll optical magnifier.
+            Off by default (the gesture fires too easily while scrolling with Cmd
+            held); optimistic flip, main persists via magnifier-set-enabled. */}
+          <button
+            type="button"
+            className={`nav-button magnifier-button${magnifierEnabled ? ' active' : ''}`}
+            title={
+              magnifierEnabled ? 'Disable page zoom (⌘+scroll)' : 'Enable page zoom (⌘+scroll)'
+            }
+            aria-label="Toggle page zoom"
+            aria-pressed={magnifierEnabled}
+            onClick={() => {
+              const next = !magnifierEnabled
+              setMagnifierEnabled(next)
+              void window.mira.command('magnifier-set-enabled', { enabled: next })
+            }}
+          >
+            <svg width="17" height="17" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <circle cx="6.8" cy="6.8" r="4.2" stroke="currentColor" strokeWidth="1.4" />
+              <path
+                d="M10 10 13.4 13.4"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+              />
+              <path
+                d="M5 6.8h3.6M6.8 5v3.6"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
           {/* Reload spinner: spins while the active tab loads, in a fixed slot
             between the address bar and the right-side icons so it never reflows
             the toolbar. Held visible for a floor duration so a fast reload is

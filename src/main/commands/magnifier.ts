@@ -22,6 +22,12 @@ export interface MagnifierContext {
   applyMagnifierClip: (id: string, state: MagnifierState) => void
   /** Flash the "back to 100%, clicks reliable" frame over the page. */
   magnifierFlash: (id: string) => void
+  /** Whether the Cmd+scroll page-zoom gesture is armed (app setting). */
+  getMagnifierEnabled: () => boolean
+  /** Arm / disarm the gesture: persist the setting, push the gate into every live
+   * page's shim, and (when disarming) snap any magnified tab back to 100% so it
+   * cannot stay stuck zoomed with the Cmd+wheel exit gone. */
+  setMagnifierEnabled: (enabled: boolean) => void
 }
 
 interface ZoomParams {
@@ -100,6 +106,23 @@ export const magnifierCommands: CommandMap<CommandContext> = {
     const target = ctx.magnifierTarget()
     if (!target) return { ok: false, error: 'no magnifiable view' }
     const state = ctx.getMagnifierState(target.id)
-    return { ok: true, ...state, magnified: isMagnified(state) }
+    return { ok: true, ...state, magnified: isMagnified(state), enabled: ctx.getMagnifierEnabled() }
+  },
+
+  // Arm / disarm the Cmd+scroll page-zoom gesture (the toolbar toggle beside the
+  // address bar). `enabled` omitted flips the current value. Only gates the
+  // GESTURE entry: magnifier-zoom stays callable from the socket regardless.
+  'magnifier-set-enabled': (ctx, params) => {
+    const { enabled } = (params ?? {}) as { enabled?: unknown }
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      return { ok: false, error: '"enabled" must be a boolean' }
+    }
+    try {
+      const next = enabled ?? !ctx.getMagnifierEnabled()
+      ctx.setMagnifierEnabled(next)
+      return { ok: true, enabled: next }
+    } catch (error) {
+      return fail(error)
+    }
   }
 }

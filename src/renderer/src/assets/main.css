@@ -211,6 +211,12 @@ body {
   background: transparent;
 }
 
+/* Page-zoom (Cmd+scroll magnifier) toggle beside the address bar: accent-tinted
+   while the gesture is armed, plain otherwise. */
+.magnifier-button.active {
+  color: var(--accent);
+}
+
 /* Grabbable window-drag handle at the toolbar's trailing end, showing the app
    name + version. The toolbar is a drag region, so this inherits it. A small
    fixed handle (shrinks to its label), not a stretching zone. The faint diagonal
@@ -1059,6 +1065,30 @@ body {
   border-radius: 8px;
   background: var(--color-background-soft);
   font-size: 12px;
+}
+
+/* Extension icon: the manifest icon (data URL), or the name's initial when
+ * the extension declares none. */
+.extension-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.extension-icon-fallback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--ev-c-gray-3);
+  color: var(--color-text);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.extension-row.disabled .extension-icon {
+  opacity: 0.5;
 }
 
 .extension-name {

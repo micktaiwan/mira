@@ -41,6 +41,8 @@ import {
   toExtensionInfo,
   serviceWorkerLogLevel,
   extensionIdFromUrl,
+  iconMimeType,
+  pickManifestIcon,
   pickServiceWorkerExtensionId,
   extensionPopoutBounds,
   selectServiceWorkerLogs,
@@ -766,6 +768,36 @@ export class ExtensionsService {
     return gaps.length ? { ...info, gaps } : info
   }
 
+  // --- Manifest icons (Settings UI) ----------------------------------------
+
+  /** Data URL of an extension dir's manifest icon, cached per path — a store
+   * update unpacks a NEW version directory, so a path's icon never changes in
+   * place. null when the manifest declares no icon or the file is unreadable. */
+  private readonly iconCache = new Map<string, string | null>()
+
+  private iconFor(extPath: string): string | null {
+    const cached = this.iconCache.get(extPath)
+    if (cached !== undefined) return cached
+    let icon: string | null = null
+    const relPath = pickManifestIcon(this.readManifest(extPath)?.icons)
+    if (relPath) {
+      try {
+        const data = readFileSync(join(extPath, relPath.replace(/^\//, '')))
+        icon = `data:${iconMimeType(relPath)};base64,${data.toString('base64')}`
+      } catch {
+        icon = null // declared but missing on disk — show the fallback initial
+      }
+    }
+    this.iconCache.set(extPath, icon)
+    return icon
+  }
+
+  /** Attach the manifest icon to an ExtensionInfo (omitted when there is none). */
+  private withIcon(info: ExtensionInfo): ExtensionInfo {
+    const icon = this.iconFor(info.path)
+    return icon ? { ...info, icon } : info
+  }
+
   /** Enable Chrome Web Store support in `ses` (E5): navigating
    * chromewebstore.google.com in a tab of this profile turns "Add to Chrome"
    * into a real install (the paquet downloads/unpacks the .crx itself — no
@@ -983,15 +1015,17 @@ export class ExtensionsService {
   }
 
   /** Extensions of the profile: the ones loaded in `ses` (enabled) plus the
-   * paused ones from the disabled registry (enabled: false). */
+   * paused ones from the disabled registry (enabled: false). Icons ride along
+   * only here — this is what the Settings UI renders; the other command
+   * responses stay light. */
   list(ses: Session, profileId: string): ExtensionInfo[] {
     const loaded = ses.extensions
       .getAllExtensions()
-      .map((ext) => this.withGaps(toExtensionInfo(ext), ext.path))
+      .map((ext) => this.withIcon(this.withGaps(toExtensionInfo(ext), ext.path)))
     const loadedIds = new Set(loaded.map((e) => e.id))
     const paused = disabledFor(this.disabled, profileId)
       .filter((e) => !loadedIds.has(e.id))
-      .map((e) => this.withGaps(toExtensionInfo(e, false), e.path))
+      .map((e) => this.withIcon(this.withGaps(toExtensionInfo(e, false), e.path)))
     return [...loaded, ...paused]
   }
 

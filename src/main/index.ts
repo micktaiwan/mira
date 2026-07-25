@@ -385,6 +385,7 @@ app.whenReady().then(async () => {
     skillPaneWidth: initialSettings.skillPaneWidth,
     homeUrl: initialSettings.homeUrl,
     initialLlm: initialSettings.llm,
+    magnifierEnabled: initialSettings.magnifierEnabled,
     preloadPath,
     userDataDir: app.getPath('userData'),
     ...(process.platform === 'linux' ? { icon } : {}),

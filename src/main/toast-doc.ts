@@ -13,8 +13,10 @@ export const PAD = 24
 export const SLIDE = 10
 
 /** Total on-screen life of one toast (ms): slide/fade in, hold, then fade out.
- * The controller hides the window after this, so it matches the CSS animation. */
-export const TOAST_DURATION_MS = 1800
+ * The controller hides the window after this, so it matches the CSS animation.
+ * Long enough to be caught from the corner of the eye — 1800 ms proved
+ * blink-and-miss for download completions. */
+export const TOAST_DURATION_MS = 4000
 
 export const TOAST_HTML = `<!doctype html>
 <html>

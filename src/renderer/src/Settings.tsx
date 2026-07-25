@@ -858,6 +858,8 @@ interface ExtensionInfo {
   path: string
   /** false = paused: unloaded from the session but kept on disk. */
   enabled: boolean
+  /** Data URL of the manifest icon; absent when the extension declares none. */
+  icon?: string
 }
 
 /** The "Extensions" sub-section: the extensions of THIS window's profile
@@ -932,6 +934,13 @@ function ExtensionsSection(): React.JSX.Element {
         <ul className="extension-list">
           {extensions.map((ext) => (
             <li key={ext.id} className={`extension-row${ext.enabled ? '' : ' disabled'}`}>
+              {ext.icon ? (
+                <img className="extension-icon" src={ext.icon} alt="" />
+              ) : (
+                <span className="extension-icon extension-icon-fallback" aria-hidden="true">
+                  {ext.name.charAt(0).toUpperCase()}
+                </span>
+              )}
               <span className="extension-name">{ext.name}</span>
               {!ext.enabled && <span className="extension-state">disabled</span>}
               <span className="extension-version">{ext.version}</span>

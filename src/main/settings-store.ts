@@ -18,6 +18,10 @@ export interface AppSettings {
   sidebarWidth: number
   /** Width (px) of the right skill pane — resizable by dragging its edge. */
   skillPaneWidth: number
+  /** Whether Cmd+scroll zooms the page (the optical magnifier gesture). Off by
+   * default: the gesture fires too easily while scrolling with Cmd held, so it is
+   * armed on demand via the toolbar toggle beside the address bar. */
+  magnifierEnabled: boolean
 }
 
 /** Allowed range + default for each resizable panel width. Main clamps to these
@@ -56,7 +60,8 @@ export function defaultSettings(): AppSettings {
     homeUrl: DEFAULT_HOME_URL,
     llm: defaultLlm(),
     sidebarWidth: SIDEBAR_WIDTH.default,
-    skillPaneWidth: SKILL_PANE_WIDTH.default
+    skillPaneWidth: SKILL_PANE_WIDTH.default,
+    magnifierEnabled: false
   }
 }
 
@@ -88,7 +93,10 @@ export function normalizeSettings(raw: unknown): AppSettings {
     homeUrl,
     llm: normalizeLlm(v.llm),
     sidebarWidth: clampWidth(v.sidebarWidth, SIDEBAR_WIDTH),
-    skillPaneWidth: clampWidth(v.skillPaneWidth, SKILL_PANE_WIDTH)
+    skillPaneWidth: clampWidth(v.skillPaneWidth, SKILL_PANE_WIDTH),
+    // Anything but an explicit true (including a legacy file without the key)
+    // keeps the gesture off — off is the safe default.
+    magnifierEnabled: v.magnifierEnabled === true
   }
 }
 
@@ -111,4 +119,9 @@ export function withSidebarWidth(settings: AppSettings, width: number): AppSetti
 /** Return settings with a clamped skill-pane width. */
 export function withSkillPaneWidth(settings: AppSettings, width: number): AppSettings {
   return { ...settings, skillPaneWidth: clampWidth(width, SKILL_PANE_WIDTH) }
+}
+
+/** Return settings with the Cmd+scroll page-zoom gesture armed or disarmed. */
+export function withMagnifierEnabled(settings: AppSettings, enabled: boolean): AppSettings {
+  return { ...settings, magnifierEnabled: enabled }
 }

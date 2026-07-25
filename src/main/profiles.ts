@@ -58,6 +58,12 @@ import {
 } from './downloads'
 import { homePageUrl, isMiraHomeUrl, type HomeStats } from './home-doc'
 import { errorPageUrl, isMiraErrorUrl } from './error-doc'
+import {
+  downloadPageUrl,
+  isMiraDownloadUrl,
+  parseDownloadActionUrl,
+  type DownloadPageInfo
+} from './download-doc'
 import { setActivationSuppressed } from './mac-activation'
 import { shouldSuppressActivation, type NavKind } from './activation-policy'
 import { type LlmConfig, type ChatMessage, type PageContext } from './llm'
@@ -178,7 +184,8 @@ import {
   withHomeUrl,
   withLlm,
   withSidebarWidth,
-  withSkillPaneWidth
+  withSkillPaneWidth,
+  withMagnifierEnabled
 } from './settings-store'
 
 /** Sentinel URL of the internal Settings tab (like chrome://settings). It never
@@ -419,6 +426,9 @@ export interface ProfileManagerDeps {
   /** The persisted LLM engine config at startup (provider + optional key/model),
    * so skills use the chosen engine from the first run. */
   initialLlm: LlmConfig
+  /** Whether the Cmd+scroll page-zoom gesture is armed at startup (persisted
+   * setting, off by default — see settings-store.ts). */
+  magnifierEnabled: boolean
   preloadPath: string
   icon?: string
   /** The app's userData directory. Vault paths (the per-profile encrypted image and
@@ -588,6 +598,10 @@ export class ProfileManager {
   private readonly downloadTracker = new DownloadTracker()
   private readonly downloadItems = new Map<string, DownloadItem>()
   private readonly downloadSessions = new Set<string>()
+  /** Source URL of the download page a tab currently shows (a navigation that
+   * resolved into a file download — see trackDownload). wireView's mirrorUrl
+   * reads it so the address bar keeps the file's URL, not the data: URL. */
+  private readonly downloadDocSource = new Map<string, string>()
   /** Pending debounced flush of sessions.json (one timer for the whole app, as
    * there is a single file). null when no write is pending. */
   private saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -625,7 +639,8 @@ export class ProfileManager {
       homeUrl: deps.homeUrl,
       llm: deps.initialLlm,
       sidebarWidth: deps.sidebarWidth,
-      skillPaneWidth: deps.skillPaneWidth
+      skillPaneWidth: deps.skillPaneWidth,
+      magnifierEnabled: deps.magnifierEnabled
     }
   }
 
@@ -1939,14 +1954,14 @@ export class ProfileManager {
     if (this.downloadSessions.has(key)) return
     this.downloadSessions.add(key)
     const ses = partition ? session.fromPartition(partition) : session.defaultSession
-    ses.on('will-download', (_event, item) => this.trackDownload(item, profileId))
+    ses.on('will-download', (_event, item, wc) => this.trackDownload(item, profileId, wc))
   }
 
   /** Take over one DownloadItem: pick a non-colliding path under ~/Downloads (which
    * also suppresses the save dialog), register a record, and forward Electron's
    * updated/done events into the tracker — broadcasting changes to the profile's
    * chrome and flashing a toast when the file lands. */
-  private trackDownload(item: DownloadItem, profileId: string): void {
+  private trackDownload(item: DownloadItem, profileId: string, wc?: WebContents): void {
     const dir = app.getPath('downloads')
     const suggested = item.getFilename()
     // Never overwrite: bump "name (1).ext", "name (2).ext"… until a path is free.
@@ -1972,6 +1987,31 @@ export class ProfileManager {
       profileId
     })
     this.broadcastToProfile(profileId, 'mira:downloads-changed')
+
+    // A navigation that resolved into this download leaves its tab blank —
+    // Chromium aborts the load (ERR_ABORTED) and renders nothing, so the tab
+    // looks dead (lived with an MDM enroll link: white page, zero feedback).
+    // Take such a tab over with Mira's download page. A download triggered from
+    // a rendered page (a link click) leaves that page alone: the toast + status
+    // bar cover it.
+    const docWc = wc && !wc.isDestroyed() && this.isBlankTabContents(wc) ? wc : null
+    const docTabId = docWc ? this.tabIdOfAnyWindow(docWc) : null
+    const docInfo = (state: DownloadState, bytes: number): DownloadPageInfo => {
+      const profile = findById(this.profiles, profileId)
+      return {
+        id,
+        state,
+        filename: name,
+        url: item.getURL(),
+        savePath,
+        bytes,
+        ...(profile ? { theme: this.resolveTheme(profile) } : {})
+      }
+    }
+    if (docWc && docTabId) {
+      this.downloadDocSource.set(docTabId, item.getURL())
+      void docWc.loadURL(downloadPageUrl(docInfo('progressing', item.getTotalBytes())))
+    }
 
     item.on('updated', (_e, state) => {
       this.downloadTracker.update(
@@ -2002,7 +2042,67 @@ export class ProfileManager {
         const host = this.aWindowForProfile(profileId)
         if (host) void showToast(host, completionMessage(record))
       }
+      // Swap the takeover page (if any) to its final state — with Open / Reveal
+      // buttons on completion — unless the tab moved on to a real page meanwhile.
+      if (docWc && !docWc.isDestroyed()) {
+        const current = docWc.getURL()
+        if (isMiraDownloadUrl(current) || this.isBlankTabContents(docWc)) {
+          void docWc.loadURL(downloadPageUrl(docInfo(finalState, item.getReceivedBytes())))
+        }
+      }
     })
+  }
+
+  /** Open a completed download with the OS default app and mark it seen (the
+   * status-bar badge counts unseen completions). Resolves false when the id is
+   * unknown, the download did not complete, or the file is gone. Backs both the
+   * open-download command and the download page's Open button. */
+  private async openDownloadById(id: string): Promise<boolean> {
+    const record = this.downloadTracker.get(id)
+    if (!record || record.state !== 'completed' || !existsSync(record.savePath)) return false
+    // shell.openPath resolves '' on success, or an error string.
+    const ok = (await shell.openPath(record.savePath)) === ''
+    if (ok) this.markDownloadSeen(id)
+    return ok
+  }
+
+  /** Reveal a download in the OS file manager and mark it seen. False when the
+   * id is unknown or the file is gone. Backs both the reveal-download command
+   * and the download page's Reveal button. */
+  private revealDownloadById(id: string): boolean {
+    const record = this.downloadTracker.get(id)
+    if (!record || !existsSync(record.savePath)) return false
+    shell.showItemInFolder(record.savePath)
+    this.markDownloadSeen(id)
+    return true
+  }
+
+  /** Acknowledge a download: drop it from the status bar's unseen badge and
+   * refresh the bar. */
+  private markDownloadSeen(id: string): void {
+    const record = this.downloadTracker.get(id)
+    if (!record || record.seen) return
+    this.downloadTracker.update(id, { seen: true }, Date.now())
+    this.broadcastToProfile(record.profileId, 'mira:downloads-changed')
+  }
+
+  /** True while `wc` has never rendered a document — a fresh tab whose only
+   * navigation was handed off as a download (Chromium aborts the load, so the
+   * committed URL stays empty). The home/error pages are data: URLs and count
+   * as content. */
+  private isBlankTabContents(wc: WebContents): boolean {
+    const url = wc.getURL()
+    return url === '' || url === 'about:blank'
+  }
+
+  /** The tab id owning `wc` across every open window, or null (a popup, a view
+   * already torn down…). */
+  private tabIdOfAnyWindow(wc: WebContents): string | null {
+    for (const pw of this.openById.values()) {
+      const id = this.tabIdForWebContents(pw, wc)
+      if (id) return id
+    }
+    return null
   }
 
   /** React to a geolocation permission request from the REAL macOS authorization
@@ -2168,10 +2268,28 @@ export class ProfileManager {
     // The home page is a blank tab: keep its stored url (and the address bar) empty
     // rather than mirroring the long data: URL Chromium actually loaded. Same idea
     // for the error page: the address bar keeps the URL that FAILED (so the user
-    // can edit and retry it), not the error page's data: URL.
+    // can edit and retry it), not the error page's data: URL — and for the download
+    // page: the address bar keeps the URL the file came from (downloadDocSource,
+    // set by trackDownload when it takes a blank tab over).
     let failedUrl = ''
     const mirrorUrl = (navUrl: string): string =>
-      isMiraHomeUrl(navUrl) ? '' : isMiraErrorUrl(navUrl) ? failedUrl : navUrl
+      isMiraHomeUrl(navUrl)
+        ? ''
+        : isMiraErrorUrl(navUrl)
+          ? failedUrl
+          : isMiraDownloadUrl(navUrl)
+            ? (this.downloadDocSource.get(tabId) ?? '')
+            : navUrl
+    // The download page's Open / Reveal buttons navigate to a private mira-dl:
+    // URL (an unprivileged page cannot call the command registry): intercept it,
+    // run the action, and let everything else navigate normally.
+    wc.on('will-navigate', (e, navUrl) => {
+      const action = parseDownloadActionUrl(navUrl)
+      if (!action) return
+      e.preventDefault()
+      if (action.action === 'open') void this.openDownloadById(action.id)
+      else this.revealDownloadById(action.id)
+    })
     wc.on('page-title-updated', (_e, title) => patch({ title }))
     wc.on('did-navigate', (_e, navUrl) => patch({ url: mirrorUrl(navUrl) }))
     // A failed main-frame load (DNS failure, refused connection, timeout…) would
@@ -2260,6 +2378,7 @@ export class ProfileManager {
     wc.on('destroyed', () => {
       const pw = owner()
       if (pw.htmlFullScreen?.tabId === tabId) this.leaveHtmlFullScreenIn(pw)
+      this.downloadDocSource.delete(tabId)
     })
   }
 
@@ -3528,10 +3647,30 @@ export class ProfileManager {
    * when not zoomed). */
   private updateShim(tabId: string, wc: WebContents): void {
     const magnified = isMagnified(this.magnifierStates.get(tabId) ?? NO_MAGNIFIER)
-    const js = setShimFlags(magnified, magnified)
+    const js = setShimFlags(magnified, magnified, this.appSettings.magnifierEnabled)
     if (this.shimFlags.get(tabId) === js) return
     this.shimFlags.set(tabId, js)
     evalInWebContents(wc, js).catch(() => {})
+  }
+
+  /** Arm / disarm the Cmd+scroll page-zoom gesture app-wide: persist the setting
+   * and push the new gate into every live page's shim. Disarming also snaps every
+   * magnified tab back to 100% — with the gesture gone, Cmd+wheel could no longer
+   * zoom back out and the tab would be stuck in look-only mode. */
+  private setMagnifierEnabled(enabled: boolean): void {
+    if (this.appSettings.magnifierEnabled === enabled) return
+    this.appSettings = withMagnifierEnabled(this.appSettings, enabled)
+    this.deps.persistSettings(this.appSettings)
+    for (const pw of this.openById.values()) {
+      for (const [tabId, view] of pw.views) {
+        if (!enabled && this.magnifierStates.has(tabId)) {
+          this.magnifierStates.delete(tabId)
+          this.applyMagnifier(pw, tabId)
+        } else {
+          this.updateShim(tabId, view.webContents)
+        }
+      }
+    }
   }
 
   /** The cursor's position inside a tab's view, in surface CSS px (the space the
@@ -4306,6 +4445,8 @@ export class ProfileManager {
         const view = target?.views.get(id)
         if (view) evalInWebContents(view.webContents, MAGNIFIER_FLASH).catch(() => {})
       },
+      getMagnifierEnabled: () => this.appSettings.magnifierEnabled,
+      setMagnifierEnabled: (enabled: boolean) => this.setMagnifierEnabled(enabled),
       focusApp: () => {
         // The user explicitly asked for Mira: drop any activation suppression tail
         // so the swizzle lets this app.focus through even right after a background
@@ -4628,18 +4769,8 @@ export class ProfileManager {
         item.cancel()
         return true
       },
-      openDownload: async (id) => {
-        const record = this.downloadTracker.get(id)
-        if (!record || record.state !== 'completed' || !existsSync(record.savePath)) return false
-        // shell.openPath resolves '' on success, or an error string.
-        return (await shell.openPath(record.savePath)) === ''
-      },
-      revealDownload: (id) => {
-        const record = this.downloadTracker.get(id)
-        if (!record || !existsSync(record.savePath)) return false
-        shell.showItemInFolder(record.savePath)
-        return true
-      },
+      openDownload: (id) => this.openDownloadById(id),
+      revealDownload: (id) => this.revealDownloadById(id),
       clearDownloads: () => this.downloadTracker.clearInactive(),
       getDownloadStats: () => this.downloadTracker.stats(),
       openFindBar: () => {

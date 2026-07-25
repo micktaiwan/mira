@@ -58,26 +58,36 @@ function setup(): {
       homeUrl: 'home',
       llm: { provider: 'claude-cli' },
       sidebarWidth: 240,
-      skillPaneWidth: 360
+      skillPaneWidth: 360,
+      magnifierEnabled: false
     }),
-    setLlmConfig: (llm) => ({ homeUrl: 'home', llm, sidebarWidth: 240, skillPaneWidth: 360 }),
+    setLlmConfig: (llm) => ({
+      homeUrl: 'home',
+      llm,
+      sidebarWidth: 240,
+      skillPaneWidth: 360,
+      magnifierEnabled: false
+    }),
     setSidebarWidth: (width) => ({
       homeUrl: 'home',
       llm: { provider: 'claude-cli' },
       sidebarWidth: width,
-      skillPaneWidth: 360
+      skillPaneWidth: 360,
+      magnifierEnabled: false
     }),
     setSkillPaneWidth: (width) => ({
       homeUrl: 'home',
       llm: { provider: 'claude-cli' },
       sidebarWidth: 240,
-      skillPaneWidth: width
+      skillPaneWidth: width,
+      magnifierEnabled: false
     }),
     setHomeUrl: (url: string) => ({
       homeUrl: url,
       llm: { provider: 'claude-cli' },
       sidebarWidth: 240,
-      skillPaneWidth: 360
+      skillPaneWidth: 360,
+      magnifierEnabled: false
     }),
     diskUsage: () => ({ root: '/fake', total: 0, reclaimable: 0, entries: [], profiles: [] }),
     cookieJarForProfile: () => ({ set: () => Promise.resolve() }),
@@ -106,7 +116,7 @@ function setup(): {
     openDownload: async () => false,
     revealDownload: () => false,
     clearDownloads: () => 0,
-    getDownloadStats: () => ({ active: 0, since: null, receivedBytes: 0, totalBytes: 0 }),
+    getDownloadStats: () => ({ active: 0, since: null, receivedBytes: 0, totalBytes: 0, unseen: 0 }),
     // Tab slice: minimal stubs, not exercised by these socket-dispatch tests.
     newTab: (url?: string) => ({
       id: 'tab',
@@ -201,6 +211,8 @@ function setup(): {
     setMagnifierState: () => {},
     applyMagnifierClip: () => {},
     magnifierFlash: () => {},
+    getMagnifierEnabled: () => false,
+    setMagnifierEnabled: () => {},
     // Permissions slice: minimal stubs, not exercised by these socket-dispatch tests.
     listPermissions: () => [],
     clearPermissions: () => ({ cleared: 0 }),

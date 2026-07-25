@@ -28,6 +28,11 @@ export interface DownloadRecord {
   totalBytes: number
   /** True while a progressing download is paused. */
   paused: boolean
+  /** True once Mickael acknowledged a completed download (opened/revealed it).
+   * Absent means not yet seen — the status bar shows a persistent badge until
+   * every completed download is seen, so an instant download (whose progress
+   * indicator never gets a visible frame) still leaves a durable trace. */
+  seen?: boolean
   /** Epoch ms the download started. */
   startedAt: number
   /** Epoch ms of the last state change. */
@@ -90,6 +95,9 @@ export interface DownloadStats {
   receivedBytes: number
   /** Summed total sizes across running downloads (0-total ones contribute 0). */
   totalBytes: number
+  /** Completed downloads not yet acknowledged (opened/revealed) — the persistent
+   * "✓ n" status-bar badge. */
+  unseen: number
 }
 
 /** In-memory registry of downloads. Pure: it holds plain records and never touches
@@ -144,7 +152,8 @@ export class DownloadTracker {
 
   /** Status-bar summary of the running downloads. */
   stats(): DownloadStats {
-    const active = [...this.records.values()].filter(isActive)
+    const all = [...this.records.values()]
+    const active = all.filter(isActive)
     const since = active.length ? Math.min(...active.map((r) => r.startedAt)) : null
     let receivedBytes = 0
     let totalBytes = 0
@@ -152,6 +161,7 @@ export class DownloadTracker {
       receivedBytes += r.receivedBytes
       totalBytes += r.totalBytes
     }
-    return { active: active.length, since, receivedBytes, totalBytes }
+    const unseen = all.filter((r) => r.state === 'completed' && !r.seen).length
+    return { active: active.length, since, receivedBytes, totalBytes, unseen }
   }
 }
