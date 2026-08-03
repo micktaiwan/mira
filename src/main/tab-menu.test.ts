@@ -75,6 +75,12 @@ describe('buildTabMenu', () => {
       command: 'move-tab-to-folder',
       params: { tabId: 'tab-9', folderId: 'f1' }
     })
+    // New Folder… creates it around this tab AND asks for its name field, so the
+    // default name is only a placeholder the user types over.
+    expect(submenu.items[2]).toMatchObject({
+      command: 'create-tab-folder',
+      params: { tabId: 'tab-9', edit: true }
+    })
   })
 
   it('omits the current folder from the move targets and adds Remove from Folder', () => {

@@ -3970,7 +3970,12 @@ export class ProfileManager {
   // --- Tab folders. Metadata lives in pw.folders; membership on each tab's
   // folderId. Every mutation re-pushes the strip + folders and persists. ---
 
-  private createTabFolderIn(pw: ProfileWindow, title: string, tabId?: string): { id: string } {
+  private createTabFolderIn(
+    pw: ProfileWindow,
+    title: string,
+    tabId?: string,
+    edit = false
+  ): { id: string } {
     const id = randomUUID()
     pw.folders = addFolderPure(pw.folders, { id, title, collapsed: false })
     if (tabId) {
@@ -3980,6 +3985,16 @@ export class ProfileManager {
     }
     this.pushTabs(pw)
     this.saveSession(pw)
+    // Interactive create ("New Folder…"): open the sidebar's name field on this
+    // folder. Focus must be handed to the chrome first — the active tab's
+    // WebContentsView is a separate webContents and holds the keyboard, so the
+    // auto-focused input would render selected but swallow no keystroke (same
+    // move as the palette and the address bar). Sent AFTER pushTabs so the
+    // chrome already knows the folder when it opens the editor.
+    if (edit && !pw.window.isDestroyed()) {
+      pw.window.webContents.focus()
+      pw.window.webContents.send('mira:edit-tab-folder', { id })
+    }
     return { id }
   }
 
@@ -5055,6 +5070,16 @@ export class ProfileManager {
           panelCollapsed: target.panelCollapsed
         }
       },
+      listTabsIn: (windowId) => {
+        const pw = this.openById.get(windowId)
+        if (!pw || pw.window.isDestroyed()) throw new Error(`unknown window: ${windowId}`)
+        return {
+          windowId: pw.windowId,
+          tabs: this.tabInfos(pw),
+          activeId: pw.state.activeId,
+          panelCollapsed: pw.panelCollapsed
+        }
+      },
       toggleTabsPanel: (collapsed) => {
         if (!target) throw new Error('no target window')
         return this.toggleTabsPanelIn(target, collapsed)
@@ -5068,9 +5093,9 @@ export class ProfileManager {
         this.showAudioMenuIn(target)
       },
       listTabFolders: () => ({ folders: target ? target.folders : [] }),
-      createTabFolder: (title, tabId) => {
+      createTabFolder: (title, tabId, edit) => {
         if (!target) throw new Error('no target window')
-        return this.createTabFolderIn(target, title, tabId)
+        return this.createTabFolderIn(target, title, tabId, edit)
       },
       renameTabFolder: (id, title) => {
         if (!target) throw new Error('no target window')

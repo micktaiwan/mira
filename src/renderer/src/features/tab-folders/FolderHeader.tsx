@@ -8,9 +8,9 @@ import { type KeyboardEvent } from 'react'
 // here — the Sidebar renders them below the header so they share its drag state.
 //
 // The rename input is CONTROLLED by the Sidebar (`editing` + onEditStart/End): the
-// Sidebar opens it on double-click AND automatically for a just-created folder, so
-// "New Folder" from the right-click menu lands straight in an editable, selected
-// name field (a native menu can't prompt for text).
+// Sidebar opens it on double-click AND on main's edit push, so "New Folder…" from
+// the right-click menu lands straight in an editable, selected, focused name field
+// (a native menu can't prompt for text).
 
 /** A tab folder as the sidebar sees it (mirrors TabFolder in the registry). */
 export interface TabFolder {

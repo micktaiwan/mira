@@ -69,6 +69,14 @@ const mira = {
     ipcRenderer.on('mira:focus-address-bar', listener)
     return () => ipcRenderer.removeListener('mira:focus-address-bar', listener)
   },
+  // Main asks the sidebar to open a tab folder's name field (a folder just created
+  // from the "New Folder…" menu): the field opens focused with its default name
+  // selected, so the folder can be named right away. Returns an unsubscribe function.
+  onEditTabFolder: (callback: (folderId: string) => void): (() => void) => {
+    const listener = (_event: unknown, payload: { id: string }): void => callback(payload.id)
+    ipcRenderer.on('mira:edit-tab-folder', listener)
+    return () => ipcRenderer.removeListener('mira:edit-tab-folder', listener)
+  },
   // Main asks the chrome to show + focus the find-in-page bar (Cmd+F, or the
   // find-open command from the palette / socket). Returns an unsubscribe function.
   onFindOpen: (callback: () => void): (() => void) => {

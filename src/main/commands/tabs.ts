@@ -127,6 +127,15 @@ export interface TabsContext {
   reopenClosedTab: () => { reopened: boolean; id: string | null; url?: string }
   /** The window's tabs, its active tab, and whether the panel is collapsed. */
   listTabs: () => { tabs: TabInfo[]; activeId: string | null; panelCollapsed: boolean }
+  /** Same, for ANY open window (ids from list-windows) rather than the one this
+   * context targets. Lets a socket caller enumerate every window's strip without
+   * having to focus each one first. Throws on an unknown id. */
+  listTabsIn: (windowId: string) => {
+    windowId: string
+    tabs: TabInfo[]
+    activeId: string | null
+    panelCollapsed: boolean
+  }
   /** Collapse or show the tab panel. With no argument, toggles. Returns the new
    * state. The web view is re-laid-out to reclaim (or yield) the panel's width. */
   toggleTabsPanel: (collapsed?: boolean) => { collapsed: boolean }
@@ -136,6 +145,12 @@ export interface NewTabParams {
   url?: string
   /** Open the tab hidden without switching to it or foregrounding the window. */
   background?: boolean
+}
+
+export interface ListTabsParams {
+  /** Window to list (from list-windows). Omitted = the window this context
+   * targets. */
+  windowId?: string
 }
 
 export interface TabIdParams {
@@ -411,7 +426,23 @@ export const tabsCommands: CommandMap<CommandContext> = {
     }
   },
 
-  'list-tabs': (ctx) => {
+  // With `windowId` (from list-windows), lists THAT window's strip; without, the
+  // window this context targets (the IPC sender, or the focused one for the
+  // socket). The param is validated rather than ignored: a silently dropped
+  // windowId returned the focused window's tabs under another window's id, which
+  // reads as a correct answer and is not one.
+  'list-tabs': (ctx, params) => {
+    const { windowId } = (params ?? {}) as Partial<ListTabsParams>
+    if (windowId !== undefined && (typeof windowId !== 'string' || windowId.trim() === '')) {
+      return { ok: false, error: '"windowId" must be a non-empty string' }
+    }
+    if (windowId !== undefined) {
+      try {
+        return { ok: true, ...ctx.listTabsIn(windowId.trim()) }
+      } catch (error) {
+        return fail(error)
+      }
+    }
     const { tabs, activeId, panelCollapsed } = ctx.listTabs()
     return { ok: true, tabs, activeId, panelCollapsed }
   },

@@ -170,6 +170,12 @@ function setup(): {
       activeId: 'tab',
       panelCollapsed: false
     }),
+    listTabsIn: (windowId: string) => ({
+      windowId,
+      tabs: [],
+      activeId: null,
+      panelCollapsed: false
+    }),
     toggleTabsPanel: (collapsed?: boolean) => ({ collapsed: collapsed ?? true }),
     showTabMenu: () => {},
     showAudioMenu: () => {},

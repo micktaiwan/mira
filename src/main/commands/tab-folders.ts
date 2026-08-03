@@ -16,8 +16,10 @@ export interface TabFoldersContext {
    * mount; later changes ride the mira:tabs-changed push. */
   listTabFolders: () => { folders: TabFolder[] }
   /** Create a folder (expanded). With `tabId`, immediately move that tab into it
-   * — the "New Folder" right-click flow. Returns the new folder id. */
-  createTabFolder: (title: string, tabId?: string) => { id: string }
+   * — the "New Folder" right-click flow. With `edit`, hand keyboard focus to the
+   * chrome and open the new folder's name field (selected) so it can be renamed
+   * right away. Returns the new folder id. */
+  createTabFolder: (title: string, tabId?: string, edit?: boolean) => { id: string }
   /** Relabel a folder. `renamed` is false on an unknown id. */
   renameTabFolder: (id: string, title: string) => { renamed: boolean }
   /** Remove a folder; its tabs become loose (they are NOT closed). `removed` is
@@ -36,6 +38,10 @@ export interface TabFoldersContext {
 export interface CreateTabFolderParams {
   title: string
   tabId?: string
+  /** Open the new folder's name field in the sidebar, focused with the default
+   * name selected — the interactive "New Folder…" flow, where `title` is only a
+   * placeholder. Off by default so a socket/MCP create never steals the keyboard. */
+  edit?: boolean
 }
 
 export interface RenameTabFolderParams {
@@ -70,15 +76,18 @@ export const tabFoldersCommands: CommandMap<CommandContext> = {
   },
 
   'create-tab-folder': (ctx, params) => {
-    const { title, tabId } = (params ?? {}) as Partial<CreateTabFolderParams>
+    const { title, tabId, edit } = (params ?? {}) as Partial<CreateTabFolderParams>
     if (typeof title !== 'string' || title.trim() === '') {
       return { ok: false, error: 'missing "title"' }
     }
     if (tabId !== undefined && (typeof tabId !== 'string' || tabId.trim() === '')) {
       return { ok: false, error: '"tabId" must be a non-empty string' }
     }
+    if (edit !== undefined && typeof edit !== 'boolean') {
+      return { ok: false, error: '"edit" must be a boolean' }
+    }
     try {
-      const { id } = ctx.createTabFolder(title.trim(), tabId?.trim())
+      const { id } = ctx.createTabFolder(title.trim(), tabId?.trim(), edit === true)
       return { ok: true, id }
     } catch (error) {
       return fail(error)

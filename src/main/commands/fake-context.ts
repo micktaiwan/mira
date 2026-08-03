@@ -9,7 +9,9 @@ import type {
   FindStopAction,
   ProfileInfo,
   ServiceWorkerLogEntry,
-  SkillPaneState
+  SkillPaneState,
+  TabInfo,
+  TabKind
 } from '.'
 import { buildTabMemoryReport, selectServiceWorkerLogs } from '.'
 import type { CookieSetDetails } from '../chrome-import'
@@ -101,6 +103,9 @@ export interface FakeContext {
   panelCollapsed: () => boolean
   /** Live view of the fake window's tab folders (metadata). */
   folders: () => TabFolders
+  /** Ids of the folders created with `edit: true` — the real ProfileManager
+   * focuses the chrome and pushes mira:edit-tab-folder for each of these. */
+  folderEdits: string[]
   /** Live view of the fake window's zen-mode flag (toggle-zen spy): true while the
    * toolbar, status bar, and both panels are hidden. */
   chromeHidden: () => boolean
@@ -233,6 +238,8 @@ export function makeContext(
   const magnifierFlashes: string[] = []
   // The Cmd+scroll gesture gate (app setting). Boxed so the ctx closures share it.
   const magnifierEnabled = { value: false }
+  // Folders whose name field was requested (create-tab-folder with edit: true).
+  const folderEdits: string[] = []
   // The fake Spaces world: three user desktops on one display (stable fake ids).
   const fakeSpaceIds = [101, 103, 107]
   let windowSpace = 0
@@ -356,6 +363,20 @@ export function makeContext(
       index
     })
   }
+  // The fake's tab strip as TabInfo[] (shared by listTabs and listTabsIn). The
+  // fake doesn't model lazy-load; every tab reports loaded. `kind` marks the
+  // settings tab so navigation's settings-branch is exercisable.
+  const tabInfos = (): TabInfo[] =>
+    state.tabs.tabs.map((t) => ({
+      ...t,
+      loaded: true,
+      kind: (t.id === state.settingsTabId ? 'settings' : 'web') as TabKind,
+      pinned: t.pinned === true,
+      keepAwake: t.keepAwake === true,
+      folderId: t.folderId ?? null,
+      audible: false,
+      loading: false
+    }))
   // Build the full AppSettings shape from the fake's state (kept in one place so
   // every settings getter/setter returns the same object).
   const appSettings = (): {
@@ -1097,21 +1118,21 @@ export function makeContext(
       return { id, keepAwake }
     },
     listTabs: () => ({
-      // The fake doesn't model lazy-load; every tab reports loaded. `kind` marks
-      // the settings tab so navigation's settings-branch is exercisable.
-      tabs: state.tabs.tabs.map((t) => ({
-        ...t,
-        loaded: true,
-        kind: (t.id === state.settingsTabId ? 'settings' : 'web') as 'web' | 'settings',
-        pinned: t.pinned === true,
-        keepAwake: t.keepAwake === true,
-        folderId: t.folderId ?? null,
-        audible: false,
-        loading: false
-      })),
+      tabs: tabInfos(),
       activeId: state.tabs.activeId,
       panelCollapsed: state.panelCollapsed
     }),
+    // The fake models a single window ('fake-window', see listWindows), so any
+    // other id is unknown — same error the manager raises.
+    listTabsIn: (windowId: string) => {
+      if (windowId !== 'fake-window') throw new Error(`unknown window: ${windowId}`)
+      return {
+        windowId,
+        tabs: tabInfos(),
+        activeId: state.tabs.activeId,
+        panelCollapsed: state.panelCollapsed
+      }
+    },
     toggleTabsPanel: (collapsed?: boolean) => {
       state.panelCollapsed = collapsed ?? !state.panelCollapsed
       return { collapsed: state.panelCollapsed }
@@ -1125,13 +1146,16 @@ export function makeContext(
     // Tab folders: real in-memory mutations so the tab-folders command tests can
     // observe them (mirrors ProfileManager, minus the native re-layout).
     listTabFolders: () => ({ folders: state.folders }),
-    createTabFolder: (title: string, tabId?: string) => {
+    createTabFolder: (title: string, tabId?: string, edit?: boolean) => {
       const id = `folder-${++state.folderSeq}`
       state.folders = addFolderPure(state.folders, { id, title, collapsed: false })
       if (tabId) {
         const tab = state.tabs.tabs.find((t) => t.id === tabId)
         if (tab && tab.pinned !== true) state.tabs = setTabFolderPure(state.tabs, tabId, id)
       }
+      // The real ProfileManager focuses the chrome and pushes mira:edit-tab-folder
+      // here; the fake just records the id so the command test can assert the ask.
+      if (edit) folderEdits.push(id)
       return { id }
     },
     renameTabFolder: (id: string, title: string) => {
@@ -1406,6 +1430,7 @@ export function makeContext(
     restoredLoadedIds: state.restoredLoadedIds,
     panelCollapsed: () => state.panelCollapsed,
     folders: () => state.folders,
+    folderEdits,
     chromeHidden: () => state.chromeHidden,
     zoomLevel: () => state.zoomLevel,
     paletteOpen: () => state.paletteOpen,

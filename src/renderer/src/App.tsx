@@ -84,6 +84,10 @@ function App(): React.JSX.Element {
   // Tab folders (metadata). Main owns them (per window, persisted); they ride the
   // tabs-changed push, and each tab carries its folderId so the sidebar groups.
   const [folders, setFolders] = useState<TabFolder[]>([])
+  // The tab folder whose name field is open in the sidebar (null = none). Held
+  // here, not in the Sidebar, so main's "edit this folder" push (an interactive
+  // folder create) can open it directly — the sidebar's double-click sets it too.
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null)
   // Zen (focus) mode (Cmd+Shift+H): main hides the toolbar + status bar + both
   // panels together. The flag rides the tabs-changed push (a chrome layout bit).
   const [chromeHidden, setChromeHidden] = useState(false)
@@ -364,6 +368,13 @@ function App(): React.JSX.Element {
     })
   }, [])
 
+  useEffect(() => {
+    // Main pushes this right after creating a folder from the "New Folder…" menu:
+    // open that folder's name field, focused with its default name selected. Main
+    // has already handed keyboard focus to the chrome, so the keystrokes land here.
+    return window.mira.onEditTabFolder((folderId) => setEditingFolderId(folderId))
+  }, [])
+
   const onSubmitUrl = (e: FormEvent): void => {
     e.preventDefault()
     // The chrome never navigates directly: it asks the command registry to.
@@ -605,6 +616,9 @@ function App(): React.JSX.Element {
             onMove={(id, toIndex) => window.mira.command('move-tab', { id, toIndex })}
             onContextMenu={(id) => window.mira.command('show-tab-menu', { tabId: id })}
             folders={folders}
+            editingFolderId={editingFolderId}
+            onEditFolderStart={(id) => setEditingFolderId(id)}
+            onEditFolderEnd={() => setEditingFolderId(null)}
             onToggleFolder={(id) => window.mira.command('toggle-tab-folder', { id })}
             onRenameFolder={(id, title) => window.mira.command('rename-tab-folder', { id, title })}
             onRemoveFolder={(id) => window.mira.command('remove-tab-folder', { id })}

@@ -543,6 +543,41 @@ describe('list-tabs', () => {
     expect(result.activeId).toBe('tab-1')
     expect(result.panelCollapsed).toBe(false)
   })
+
+  it('lists an explicit window and echoes its id', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    const result = registry.execute('list-tabs', { windowId: 'fake-window' }, ctx) as {
+      ok: true
+      windowId: string
+      tabs: unknown[]
+      activeId: string
+    }
+    expect(result.ok).toBe(true)
+    expect(result.windowId).toBe('fake-window')
+    expect(result.tabs).toHaveLength(1)
+    expect(result.activeId).toBe('tab-1')
+  })
+
+  // The bug this guards: an ignored windowId returned the FOCUSED window's tabs
+  // labelled as another window's — a wrong answer that looks right.
+  it('fails on an unknown window instead of falling back to the target one', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('list-tabs', { windowId: 'nope' }, ctx)).toEqual({
+      ok: false,
+      error: 'unknown window: nope'
+    })
+  })
+
+  it('rejects a non-string windowId', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('list-tabs', { windowId: 42 }, ctx)).toEqual({
+      ok: false,
+      error: '"windowId" must be a non-empty string'
+    })
+  })
 })
 
 describe('toggle-tabs-panel', () => {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { useState, type DragEvent } from 'react'
 import FolderHeader, { type TabFolder } from './features/tab-folders/FolderHeader'
 import { planDrop, sameDropZone, type DropPos } from './sidebar-drag'
 
@@ -277,6 +277,9 @@ function Sidebar({
   onMove,
   onContextMenu,
   folders,
+  editingFolderId,
+  onEditFolderStart,
+  onEditFolderEnd,
   onToggleFolder,
   onRenameFolder,
   onRemoveFolder,
@@ -294,6 +297,13 @@ function Sidebar({
   /** The window's tab folders (metadata, in order), rendered between the pinned
    * grid and the loose tab list. */
   folders: TabFolder[]
+  /** The folder whose name field is open (null = none). App-owned, because main
+   * asks for it on an interactive create ("New Folder…" can't prompt for text). */
+  editingFolderId: string | null
+  /** Open a folder's name field (double-click on its header). */
+  onEditFolderStart: (id: string) => void
+  /** Close the open name field (blur / Enter / Escape). */
+  onEditFolderEnd: () => void
   onToggleFolder: (id: string) => void
   onRenameFolder: (id: string, title: string) => void
   onRemoveFolder: (id: string) => void
@@ -311,30 +321,6 @@ function Sidebar({
   const [dropTarget, setDropTarget] = useState<{ id: string; pos: DropPos } | null>(null)
   // The folder header a dragged tab is hovering (drop = move that tab into it).
   const [dropFolderId, setDropFolderId] = useState<string | null>(null)
-  // The folder whose name field is open. Sidebar-owned so a JUST-CREATED folder
-  // opens straight into edit mode (a native "New Folder" menu item can't prompt).
-  const [editingFolderId, setEditingFolderId] = useState<string | null>(null)
-
-  // Auto-open the name field for a freshly created folder, so the native "New
-  // Folder" menu item lands in an editable, selected name field. We fire only when
-  // exactly ONE new folder appears AND it still carries the create flow's default
-  // name ("New folder") — so restored folders (real names, possibly arriving async
-  // after mount) never pop an editor. The first run just seeds the known ids.
-  const knownFolderIds = useRef<string[]>([])
-  const seeded = useRef(false)
-  useEffect(() => {
-    const ids = folders.map((f) => f.id)
-    if (!seeded.current) {
-      seeded.current = true
-      knownFolderIds.current = ids
-      return
-    }
-    const added = ids.filter((id) => !knownFolderIds.current.includes(id))
-    knownFolderIds.current = ids
-    if (added.length === 1 && folders.find((f) => f.id === added[0])?.title === 'New folder') {
-      setEditingFolderId(added[0])
-    }
-  }, [folders])
 
   // Pinned tabs form a contiguous block at the head of the strip (a tab-store
   // invariant). The rest split into folders (grouped by folderId, in the folders'
@@ -499,8 +485,8 @@ function Sidebar({
                 onToggle={() => onToggleFolder(f.id)}
                 onRename={(title) => onRenameFolder(f.id, title)}
                 onRemove={() => onRemoveFolder(f.id)}
-                onEditStart={() => setEditingFolderId(f.id)}
-                onEditEnd={() => setEditingFolderId(null)}
+                onEditStart={() => onEditFolderStart(f.id)}
+                onEditEnd={onEditFolderEnd}
                 onContextMenu={() => onFolderContextMenu(f.id)}
               />
               {!f.collapsed && <ul className="folder-tabs">{folderTabsOf(f.id).map(renderRow)}</ul>}

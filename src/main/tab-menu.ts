@@ -69,12 +69,13 @@ export function buildTabMenu(tab: TabMenuTarget, folders: TabMenuFolder[]): TabM
         label: f.title.trim() || 'Untitled',
         enabled: true
       }))
-    // Create a fresh folder (default name; renamed inline in the sidebar) with
-    // this tab already inside it.
+    // Create a fresh folder with this tab already inside it. `edit: true` opens
+    // its name field in the sidebar, focused with the default name selected, so
+    // the "…" of the label is honoured: the next keystrokes name the folder.
     moveItems.push({
       type: 'command',
       command: 'create-tab-folder',
-      params: { title: 'New folder', tabId: tab.id },
+      params: { title: 'New folder', tabId: tab.id, edit: true },
       label: 'New Folder…',
       enabled: true
     })

@@ -14,7 +14,8 @@
 // `export MIRA_TAB=<id>` line to pin a tab for the rest of the shell session.
 //
 // Usage:
-//   mira tabs                       list tabs (id / title / url), * = active, z = asleep, ♪ = playing sound
+//   mira tabs [--window <id>]       list tabs (id / title / url), * = active, z = asleep, ♪ = playing sound
+//                                   (--window: any window from `mira windows`, else the focused one)
 //   mira use --url <substr>         resolve a tab by url, print export MIRA_TAB=<id>
 //   mira use --active               pin the focused window's active tab
 //   mira use <id>                   pin an explicit id
@@ -138,8 +139,11 @@ async function main() {
       .catch((e) => die(e.message, 2))
 
   switch (command) {
-    case 'tabs':
-      return send({ command: 'list-tabs' }, { json, pretty: (r) => formatTabs(r.tabs, r.activeId) })
+    case 'tabs': {
+      const req = { command: 'list-tabs' }
+      if (typeof flags.window === 'string') req.params = { windowId: flags.window }
+      return send(req, { json, pretty: (r) => formatTabs(r.tabs, r.activeId) })
+    }
 
     case 'commands':
       return send(

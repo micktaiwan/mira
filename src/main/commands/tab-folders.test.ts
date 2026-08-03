@@ -31,12 +31,39 @@ describe('create-tab-folder', () => {
     expect(tabFolderId(ctx, 'tab-1')).toBe(res.id)
   })
 
+  it('asks for the new folder name field when edit is true', () => {
+    const { ctx, folderEdits } = makeContext()
+    const registry = createCommandRegistry()
+    const res = registry.execute(
+      'create-tab-folder',
+      { title: 'New folder', tabId: 'tab-1', edit: true },
+      ctx
+    ) as { ok: true; id: string }
+    expect(folderEdits).toEqual([res.id])
+  })
+
+  it('does not ask for the name field on a plain (programmatic) create', () => {
+    const { ctx, folderEdits } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('create-tab-folder', { title: 'Work' }, ctx)
+    expect(folderEdits).toEqual([])
+  })
+
   it('rejects a missing title', () => {
     const { ctx } = makeContext()
     const registry = createCommandRegistry()
     expect(registry.execute('create-tab-folder', {}, ctx)).toEqual({
       ok: false,
       error: 'missing "title"'
+    })
+  })
+
+  it('rejects a non-boolean edit', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('create-tab-folder', { title: 'Work', edit: 'yes' }, ctx)).toEqual({
+      ok: false,
+      error: '"edit" must be a boolean'
     })
   })
 })
