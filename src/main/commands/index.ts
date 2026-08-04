@@ -36,6 +36,7 @@ import { paletteCommands } from './palette'
 import { paneCommands } from './pane'
 import { permissionCommands } from './permissions'
 import { profileCommands } from './profiles'
+import { rootDomainCommands } from './root-domain'
 import { settingsCommands } from './settings'
 import { skillsCommands } from './skills'
 import { spacesCommands } from './spaces'
@@ -114,6 +115,7 @@ export { formatMemory, formatTabs } from './status'
 export type { PermissionContext } from './permissions'
 export type { PermissionGrant } from '../permission-store'
 export type { ProfileContext } from './profiles'
+export { rootDomainUrl } from './root-domain'
 export type { SettingsContext } from './settings'
 export type { SkillsContext } from './skills'
 export type { Skill, SkillSource, SkillSink, SkillMatch } from '../skills'
@@ -168,6 +170,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...paneCommands,
     ...permissionCommands,
     ...profileCommands,
+    ...rootDomainCommands,
     ...settingsCommands,
     ...skillsCommands,
     ...spacesCommands,

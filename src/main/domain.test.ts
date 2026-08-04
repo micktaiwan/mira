@@ -11,6 +11,14 @@ describe('registrableDomain', () => {
     expect(registrableDomain('a.b.c.example.com')).toBe('example.com')
   })
 
+  it('keeps three labels under a country public suffix', () => {
+    expect(registrableDomain('www.bbc.co.uk')).toBe('bbc.co.uk')
+    expect(registrableDomain('shop.example.com.au')).toBe('example.com.au')
+    expect(registrableDomain('www.example.or.jp')).toBe('example.or.jp')
+    // Only when there IS a third label to keep.
+    expect(registrableDomain('co.uk')).toBe('co.uk')
+  })
+
   it('lower-cases and strips a trailing dot', () => {
     expect(registrableDomain('WWW.Example.COM.')).toBe('example.com')
   })

@@ -29,6 +29,10 @@ export interface AppMenuHandlers {
    * back / forward commands so the Cmd+Arrow accelerators stay pilotable. */
   goBack: () => void
   goForward: () => void
+  /** Jump the active tab to its site root (Cmd+Shift+Up): subdomain, path and
+   * query dropped, so transverse.labanquepostale.fr/xo_/… → labanquepostale.fr.
+   * Wired to the go-root-domain command. */
+  goRootDomain: () => void
   /** Reload the focused window's active tab (Cmd+R). Wired to the reload command,
    * so the accelerator hits the same bus as the toolbar button and the socket. */
   reload: () => void
@@ -277,6 +281,15 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
       submenu: [
         { label: 'Back', accelerator: 'CmdOrCtrl+Left', click: () => handlers.goBack() },
         { label: 'Forward', accelerator: 'CmdOrCtrl+Right', click: () => handlers.goForward() },
+        // Up to the site root: strips subdomain + path + query in one press
+        // (transverse.labanquepostale.fr/xo_/… → labanquepostale.fr). Not a
+        // history step, but it lives here because it is the same "get me back
+        // out of this page" reflex as Back.
+        {
+          label: 'Go to Root Domain',
+          accelerator: 'CmdOrCtrl+Shift+Up',
+          click: () => handlers.goRootDomain()
+        },
         { type: 'separator' },
         { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => handlers.reload() },
         {

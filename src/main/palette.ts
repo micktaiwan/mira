@@ -98,6 +98,13 @@ const STATIC_COMMANDS: ReadonlyArray<Omit<PaletteEntry, 'group'>> = [
   },
   { id: 'cmd:back', title: 'Back', command: 'back', keywords: 'history previous', shortcut: '⌘←' },
   {
+    id: 'cmd:root-domain',
+    title: 'Go to Root Domain',
+    command: 'go-root-domain',
+    keywords: 'up home site strip subdomain www path parent',
+    shortcut: '⇧⌘↑'
+  },
+  {
     id: 'cmd:forward',
     title: 'Forward',
     command: 'forward',

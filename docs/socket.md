@@ -78,6 +78,7 @@ commands that can take an explicit target id should be preferred:
 | ------------------------------------- | ---------------- | ------------------------------------------------------ |
 | `navigate`                            | `url`, `newTab?` | load a (normalized) url; `newTab:true` opens a new tab |
 | `back` / `forward` / `reload`         | —                | session-history step / reload                          |
+| `go-root-domain`                      | —                | load the active tab's site root — subdomain (www included), path, query and hash dropped, scheme and port kept (`transverse.labanquepostale.fr/xo_/…` → `https://labanquepostale.fr/`). `{url, unchanged}`; `unchanged:true` = already there, nothing loaded. Cmd+Shift+Up |
 | `zoom-in` / `zoom-out` / `zoom-reset` | —                | active tab Chromium zoom (reflows the page)            |
 
 ### Default-browser handoff (last-focused profile, NOT the caller's active tab)
