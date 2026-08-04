@@ -52,6 +52,30 @@ export function mruStep(
   return { mru: { ids: mru.ids, cursor: next }, id: mru.ids[next] }
 }
 
+/** Where focus goes when the ACTIVE tab `closingId` is closed: the most recently
+ * viewed tab that is still alive, walking the history backwards from the closing
+ * tab's own entry. This is the LIFO "go back where I came from" the strip-neighbor
+ * rule can't give — closing a tab spawned from a pinned tab lands back on that
+ * pinned tab, not on whatever happens to sit next to it in the strip.
+ *
+ * `alive` is the set of tab ids surviving the close. Returns null when no entry
+ * qualifies (empty history, or every older entry is gone), leaving the caller on
+ * the neighbor rule. Must be called BEFORE the id is pruned from the history. */
+export function mruFocusAfterClose(
+  mru: MruHistory,
+  closingId: string,
+  alive: ReadonlySet<string>
+): string | null {
+  const at = mru.ids.indexOf(closingId)
+  // Not in the history (never recorded): treat the newest entry as the step back.
+  const start = at === -1 ? mru.ids.length - 1 : at - 1
+  for (let i = start; i >= 0; i--) {
+    const id = mru.ids[i]
+    if (id !== closingId && alive.has(id)) return id
+  }
+  return null
+}
+
 /** Drop `id` from the history entirely — the tab left the window (closed or torn
  * off), so it must never be a back/forward target again. The cursor is kept on
  * the same surviving entry: shifted left when the removed one sat at or before

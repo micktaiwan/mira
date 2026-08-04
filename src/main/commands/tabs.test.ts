@@ -659,6 +659,7 @@ describe('reopen-closed-tab', () => {
 })
 
 describe('recent-tab-back / recent-tab-forward (MRU focus history)', () => {
+  const makeContextWithRegistry = () => ({ ...makeContext(), registry: createCommandRegistry() })
   // Open three tabs then walk back to tab-1, viewing tabs in order 1→2→3→4.
   const withFourTabs = () => {
     const fake = makeContext()
@@ -722,5 +723,32 @@ describe('recent-tab-back / recent-tab-forward (MRU focus history)', () => {
     expect(mru().ids).not.toContain('tab-3')
     // Back from tab-4 (still active) now skips the closed tab-3 straight to tab-2.
     expect(registry.execute('recent-tab-back', {}, ctx)).toEqual({ ok: true, id: 'tab-2' })
+  })
+
+  it('closing the active tab returns to the last tab viewed, not the strip neighbor', () => {
+    const { ctx, tabState, registry } = makeContextWithRegistry()
+    registry.execute('new-tab', {}, ctx) // tab-2
+    registry.execute('new-tab', {}, ctx) // tab-3
+    registry.execute('select-tab', { id: 'tab-1' }, ctx) // back on tab-1 (the "pinned" one)
+    registry.execute('new-tab', {}, ctx) // tab-4, opened from tab-1
+    // Strip is [1,2,3,4]: the neighbor rule would land on tab-3.
+    registry.execute('close-tab', { id: 'tab-4' }, ctx)
+    expect(tabState().activeId).toBe('tab-1')
+  })
+
+  it('closing a non-active tab leaves focus where it is', () => {
+    const { ctx, tabState, registry } = withFourTabs()
+    registry.execute('close-tab', { id: 'tab-2' }, ctx)
+    expect(tabState().activeId).toBe('tab-4')
+  })
+
+  it('close-active-tab (Cmd+W) also returns to the last tab viewed', () => {
+    const { ctx, tabState, registry } = makeContextWithRegistry()
+    registry.execute('new-tab', {}, ctx) // tab-2
+    registry.execute('new-tab', {}, ctx) // tab-3
+    registry.execute('select-tab', { id: 'tab-1' }, ctx)
+    registry.execute('new-tab', {}, ctx) // tab-4
+    expect(registry.execute('close-active-tab', {}, ctx)).toMatchObject({ closed: true })
+    expect(tabState().activeId).toBe('tab-1')
   })
 })

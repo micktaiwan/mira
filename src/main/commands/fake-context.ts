@@ -36,7 +36,14 @@ import {
   adjacentTab,
   type TabState
 } from '../tab-store'
-import { type MruHistory, emptyMru, mruRecord, mruStep, mruPrune } from '../tab-mru'
+import {
+  type MruHistory,
+  emptyMru,
+  mruRecord,
+  mruStep,
+  mruPrune,
+  mruFocusAfterClose
+} from '../tab-mru'
 import {
   addFolder as addFolderPure,
   renameFolder as renameFolderPure,
@@ -348,6 +355,24 @@ export function makeContext(
   // recordMruVisit (idempotent on the current entry, dedup + drop-forward inside).
   const recordMru = (id: string | null): void => {
     if (id) state.mru = mruRecord(state.mru, id)
+  }
+  // Remove a tab from the strip like the manager's closeTabIn: when it was active,
+  // focus goes back to the last tab actually viewed (focus history) instead of the
+  // strip neighbor, the closed id leaves the history, and the tab that inherits
+  // focus is recorded as the current entry.
+  const closeAndFocus = (id: string): void => {
+    const wasActive = state.tabs.activeId === id
+    const back = wasActive
+      ? mruFocusAfterClose(
+          state.mru,
+          id,
+          new Set(state.tabs.tabs.filter((t) => t.id !== id).map((t) => t.id))
+        )
+      : null
+    state.tabs = closeTabPure(state.tabs, id)
+    if (back) state.tabs = selectTabPure(state.tabs, back)
+    state.mru = mruPrune(state.mru, id)
+    if (wasActive) recordMru(state.tabs.activeId)
   }
   // Snapshot a tab into the closed stack before it is removed (for reopen).
   const rememberClosed = (id: string): void => {
@@ -681,10 +706,7 @@ export function makeContext(
       // Close the tab immediately (the real impl wipes in the background).
       const tabId = active.id
       rememberClosed(tabId)
-      const wasActive = state.tabs.activeId === tabId
-      state.tabs = closeTabPure(state.tabs, tabId)
-      state.mru = mruPrune(state.mru, tabId)
-      if (wasActive) recordMru(state.tabs.activeId)
+      closeAndFocus(tabId)
       if (state.closeArmedId === tabId) state.closeArmedId = null
       return { domain, closed: true, tabId, done: Promise.resolve({ cookiesRemoved, historyRemoved }) }
     },
@@ -942,10 +964,7 @@ export function makeContext(
     closeTab: (id: string) => {
       if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
       rememberClosed(id)
-      const wasActive = state.tabs.activeId === id
-      state.tabs = closeTabPure(state.tabs, id)
-      state.mru = mruPrune(state.mru, id)
-      if (wasActive) recordMru(state.tabs.activeId)
+      closeAndFocus(id)
       if (state.closeArmedId === id) state.closeArmedId = null
       return { closed: true }
     },
@@ -959,10 +978,7 @@ export function makeContext(
       }
       state.closeArmedId = null
       rememberClosed(decision.id)
-      const wasActive = state.tabs.activeId === decision.id
-      state.tabs = closeTabPure(state.tabs, decision.id)
-      state.mru = mruPrune(state.mru, decision.id)
-      if (wasActive) recordMru(state.tabs.activeId)
+      closeAndFocus(decision.id)
       return { closed: true, id: decision.id }
     },
     duplicateActiveTab: () => {

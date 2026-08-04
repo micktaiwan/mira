@@ -112,7 +112,14 @@ import {
   nextLoadedTab,
   updateTab
 } from './tab-store'
-import { type MruHistory, emptyMru, mruRecord, mruStep, mruPrune } from './tab-mru'
+import {
+  type MruHistory,
+  emptyMru,
+  mruRecord,
+  mruStep,
+  mruPrune,
+  mruFocusAfterClose
+} from './tab-mru'
 import {
   type PersistedSessions,
   type PersistedWindow,
@@ -2679,10 +2686,22 @@ export class ProfileManager {
       if (pw.closedTabs.length > CLOSED_TAB_STACK_LIMIT) pw.closedTabs.shift()
     }
     const wasActive = pw.state.activeId === id
+    // Closing the active tab hands focus back to the last tab I actually looked at
+    // (the focus history), not to the strip neighbor: a link opened from a pinned
+    // tab must return to that pinned tab when closed. Computed before the id is
+    // pruned; falls back to closeTabPure's neighbor when the history has nothing.
+    const back = wasActive
+      ? mruFocusAfterClose(
+          pw.mru,
+          id,
+          new Set(pw.state.tabs.filter((t) => t.id !== id).map((t) => t.id))
+        )
+      : null
     pw.state = closeTabPure(pw.state, id)
-    // The closed tab must never be a back/forward target again. When it was active,
-    // the neighbor that inherits focus is recorded by the notifyExtensionsActiveTab
-    // call below (the normal active-change path), so the MRU cursor follows focus.
+    if (back) pw.state = selectTabPure(pw.state, back)
+    // The closed tab must never be a back/forward target again. The tab that
+    // inherits focus is recorded by the notifyExtensionsActiveTab call below (the
+    // normal active-change path), so the MRU cursor follows focus.
     pw.mru = mruPrune(pw.mru, id)
     // The tab id is gone for good now — free its captured console (a discard, by
     // contrast, keeps the id and re-wires on wake, so its history is preserved).

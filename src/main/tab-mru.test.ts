@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { emptyMru, mruRecord, mruStep, mruPrune } from './tab-mru'
+import { emptyMru, mruRecord, mruStep, mruPrune, mruFocusAfterClose } from './tab-mru'
 
 describe('tab-mru', () => {
   // Build a history by replaying a sequence of visits from empty.
@@ -75,5 +75,38 @@ describe('tab-mru', () => {
   it('pruning the last remaining tab empties the history', () => {
     const m = mruPrune(visit('a'), 'a')
     expect(m).toEqual({ ids: [], cursor: -1 })
+  })
+
+  describe('mruFocusAfterClose', () => {
+    const alive = (...ids: string[]): Set<string> => new Set(ids)
+
+    it('lands on the tab viewed just before the one being closed', () => {
+      // The pinned-tab case: viewed a, a link opened b, closing b returns to a.
+      const m = visit('a', 'b')
+      expect(mruFocusAfterClose(m, 'b', alive('a'))).toBe('a')
+    })
+
+    it('skips entries whose tab no longer exists', () => {
+      const m = visit('a', 'b', 'c')
+      // b was closed earlier without being pruned from the caller's alive set.
+      expect(mruFocusAfterClose(m, 'c', alive('a'))).toBe('a')
+    })
+
+    it('returns null when nothing older survives (caller keeps the neighbor)', () => {
+      const m = visit('a')
+      expect(mruFocusAfterClose(m, 'a', alive('b', 'c'))).toBeNull()
+      expect(mruFocusAfterClose(emptyMru(), 'a', alive('b'))).toBeNull()
+    })
+
+    it('ignores the forward branch: closing mid-history steps further back', () => {
+      let m = visit('a', 'b', 'c') // cursor on c
+      m = mruStep(m, -1).mru // stepped back to b; c is forward
+      expect(mruFocusAfterClose(m, 'b', alive('a', 'c'))).toBe('a')
+    })
+
+    it('falls back to the newest entry when the closing tab was never recorded', () => {
+      const m = visit('a', 'b')
+      expect(mruFocusAfterClose(m, 'z', alive('a', 'b'))).toBe('b')
+    })
   })
 })
