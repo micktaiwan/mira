@@ -101,6 +101,7 @@ import {
   addTab,
   addTabAtHead,
   addTabAfter,
+  addTabAfterInactive,
   addTabInactive,
   selectTab as selectTabPure,
   closeTab as closeTabPure,
@@ -1667,7 +1668,8 @@ export class ProfileManager {
       // the end of the strip — the child sits next to its parent. Carry the
       // opener's URL as httpReferrer, as Chrome does for a target=_blank open —
       // some outbound gateways (LinkedIn's safety/go) 404 without it.
-      this.newTabIn(host, decision.url, false, tab.id, false, decision.referrer)
+      // decision.background is the Cmd+click case: load it behind and stay put.
+      this.newTabIn(host, decision.url, false, tab.id, decision.background, decision.referrer)
       return { action: 'deny' }
     })
     // A blank tab (empty stored url) shows Mira's home page — the session summary —
@@ -1722,10 +1724,14 @@ export class ProfileManager {
     // plain new tab (Cmd+T, socket) lands at the head of the regular zone, so the
     // newest tab sits at the top of the list. When the opener is pinned, addTabAfter
     // also lands the child at the head of the regular zone (first in the list).
-    // background:true appends WITHOUT switching the active tab — the page loads
-    // hidden (layout only shows the active view) and the window stays where it is.
+    // background:true adds the tab WITHOUT switching the active tab — the page
+    // loads hidden (layout only shows the active view) and the window stays where
+    // it is. It still slots under its opener when there is one (Cmd+click on a
+    // link); only an opener-less background tab (socket new-tab) lands at the end.
     pw.state = background
-      ? addTabInactive(pw.state, tab)
+      ? afterId
+        ? addTabAfterInactive(pw.state, tab, afterId)
+        : addTabInactive(pw.state, tab)
       : afterId
         ? addTabAfter(pw.state, tab, afterId)
         : addTabAtHead(pw.state, tab)
@@ -4277,7 +4283,9 @@ export class ProfileManager {
     const target =
       this.findByWindow(parent) ?? this.findByWindow(BrowserWindow.getFocusedWindow())
     if (!target) return { action: 'allow' }
-    this.newTabIn(target, decision.url, true, undefined, false, decision.referrer)
+    // Same foreground/background rule as a page link: a Cmd+click inside an
+    // extension popup loads behind. focusChrome is ignored on the background path.
+    this.newTabIn(target, decision.url, true, undefined, decision.background, decision.referrer)
     return { action: 'deny' }
   }
 

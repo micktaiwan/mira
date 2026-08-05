@@ -90,6 +90,23 @@ export function addTabAfter(state: TabState, tab: TabMeta, afterId: string): Tab
   return { tabs, activeId: tab.id }
 }
 
+/** Insert a tab directly after `afterId` WITHOUT focusing it — the Cmd+click
+ * path. Same slotting as addTabAfter (the child sits right under its opener,
+ * clamped out of the pinned block), but the active tab is left alone so the user
+ * keeps reading the page they clicked from. A background tab appended at the end
+ * of the strip would be the worst of both worlds: it does not steal focus, yet it
+ * is nowhere near the link it came from. Falls back to a plain inactive append
+ * when `afterId` is unknown. */
+export function addTabAfterInactive(state: TabState, tab: TabMeta, afterId: string): TabState {
+  const from = state.tabs.findIndex((t) => t.id === afterId)
+  if (from === -1) return addTabInactive(state, tab)
+  const boundary = state.tabs.filter((t) => t.pinned === true).length
+  const insertAt = Math.max(from + 1, boundary)
+  const tabs = [...state.tabs]
+  tabs.splice(insertAt, 0, tab)
+  return { tabs, activeId: state.activeId ?? tab.id }
+}
+
 /** Focus an existing tab. No-op if the id is unknown. */
 export function selectTab(state: TabState, id: string): TabState {
   if (!state.tabs.some((t) => t.id === id)) return state

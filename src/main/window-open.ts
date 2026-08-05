@@ -12,6 +12,14 @@
 //     stay logged out" bug).
 //   - Everything else (target=_blank links, background-tab from Cmd+click) is a
 //     plain new page → open it as a Mira tab, as usual.
+//
+// The second distinction is foreground vs background, and it rides on the same
+// disposition. Chromium already encodes the standard browser convention there:
+// a plain target=_blank or a Cmd+Shift+click is 'foreground-tab' (jump to the new
+// tab), a Cmd+click is 'background-tab' (the tab loads behind, we stay on the
+// page we were reading). Modifiers themselves never reach this handler, so the
+// disposition is the only signal — which is why the convention has to be the
+// standard one: nothing here can tell a Cmd+Shift+click from a target=_blank.
 
 /** The subset of Electron's window-open details this decision needs. */
 export interface WindowOpenDetails {
@@ -29,8 +37,10 @@ export type WindowOpenDecision =
    * sets it on a target=_blank open; some outbound gateways need it (LinkedIn's
    * www.linkedin.com/safety/go?url=… 404s to its language page without a
    * linkedin.com Referer — verified 2026-07-16). Undefined when the opener had
-   * an empty referrer (e.g. a rel=noreferrer link). */
-  | { kind: 'tab'; url: string; referrer?: string }
+   * an empty referrer (e.g. a rel=noreferrer link).
+   * background: true for a Cmd+click ('background-tab') — the new tab is added
+   * without becoming active, so the user stays on the page they were reading. */
+  | { kind: 'tab'; url: string; referrer?: string; background: boolean }
 
 /** Decide how to handle a window.open: as a real popup window (opener preserved,
  * needed for OAuth/SSO) or as a Mira tab. */
@@ -39,7 +49,8 @@ export function decideWindowOpen(details: WindowOpenDetails): WindowOpenDecision
     return { kind: 'popup' }
   }
   const referrer = details.referrer?.url || undefined
-  return { kind: 'tab', url: details.url, referrer }
+  const background = details.disposition === 'background-tab'
+  return { kind: 'tab', url: details.url, referrer, background }
 }
 
 /** Same decision, but for a window.open coming from an EXTENSION page (a

@@ -24,20 +24,31 @@ describe('decideWindowOpen', () => {
   it('opens a foreground-tab (target=_blank) as a Mira tab', () => {
     expect(
       decideWindowOpen({ url: 'https://example.com/page', disposition: 'foreground-tab' })
-    ).toEqual({ kind: 'tab', url: 'https://example.com/page', referrer: undefined })
+    ).toEqual({
+      kind: 'tab',
+      url: 'https://example.com/page',
+      referrer: undefined,
+      background: false
+    })
   })
 
-  it('opens a background-tab (Cmd+click) as a Mira tab', () => {
+  it('opens a background-tab (Cmd+click) behind the current tab', () => {
     expect(
       decideWindowOpen({ url: 'https://example.com/bg', disposition: 'background-tab' })
-    ).toEqual({ kind: 'tab', url: 'https://example.com/bg', referrer: undefined })
+    ).toEqual({
+      kind: 'tab',
+      url: 'https://example.com/bg',
+      referrer: undefined,
+      background: true
+    })
   })
 
-  it('defaults an unknown/absent disposition to a tab', () => {
+  it('defaults an unknown/absent disposition to a foreground tab', () => {
     expect(decideWindowOpen({ url: 'https://example.com' })).toEqual({
       kind: 'tab',
       url: 'https://example.com',
-      referrer: undefined
+      referrer: undefined,
+      background: false
     })
   })
 
@@ -51,7 +62,8 @@ describe('decideWindowOpen', () => {
     ).toEqual({
       kind: 'tab',
       url: 'https://www.linkedin.com/safety/go/?url=https%3A%2F%2Fdeveloper.lemlist.com',
-      referrer: 'https://www.linkedin.com/feed/update/urn:li:activity:123/'
+      referrer: 'https://www.linkedin.com/feed/update/urn:li:activity:123/',
+      background: false
     })
   })
 
@@ -62,7 +74,12 @@ describe('decideWindowOpen', () => {
         disposition: 'foreground-tab',
         referrer: { url: '' }
       })
-    ).toEqual({ kind: 'tab', url: 'https://example.com/page', referrer: undefined })
+    ).toEqual({
+      kind: 'tab',
+      url: 'https://example.com/page',
+      referrer: undefined,
+      background: false
+    })
   })
 
   it('does not attach a referrer to a popup (OAuth/SSO stays a real window)', () => {
@@ -88,7 +105,22 @@ describe('decideExtensionWindowOpen', () => {
     ).toEqual({
       kind: 'tab',
       url: 'https://www.linkedin.com/search/results/people/?company=lemlist',
-      referrer: undefined
+      referrer: undefined,
+      background: false
+    })
+  })
+
+  it('opens a Cmd+click from an extension popup behind the current tab', () => {
+    expect(
+      decideExtensionWindowOpen(popupUrl, {
+        url: 'https://example.com/bg',
+        disposition: 'background-tab'
+      })
+    ).toEqual({
+      kind: 'tab',
+      url: 'https://example.com/bg',
+      referrer: undefined,
+      background: true
     })
   })
 

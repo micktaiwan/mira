@@ -5,6 +5,7 @@ import {
   addTabAtHead,
   addTabInactive,
   addTabAfter,
+  addTabAfterInactive,
   selectTab,
   updateTab,
   closeTab,
@@ -95,6 +96,42 @@ describe('addTabAfter', () => {
     let s = addTab(addTab(emptyTabState(), tab('a')), tab('b'))
     s = addTabAfter(s, tab('x'), 'nope')
     expect(s.tabs.map((t) => t.id)).toEqual(['a', 'b', 'x'])
+    expect(s.activeId).toBe('x')
+  })
+})
+
+describe('addTabAfterInactive', () => {
+  const pinned = (id: string): TabMeta => ({ ...tab(id), pinned: true })
+
+  it('inserts right after the opener WITHOUT stealing focus (Cmd+click)', () => {
+    let s = addTab(addTab(addTab(emptyTabState(), tab('a')), tab('b')), tab('c'))
+    s = selectTab(s, 'a')
+    s = addTabAfterInactive(s, tab('x'), 'a')
+    expect(s.tabs.map((t) => t.id)).toEqual(['a', 'x', 'b', 'c'])
+    expect(s.activeId).toBe('a')
+  })
+
+  it('places the child first in the regular zone when the opener is pinned', () => {
+    let s = emptyTabState()
+    s = addTab(s, pinned('p1'))
+    s = addTab(s, pinned('p2'))
+    s = addTab(s, tab('a'))
+    s = selectTab(s, 'p1')
+    s = addTabAfterInactive(s, tab('x'), 'p1')
+    expect(s.tabs.map((t) => t.id)).toEqual(['p1', 'p2', 'x', 'a'])
+    expect(s.activeId).toBe('p1')
+  })
+
+  it('appends without focusing when the opener id is unknown', () => {
+    let s = addTab(addTab(emptyTabState(), tab('a')), tab('b'))
+    s = selectTab(s, 'a')
+    s = addTabAfterInactive(s, tab('x'), 'nope')
+    expect(s.tabs.map((t) => t.id)).toEqual(['a', 'b', 'x'])
+    expect(s.activeId).toBe('a')
+  })
+
+  it('still activates the tab on an empty strip (something must be shown)', () => {
+    const s = addTabAfterInactive(emptyTabState(), tab('x'), 'nope')
     expect(s.activeId).toBe('x')
   })
 })
