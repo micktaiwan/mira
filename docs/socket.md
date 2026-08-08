@@ -303,6 +303,21 @@ A profile marked `encrypted` keeps its data (browsing trails + session partition
 | `list-permissions` / `clear-permissions`                                             | —      | web-permission grant log     |
 | `location-auth-status` / `request-location-authorization` / `open-location-settings` | —      | macOS location authorization |
 
+### Tracing (Chromium content trace, for stall forensics)
+
+| Command              | Params                             | Effect / result                                        |
+| -------------------- | ---------------------------------- | ------------------------------------------------------ |
+| `start-tracing`      | `categories?`, `bufferKb?`, `mode?` | begin recording; echoes the effective settings          |
+| `stop-tracing`       | —                                  | stop, flush and write the trace; returns `path`         |
+| `tracing-status`     | —                                  | `active`: whether a recording is running                |
+| `tracing-categories` | —                                  | the category groups the running build offers            |
+
+Records what every Mira process is doing — each inter-process message with its name and duration — into a JSON file readable in `chrome://tracing` or on ui.perfetto.dev. Built for stalls that no `sample` can explain: Mira has no synchronous IPC of its own, so a renderer stuck in `mach_msg` (the Google Photos locked-folder stall in `track.md`) can only be named by a trace.
+
+One recording at a time, for the whole app, not per profile — Chromium's rule. Starting twice or stopping with nothing running is an explicit error rather than a silent no-op. Traces land in `userData/traces/trace-<timestamp>.json`, next to `logs/`.
+
+Defaults suit an intermittent stall: `mode` is `record-continuously` (a ring buffer), so you start recording, browse until the stall happens — minutes if need be — then stop right after, and the episode is still in the buffer. `bufferKb` defaults to 100000 (100 MB) and `categories` to a set aimed at IPC and navigation (`toplevel`, `sequence_manager`, `ipc`, `mojom`, `disabled-by-default-ipc.flow`, `navigation`, `net`, `latency`, `electron`). Other modes: `record-until-full`, `record-as-much-as-possible`. Chromium silently ignores a category the build does not have, so check `tracing-categories` before pinning down a custom list.
+
 ### UI plumbing (used by the chrome; rarely useful externally)
 
 `list-palette`, `toggle-palette {open?, mode?, query?}`, `show-tooltip {text, anchor}`,

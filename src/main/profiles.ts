@@ -21,6 +21,7 @@ import {
   MenuItem,
   WebContentsView,
   clipboard,
+  contentTracing,
   screen,
   session,
   shell,
@@ -45,7 +46,14 @@ import type {
   RawFrame,
   RawTab
 } from './commands'
-import { closedSkillPane, formatMemory, nextZen, buildTabMemoryReport } from './commands'
+import {
+  closedSkillPane,
+  formatMemory,
+  nextZen,
+  buildTabMemoryReport,
+  TracingSession,
+  parseTraceParams
+} from './commands'
 import { PageConsoleStore, draftFromCdpMessage } from './page-console'
 import { MediaBuffer, captureStats, fileNameFor, mergeMedia } from './media-capture'
 import { MEDIA_COLLECT_SOURCE, nearestVideoPermalinkSource, parseDomMedia } from './media-collect'
@@ -552,6 +560,10 @@ export class ProfileManager {
   /** The camera/mic picker wiring (getUserMedia shim preload + native picker),
    * shared across profile sessions. Lazily created so `app` is ready first. */
   private mediaPicker: MediaDevicePickerService | null = null
+  /** Chromium content tracing. One recording at a time for the whole app (not
+   * per profile) — that is Chromium's rule, see tracing.ts. Lazily created so
+   * this.deps is set. */
+  private tracingSessionCache: TracingSession | null = null
   /** True once we've auto-opened the OS Location Services pane this run, so the
    * permission handler firing repeatedly doesn't reopen System Settings. */
   private locationSettingsOpened = false
@@ -4393,6 +4405,18 @@ export class ProfileManager {
     return this.makeContext(target)
   }
 
+  /** The app-wide tracing session, created on first use so `this.deps` is set.
+   * Traces land in `userData/traces/`, next to `logs/`. */
+  private get tracingSession(): TracingSession {
+    if (!this.tracingSessionCache) {
+      this.tracingSessionCache = new TracingSession(
+        contentTracing,
+        join(this.deps.userDataDir, 'traces')
+      )
+    }
+    return this.tracingSessionCache
+  }
+
   private makeContext(target: ProfileWindow | null): CommandContext {
     // The active tab's page webContents, for commands that only make sense on a
     // real page (find-in-page). Throws on the Settings tab / an empty window,
@@ -4553,6 +4577,10 @@ export class ProfileManager {
         this.applyPanelWidths()
         return { ...this.appSettings }
       },
+      startTracing: (params) => this.tracingSession.start(parseTraceParams(params)),
+      stopTracing: () => this.tracingSession.stop(new Date()),
+      tracingActive: () => this.tracingSession.isActive(),
+      tracingCategories: () => this.tracingSession.categories(),
       diskUsage: () =>
         computeDiskUsage(
           this.deps.userDataDir,

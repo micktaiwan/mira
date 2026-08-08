@@ -49,6 +49,7 @@ import { tabsCommands } from './tabs'
 import { themeCommands } from './themes'
 import { toastCommands } from './toast'
 import { tooltipCommands } from './tooltip'
+import { tracingCommands } from './tracing'
 import { vaultCommands } from './vault'
 import { zenCommands } from './zen'
 
@@ -140,6 +141,22 @@ export type { ThemeContext } from './themes'
 export type { Theme, ThemeInput } from '../theme-store'
 export type { ToastContext } from './toast'
 export type { TooltipContext } from './tooltip'
+export type { TracingContext } from './tracing'
+export type {
+  TraceStart,
+  TraceConfigLike,
+  TraceRecordingMode,
+  ContentTracingLike
+} from '../tracing'
+export {
+  TracingSession,
+  parseTraceParams,
+  traceConfig,
+  traceFileName,
+  DEFAULT_TRACE_CATEGORIES,
+  DEFAULT_TRACE_BUFFER_KB,
+  TRACE_RECORDING_MODES
+} from '../tracing'
 export type { VaultContext } from './vault'
 export type { ZenContext, ZenState, PanelSnapshot } from './zen'
 export { nextZen } from './zen'
@@ -183,6 +200,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...themeCommands,
     ...toastCommands,
     ...tooltipCommands,
+    ...tracingCommands,
     ...vaultCommands,
     ...zenCommands
   }

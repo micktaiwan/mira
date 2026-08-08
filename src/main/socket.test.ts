@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { handleRequestLine } from './socket'
-import { createCommandRegistry, type CommandContext } from './commands'
+import { createCommandRegistry, parseTraceParams, type CommandContext } from './commands'
 
 function setup(): {
   registry: ReturnType<typeof createCommandRegistry>
@@ -26,6 +26,10 @@ function setup(): {
       getZoomLevel: () => 0,
       setZoomLevel: () => {}
     }),
+    startTracing: async (params) => parseTraceParams(params),
+    stopTracing: async () => '/fake/traces/trace.json',
+    tracingActive: () => false,
+    tracingCategories: async () => [],
     getTargetProfile: () => ({ id: focused, label: focused }),
     openFindBar: () => {},
     findInPage: () => {},

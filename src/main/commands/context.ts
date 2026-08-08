@@ -40,6 +40,7 @@ import type { TabsContext } from './tabs'
 import type { ThemeContext } from './themes'
 import type { ToastContext } from './toast'
 import type { TooltipContext } from './tooltip'
+import type { TracingContext } from './tracing'
 import type { VaultContext } from './vault'
 import type { ZenContext } from './zen'
 
@@ -77,5 +78,6 @@ export type CommandContext = AppContext &
   ThemeContext &
   ToastContext &
   TooltipContext &
+  TracingContext &
   VaultContext &
   ZenContext

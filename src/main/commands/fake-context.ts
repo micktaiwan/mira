@@ -17,6 +17,7 @@ import { buildTabMemoryReport, selectServiceWorkerLogs } from '.'
 import type { CookieSetDetails } from '../chrome-import'
 import type { TooltipRect } from '../tooltip'
 import type { SkillSource } from '../skills'
+import { parseTraceParams, type TraceStart } from '../tracing'
 import type { LlmConfig, ChatMessage, PageContext } from '../llm'
 import { nextZen, type PanelSnapshot } from './zen'
 import { PageConsoleStore, type PageConsoleDraft } from '../page-console'
@@ -89,6 +90,9 @@ import { setProfileTheme as setProfileThemePure } from '../profile-store'
 
 export interface FakeContext {
   ctx: CommandContext
+  /** Live view of the fake content-tracing session: whether one is running, and
+   * the settings/paths of every start and stop so far. */
+  tracing: () => { active: boolean; starts: TraceStart[]; stops: string[] }
   loaded: string[]
   nav: string[]
   opened: string[]
@@ -301,6 +305,13 @@ export function makeContext(
     // deterministically without Date.now() (mirrors recordVisit in the manager).
     history: [] as HistoryEntry[],
     historyClock: 0,
+    // Content-tracing session state. The fake mirrors the real one-at-a-time
+    // rule (see ../tracing.ts) without touching Chromium or the filesystem.
+    tracing: {
+      active: false,
+      starts: [] as TraceStart[],
+      stops: [] as string[]
+    },
     // Web-permission grant log. Seeded so list/clear-permissions are exercisable
     // without a real page requesting a permission (grants happen natively, not via
     // the bus — see commands/permissions.ts).
@@ -633,6 +644,24 @@ export function makeContext(
         total: 0
       }))
     }),
+    startTracing: async (params: unknown) => {
+      // Parse first: an invalid param set is a caller error whether or not a
+      // recording is already running.
+      const start = parseTraceParams(params)
+      if (state.tracing.active) throw new Error('a trace recording is already running')
+      state.tracing.active = true
+      state.tracing.starts.push(start)
+      return start
+    },
+    stopTracing: async () => {
+      if (!state.tracing.active) throw new Error('no trace recording is running')
+      state.tracing.active = false
+      const path = '/fake/userData/traces/trace-2026-08-05T10-45-14.json'
+      state.tracing.stops.push(path)
+      return path
+    },
+    tracingActive: () => state.tracing.active,
+    tracingCategories: async () => ['toplevel', 'ipc', 'mojom'],
     cookieJarForProfile: (id: string) => {
       if (!state.profiles.some((p) => p.id === id)) throw new Error(`unknown profile: ${id}`)
       const jar = cookiesSet.get(id) ?? []
@@ -1434,6 +1463,7 @@ export function makeContext(
   }
   return {
     ctx,
+    tracing: () => state.tracing,
     loaded,
     nav,
     opened,
