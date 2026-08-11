@@ -37,6 +37,7 @@ import { paneCommands } from './pane'
 import { permissionCommands } from './permissions'
 import { profileCommands } from './profiles'
 import { rootDomainCommands } from './root-domain'
+import { screenshotCommands } from './screenshot'
 import { settingsCommands } from './settings'
 import { skillsCommands } from './skills'
 import { spacesCommands } from './spaces'
@@ -72,12 +73,7 @@ export { PageConsoleStore, draftFromCdpMessage, PAGE_LOG_LEVELS } from '../page-
 export type { CookieContext, CookieSink, ImportCookiesParams } from './cookies'
 export type { DevtoolsContext } from './devtools'
 export type { DiskContext } from './disk'
-export type {
-  DiskUsageReport,
-  DiskEntry,
-  ProfileDiskUsage,
-  ProfileForDisk
-} from '../disk-usage'
+export type { DiskUsageReport, DiskEntry, ProfileDiskUsage, ProfileForDisk } from '../disk-usage'
 export { formatDiskBytes } from '../disk-usage'
 export type { DownloadsContext, DownloadRecord, DownloadState, DownloadStats } from './downloads'
 export type {
@@ -117,6 +113,15 @@ export type { PermissionContext } from './permissions'
 export type { PermissionGrant } from '../permission-store'
 export type { ProfileContext } from './profiles'
 export { rootDomainUrl } from './root-domain'
+export type { ScreenshotContext } from './screenshot'
+export type { ScreenshotRequest, ScreenshotResult } from '../screenshot'
+export {
+  parseScreenshotParams,
+  resolveScreenshotPath,
+  screenshotFileName,
+  clampCaptureSize,
+  MAX_CAPTURE_PX
+} from '../screenshot'
 export type { SettingsContext } from './settings'
 export type { SkillsContext } from './skills'
 export type { Skill, SkillSource, SkillSink, SkillMatch } from '../skills'
@@ -188,6 +193,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...permissionCommands,
     ...profileCommands,
     ...rootDomainCommands,
+    ...screenshotCommands,
     ...settingsCommands,
     ...skillsCommands,
     ...spacesCommands,

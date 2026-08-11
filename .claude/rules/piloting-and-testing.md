@@ -21,6 +21,7 @@ $MIRA tabs                              # liste les onglets (id / titre / url), 
 eval "$($MIRA use --url localhost:8000)" # pin un onglet → export MIRA_TAB=<uuid> (session courante)
 $MIRA exec "document.title"             # exec-js sur l'onglet pinné (ou actif si rien de pinné)
 $MIRA reload                            # reload l'onglet pinné (via exec-js) ou actif
+$MIRA shot /tmp/page.png [--full]       # capture PNG de l'onglet pinné/actif (--full = document entier)
 $MIRA nav example.com                   # navigate l'onglet actif
 $MIRA commands                          # list-commands du build qui tourne
 $MIRA call select-tab --params '{"id":"<uuid>"}'  # passthrough générique vers N'IMPORTE quelle commande

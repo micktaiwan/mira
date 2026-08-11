@@ -18,6 +18,7 @@ import type { CookieSetDetails } from '../chrome-import'
 import type { TooltipRect } from '../tooltip'
 import type { SkillSource } from '../skills'
 import { parseTraceParams, type TraceStart } from '../tracing'
+import { resolveScreenshotPath, type ScreenshotRequest, type ScreenshotResult } from '../screenshot'
 import type { LlmConfig, ChatMessage, PageContext } from '../llm'
 import { nextZen, type PanelSnapshot } from './zen'
 import { PageConsoleStore, type PageConsoleDraft } from '../page-console'
@@ -160,6 +161,8 @@ export interface FakeContext {
   chatCalls: Array<{ messages: ChatMessage[]; page: PageContext }>
   /** One entry per capturePage call (📷 screenshot spy). */
   captureCalls: boolean[]
+  /** Every request passed to captureTabScreenshot (screenshot-command spy). */
+  screenshots: ScreenshotRequest[]
   /** Every skill-pane state pushed via showSkillPane / close (pane sink spy). */
   skillPaneStates: SkillPaneState[]
   /** Text written to the clipboard via writeClipboard (copy-chat spy). */
@@ -228,6 +231,8 @@ export function makeContext(
   const summarizeCalls: Array<{ prompt: string; text: string }> = []
   const chatCalls: Array<{ messages: ChatMessage[]; page: PageContext }> = []
   const captureCalls: boolean[] = []
+  /** Requests seen by captureTabScreenshot (the `screenshot` command). */
+  const screenshots: ScreenshotRequest[] = []
   const skillPaneStates: SkillPaneState[] = []
   const clipboardWrites: string[] = []
   const toasts: string[] = []
@@ -564,11 +569,7 @@ export function makeContext(
         throw new Error(`unknown theme: ${themeId}`)
       }
       // Reuse the pure model so the fake matches the manager's write.
-      const [next] = setProfileThemePure(
-        [{ id: profile.id, label: profile.label }],
-        id,
-        themeId
-      )
+      const [next] = setProfileThemePure([{ id: profile.id, label: profile.label }], id, themeId)
       if (next.themeId) profile.themeId = next.themeId
       else delete profile.themeId
       delete profile.color
@@ -737,7 +738,12 @@ export function makeContext(
       rememberClosed(tabId)
       closeAndFocus(tabId)
       if (state.closeArmedId === tabId) state.closeArmedId = null
-      return { domain, closed: true, tabId, done: Promise.resolve({ cookiesRemoved, historyRemoved }) }
+      return {
+        domain,
+        closed: true,
+        tabId,
+        done: Promise.resolve({ cookiesRemoved, historyRemoved })
+      }
     },
     forgetDomain: (domainInput: string, _profileId?: string) => {
       let host = domainInput.trim()
@@ -749,7 +755,8 @@ export function makeContext(
         return Promise.resolve({ domain: null, cookiesRemoved: 0, historyRemoved: 0 })
       }
       const domain = registrableDomain(host)
-      if (domain === '') return Promise.resolve({ domain: null, cookiesRemoved: 0, historyRemoved: 0 })
+      if (domain === '')
+        return Promise.resolve({ domain: null, cookiesRemoved: 0, historyRemoved: 0 })
       // Model the wipe on the focused profile's recorded jar (the fake jar is not
       // domain-indexed) + history for the domain + subdomains.
       const jar = state.focused ? (cookiesSet.get(state.focused) ?? []) : []
@@ -960,6 +967,24 @@ export function makeContext(
       // screenshot branch is testable without a real WebContentsView.
       captureCalls.push(true)
       return Promise.resolve('data:image/png;base64,ZmFrZQ==')
+    },
+    captureTabScreenshot: (req: ScreenshotRequest) => {
+      // Record the request and echo a deterministic result, resolving the path
+      // exactly as the manager does (fixed dir and clock) so the command's
+      // defaulting and its .png rules are exercised without touching disk.
+      screenshots.push(req)
+      const path = resolveScreenshotPath(req.path, {
+        dir: '/fake/userData/screenshots',
+        at: new Date('2026-08-11T09:30:00')
+      })
+      const shot: ScreenshotResult = {
+        path,
+        width: req.fullPage ? 1280 : 1280,
+        height: req.fullPage ? 4200 : 720,
+        bytes: 1234,
+        fullPage: req.fullPage
+      }
+      return Promise.resolve(shot)
     },
     summarize: (prompt: string, text: string) => {
       summarizeCalls.push({ prompt, text })
@@ -1498,6 +1523,7 @@ export function makeContext(
     summarizeCalls,
     chatCalls,
     captureCalls,
+    screenshots,
     skillPaneStates,
     clipboardWrites,
     toasts,

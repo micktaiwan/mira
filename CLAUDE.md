@@ -103,3 +103,17 @@ Détails packaging / build packagé : rule `.claude/rules/packaging.md`.
 - **Langue** : tout le code, les commentaires, les identifiants et les textes d'UI en **anglais**. Le français reste pour le dialogue.
 - **Rien d'intime ici** : repo de code perso classique, pas le repo `self`. Pas de chiffrement git-crypt, commits descriptifs normaux.
 - **Notes locales non versionnées** : le workflow perso et l'identité du profil de test vivent dans `CLAUDE.local.md`, chargé automatiquement par Claude Code à côté de ce fichier quand il est présent. Il est git-excluded : **absent d'un clone public, c'est normal — ne pas signaler son absence ni la traiter comme une erreur.**
+
+## Le skill `mira` est la surface publique de cet outil
+
+`~/.claude/skills/mira/SKILL.md` — le vrai fichier est
+`~/projects/perso/dotfiles/claude/skills/mira/SKILL.md`, le symlink n'est que la façon dont Claude
+Code le voit — décrit comment une session, depuis n'importe où sur ce Mac, se sert de mira : les
+commandes, les chemins, les ports, ce qu'elle n'a pas le droit de faire. Rien ne le synchronise
+automatiquement.
+
+**Un changement ici qui touche ce que le skill promet se répercute dans le skill dans la foulée** :
+une commande ou un flag, un chemin de socket ou de données, un port, une valeur par défaut, un nom
+de fichier de conf, une règle sur ce qu'une session peut toucher. Un skill périmé est pire que pas
+de skill du tout, parce qu'une session agit sur ce qu'il dit. `/skill-check mira` compare les deux
+et signale ce qui a divergé.

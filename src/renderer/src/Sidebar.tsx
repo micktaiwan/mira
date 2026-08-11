@@ -1,6 +1,15 @@
-import { useState, type DragEvent } from 'react'
+import { useRef, useState, type DragEvent } from 'react'
 import FolderHeader, { type TabFolder } from './features/tab-folders/FolderHeader'
-import { planDrop, sameDropZone, type DropPos } from './sidebar-drag'
+import {
+  nearestGridTarget,
+  nearestVerticalTarget,
+  planDrop,
+  planFolderDrop,
+  sameDropZone,
+  type DropPos,
+  type DropTarget,
+  type TabBox
+} from './sidebar-drag'
 
 // One tab as the chrome renders it. Structurally identical to the registry's
 // TabInfo and the pushed TabsState; kept local to the renderer (like App's and
@@ -74,6 +83,23 @@ function initialFor(title: string, url: string): string {
 
 function tabInitial(tab: TabInfo): string {
   return initialFor(tab.title, tab.url)
+}
+
+/** The on-screen boxes of the tabs a container holds, read from the DOM via the
+ * `data-tab-id` every row and pinned tile carries. Feeds the nearest-target
+ * resolvers so a drop in a gap / in the padding / under the last row still means
+ * something. */
+function tabBoxesIn(container: HTMLElement): TabBox[] {
+  return Array.from(container.querySelectorAll<HTMLElement>('[data-tab-id]')).map((el) => {
+    const r = el.getBoundingClientRect()
+    return {
+      id: el.dataset.tabId ?? '',
+      top: r.top,
+      bottom: r.bottom,
+      left: r.left,
+      right: r.right
+    }
+  })
 }
 
 /** A tab's favicon: the real image when the page provided one (the chrome's CSP
@@ -152,6 +178,10 @@ function PinnedSquare({
   return (
     <li
       className={className}
+      // Same marker as a tab row: it lets the grid resolve a pointer that falls in
+      // one of its gaps to the nearest tile. Main's cross-window hit-test only
+      // looks at `.tab-row[data-tab-id]`, so a pinned tile never matches it.
+      data-tab-id={tab.id}
       onClick={onSelect}
       onContextMenu={(e) => {
         e.preventDefault()
@@ -165,8 +195,7 @@ function PinnedSquare({
       }}
       onDragOver={(e: DragEvent<HTMLLIElement>) => {
         e.preventDefault()
-        // Let the tile's own before/after win over the grid's "drop at the end"
-        // fallback (the grid catches only the empty trailing space).
+        // Let the tile's own before/after win over the grid's gap resolution.
         e.stopPropagation()
         e.dataTransfer.dropEffect = 'move'
         const rect = e.currentTarget.getBoundingClientRect()
@@ -318,9 +347,13 @@ function Sidebar({
   onDetach: (tabId: string, screenX: number, screenY: number) => void
 }): React.JSX.Element {
   const [draggingId, setDraggingId] = useState<string | null>(null)
-  const [dropTarget, setDropTarget] = useState<{ id: string; pos: DropPos } | null>(null)
+  const [dropTarget, setDropTarget] = useState<DropTarget | null>(null)
   // The folder header a dragged tab is hovering (drop = move that tab into it).
   const [dropFolderId, setDropFolderId] = useState<string | null>(null)
+  // Whether a drop was handled inside this sidebar, read by dragEnd to tell a real
+  // tear-off from a drop it already committed. A ref, not state: dragEnd fires
+  // right after drop and React may not have flushed the reset by then.
+  const droppedInside = useRef(false)
 
   // Pinned tabs form a contiguous block at the head of the strip (a tab-store
   // invariant). The rest split into folders (grouped by folderId, in the folders'
@@ -340,49 +373,112 @@ function Sidebar({
     setDropFolderId(null)
   }
 
+  const beginDrag = (id: string): void => {
+    droppedInside.current = false
+    setDraggingId(id)
+  }
+
+  // The two drop intents are exclusive: aiming at a slot cancels the folder
+  // highlight, and aiming at a folder cancels the slot. Going through these two
+  // setters (never setDropTarget/setDropFolderId directly) is what keeps a single
+  // indicator on screen and a single meaning at drop time.
+  const aimAtSlot = (target: DropTarget | null): void => {
+    setDropTarget(target)
+    setDropFolderId(null)
+  }
+
+  const aimAtFolder = (folderId: string): void => {
+    setDropFolderId(folderId)
+    setDropTarget(null)
+  }
+
   // End of a tab drag. When the tab was dropped OUTSIDE this window's frame (another
   // screen, the desktop, or over another Mira window), tear it off — HTML5 drag can't
   // cross OS windows, so we detect it here from the drop's screen coordinates and hand
   // them to main, which opens a new window there or re-attaches onto the window under
-  // the point. A drop back INSIDE the window was already handled by onDrop (reorder /
-  // folder move), which cleared draggingId — so this only fires for true outside drops.
+  // the point.
   const handleDragEnd = (e: DragEvent<HTMLLIElement>): void => {
     const id = draggingId
+    // Chromium sometimes reports (0,0) on dragend: that is not a drop point, and
+    // reading it as one would tear the tab off to the top-left of the screen.
+    const knownPoint = e.screenX !== 0 || e.screenY !== 0
     const outside =
       e.screenX < window.screenX ||
       e.screenX > window.screenX + window.outerWidth ||
       e.screenY < window.screenY ||
       e.screenY > window.screenY + window.outerHeight
-    if (id && outside) onDetach(id, e.screenX, e.screenY)
+    // A drop the sidebar already committed is never a tear-off, whatever the
+    // coordinates say — droppedInside is set synchronously by the drop handlers.
+    if (id && knownPoint && outside && !droppedInside.current) onDetach(id, e.screenX, e.screenY)
     reset()
   }
 
-  const commitDrop = (): void => {
-    if (draggingId && dropTarget) {
-      // planDrop owns the drop math AND the pinned-boundary guard: a cross-boundary
-      // drop returns null (a clean no-op) instead of a store-clamped surprise.
-      const plan = planDrop(tabs, draggingId, dropTarget)
-      if (plan) {
-        if (plan.moveToFolder) onMoveTabToFolder(plan.moveToFolder.tabId, plan.moveToFolder.folderId)
-        if (plan.move) onMove(plan.move.id, plan.move.toIndex)
-      }
+  // Apply a resolved plan. Every drop path funnels through here so they all mark
+  // the drag as consumed (see droppedInside) and reset the same way.
+  const commitPlan = (plan: ReturnType<typeof planDrop>): void => {
+    if (plan) {
+      if (plan.moveToFolder) onMoveTabToFolder(plan.moveToFolder.tabId, plan.moveToFolder.folderId)
+      if (plan.move) onMove(plan.move.id, plan.move.toIndex)
     }
+    droppedInside.current = true
     reset()
   }
 
-  // Set the drop indicator on a hovered tab — but only when it shares the dragged
-  // tab's zone. A cross-boundary hover (pinned tile over a regular row, or the
-  // reverse) draws no line, since planDrop would no-op it anyway.
+  // Drop on a slot (a row/tile edge, or the nearest one when the pointer was in a
+  // gap). planDrop owns the math AND the pinned-boundary guard: a cross-boundary
+  // drop returns null (a clean no-op) instead of a store-clamped surprise.
+  const commitDrop = (): void => {
+    commitPlan(draggingId && dropTarget ? planDrop(tabs, draggingId, dropTarget) : null)
+  }
+
+  // Drop on a folder itself (header or its own surface): join it and append to its
+  // block — see planFolderDrop for why membership alone is not enough.
+  const commitFolderDrop = (folderId: string): void => {
+    commitPlan(draggingId ? planFolderDrop(tabs, draggingId, folderId) : null)
+  }
+
+  // Drop in the loose list with nothing to aim at (it is empty): the gesture still
+  // means "take this tab out of its folder".
+  const commitLooseDrop = (): void => {
+    if (dropTarget) return commitDrop()
+    const dragged = draggingId ? tabs.find((t) => t.id === draggingId) : null
+    if (dragged && !dragged.pinned && dragged.folderId !== null) onMoveTabToFolder(dragged.id, null)
+    droppedInside.current = true
+    reset()
+  }
+
+  // Aim at a hovered tab — but only when it shares the dragged tab's zone. A
+  // cross-boundary hover (pinned tile over a regular row, or the reverse) CLEARS
+  // the aim instead of leaving the previous slot armed: otherwise releasing here
+  // would commit a drop the cursor no longer points at, and could reorder the
+  // pinned block that planDrop's boundary guard exists to protect.
   const setDropOn = (target: TabInfo, pos: DropPos): void => {
     const dragged = draggingId ? tabs.find((t) => t.id === draggingId) : null
-    if (dragged && !sameDropZone(dragged, target)) return
-    setDropTarget({ id: target.id, pos })
+    if (dragged && !sameDropZone(dragged, target)) return aimAtSlot(null)
+    aimAtSlot({ id: target.id, pos })
   }
 
-  // Drop a dragged tab onto a folder header → move it into that folder.
-  const dropIntoFolder = (folderId: string): void => {
-    if (draggingId) onMoveTabToFolder(draggingId, folderId)
-    reset()
+  // The dragged tab, when it is a regular one — the guard every container-level
+  // handler shares (a pinned tile belongs to the grid and to nothing else).
+  const draggedRegularTab = (): TabInfo | null => {
+    const dragged = draggingId ? tabs.find((t) => t.id === draggingId) : null
+    return dragged && !dragged.pinned ? dragged : null
+  }
+
+  // dragOver on a list of rows (a folder's tabs, or the loose list): resolve the
+  // pointer to the nearest row edge, so the gaps, the padding and the empty space
+  // under the last row stop being dead zones. `catchAll` keeps the loose list a
+  // drop target even when it holds no row to aim at.
+  const listDragOver = (e: DragEvent<HTMLUListElement>, catchAll: boolean): void => {
+    if (!draggedRegularTab()) return
+    const target = nearestVerticalTarget(tabBoxesIn(e.currentTarget), e.clientY)
+    if (!target && !catchAll) return
+    e.preventDefault()
+    // Inside a folder, keep the wrapper's "drop into this folder" from taking over
+    // a pointer that clearly means a slot.
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'move'
+    aimAtSlot(target)
   }
 
   // One tab row, wired to the shared drag state — reused for loose tabs and for
@@ -396,7 +492,7 @@ function Sidebar({
       dropPos={dropTarget?.id === t.id && t.id !== draggingId ? dropTarget.pos : null}
       onSelect={() => onSelect(t.id)}
       onContextMenu={() => onContextMenu(t.id)}
-      onDragStart={() => setDraggingId(t.id)}
+      onDragStart={() => beginDrag(t.id)}
       onDragOver={(pos) => setDropOn(t, pos)}
       onDrop={commitDrop}
       onDragEnd={handleDragEnd}
@@ -411,18 +507,20 @@ function Sidebar({
       {pinnedTabs.length > 0 && (
         <ul
           className="pinned-grid"
-          // The grid's empty trailing space (past the last tile, common once it
-          // wraps) is a drop target too: dropping a pinned tile there sends it to
-          // the end of the pinned block. Tiles stopPropagation, so this fires only
-          // for the gap. Guarded to pinned drags — a regular tab can't land here.
+          // Everything of the grid that is not a tile — the 4px gaps between them,
+          // the trailing space of a wrapped line — is a drop surface too. Tiles
+          // stopPropagation, so this fires only for those, and it resolves the
+          // pointer to the nearest tile's edge (NOT "the end of the block", which
+          // used to send a tile last from a 4px slip of the mouse). Guarded to
+          // pinned drags — a regular tab can't land here.
           onDragOver={(e) => {
-            if (!draggingId) return
-            const dragged = tabs.find((t) => t.id === draggingId)
+            const dragged = draggingId ? tabs.find((t) => t.id === draggingId) : null
             if (!dragged?.pinned) return
+            const target = nearestGridTarget(tabBoxesIn(e.currentTarget), e.clientX, e.clientY)
+            if (!target) return
             e.preventDefault()
             e.dataTransfer.dropEffect = 'move'
-            const last = pinnedTabs[pinnedTabs.length - 1]
-            if (last) setDropTarget({ id: last.id, pos: 'after' })
+            aimAtSlot(target)
           }}
           onDrop={(e) => {
             e.preventDefault()
@@ -438,7 +536,7 @@ function Sidebar({
               dropPos={dropTarget?.id === t.id && t.id !== draggingId ? dropTarget.pos : null}
               onSelect={() => onSelect(t.id)}
               onContextMenu={() => onContextMenu(t.id)}
-              onDragStart={() => setDraggingId(t.id)}
+              onDragStart={() => beginDrag(t.id)}
               onDragOver={(pos) => setDropOn(t, pos)}
               onDrop={commitDrop}
               onDragEnd={handleDragEnd}
@@ -459,23 +557,21 @@ function Sidebar({
               key={f.id}
               // The accent color drives a left border on the folder (via CSS var).
               style={f.color ? ({ '--folder-color': f.color } as React.CSSProperties) : undefined}
-              // The whole folder (header + its tabs) is a drop target for a dragged
-              // tab: dropping anywhere on it moves the tab into this folder. Row
-              // drops inside still reorder/join via the row handlers (they stop
-              // propagation); this catches drops on the header and empty space.
+              // The folder header (and any of the wrapper's own surface) is a drop
+              // target: dropping there moves the tab into this folder, appended to
+              // its block. Its rows and its tab list handle their own drops and stop
+              // propagation, so this only catches what they leave.
               onDragOver={(e) => {
-                if (!draggingId) return
                 // A pinned tab never enters a folder (main no-ops it) — don't
                 // highlight the folder as a drop target for one.
-                if (tabs.find((t) => t.id === draggingId)?.pinned) return
+                if (!draggedRegularTab()) return
                 e.preventDefault()
                 e.dataTransfer.dropEffect = 'move'
-                setDropFolderId(f.id)
-                setDropTarget(null)
+                aimAtFolder(f.id)
               }}
               onDrop={(e) => {
                 e.preventDefault()
-                dropIntoFolder(f.id)
+                commitFolderDrop(f.id)
               }}
             >
               <FolderHeader
@@ -489,7 +585,23 @@ function Sidebar({
                 onEditEnd={onEditFolderEnd}
                 onContextMenu={() => onFolderContextMenu(f.id)}
               />
-              {!f.collapsed && <ul className="folder-tabs">{folderTabsOf(f.id).map(renderRow)}</ul>}
+              {!f.collapsed && (
+                <ul
+                  className="folder-tabs"
+                  // The list's own surface (its 10px left indent, the gaps between
+                  // rows) means a slot inside the folder, not "join the folder" —
+                  // without this, dragging along a folder's left edge silently turned
+                  // a reorder into a membership change.
+                  onDragOver={(e) => listDragOver(e, false)}
+                  onDrop={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    commitDrop()
+                  }}
+                >
+                  {folderTabsOf(f.id).map(renderRow)}
+                </ul>
+              )}
             </div>
           ))}
         </div>
@@ -499,7 +611,20 @@ function Sidebar({
       {folders.length > 0 && looseTabs.length > 0 && (
         <div className="tab-folders-divider" role="separator" />
       )}
-      <ul className="tab-list">{looseTabs.map(renderRow)}</ul>
+      {/* The loose list stretches to the bottom of the sidebar (see .tab-list in
+          main.css), so the empty space under the last tab is part of it: dropping
+          there sends the tab to the end of the list instead of doing nothing. */}
+      <ul
+        className="tab-list"
+        onDragOver={(e) => listDragOver(e, true)}
+        onDrop={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          commitLooseDrop()
+        }}
+      >
+        {looseTabs.map(renderRow)}
+      </ul>
     </nav>
   )
 }

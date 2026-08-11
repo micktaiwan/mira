@@ -23,6 +23,8 @@
 //   mira press <key> [--mod a,b]    send a real keypress (e.g. e, Enter, ArrowDown)
 //   mira reload                     reload the pinned (via exec-js) or active tab
 //   mira console [--level e][--limit n][--since seq]  captured page console (console.* + 403/CORS/CSP/exceptions)
+//   mira shot [path] [--full]       screenshot the pinned/active tab to a PNG (default: userData/screenshots/)
+//                                   (--full: the whole document, not just the viewport)
 //   mira nav <url> [--new-tab|-n]   navigate the active tab in place (--new-tab: open a fresh tab instead)
 //   mira open <url>                 open <url> in a NEW tab, leaving the current tab untouched
 //   mira windows                    list open windows (id / profile / tabs), * = focused
@@ -36,6 +38,7 @@
 
 import { createConnection } from 'node:net'
 import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import {
@@ -47,6 +50,8 @@ import {
   buildPress,
   buildCall,
   buildConsole,
+  buildScreenshot,
+  formatScreenshot,
   formatTabs,
   formatConsole,
   formatWindows,
@@ -171,6 +176,19 @@ async function main() {
 
     case 'reload':
       return send(buildReload(tabId), { json })
+
+    case 'shot':
+    case 'screenshot': {
+      // Capture the pinned/active tab to a PNG. The path is resolved against
+      // THIS shell's cwd (Mira's own is unrelated and its daemon refuses a
+      // relative one); no path at all means userData/screenshots/shot-<ts>.png.
+      const built = buildScreenshot(positionals[0], tabId, {
+        full: flags.full === true,
+        cwd: process.cwd(),
+        home: homedir()
+      })
+      return send(built.request, { json, pretty: (r) => formatScreenshot(r) })
+    }
 
     case 'console':
       // Read the captured web-page console (console.* + browser lines: failed

@@ -40,7 +40,8 @@
 :root[data-wallpaper] .toolbar,
 :root[data-wallpaper] .sidebar,
 :root[data-wallpaper] .status-bar {
-  background-image: linear-gradient(
+  background-image:
+    linear-gradient(
       color-mix(in srgb, var(--surface) 20%, transparent),
       color-mix(in srgb, var(--surface) 20%, transparent)
     ),
@@ -409,6 +410,10 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* Grow into the sidebar's leftover height so the empty space under the last tab
+     belongs to the list and accepts a drop (grow only: never shrink below the
+     rows, the sidebar scrolls instead). */
+  flex: 1 0 auto;
 }
 
 .tab-row {

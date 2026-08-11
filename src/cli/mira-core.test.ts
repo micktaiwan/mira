@@ -8,6 +8,9 @@ import {
   buildPress,
   buildCall,
   buildConsole,
+  buildScreenshot,
+  absolutePath,
+  formatScreenshot,
   formatTabs,
   formatConsole,
   formatWindows,
@@ -141,7 +144,14 @@ describe('formatConsole', () => {
   })
   it('renders one line per entry with level, source, message and origin', () => {
     const out = formatConsole([
-      { seq: 1, level: 'error', source: 'network', message: '403 Forbidden', url: 'https://a/x', lineNumber: 2 }
+      {
+        seq: 1,
+        level: 'error',
+        source: 'network',
+        message: '403 Forbidden',
+        url: 'https://a/x',
+        lineNumber: 2
+      }
     ])
     expect(out).toContain('ERROR')
     expect(out).toContain('[network]')
@@ -245,7 +255,10 @@ describe('buildPress', () => {
 
   it('includes tabId and modifiers when given', () => {
     expect(buildPress('a', 't1', ['meta', 'shift'])).toEqual({
-      request: { command: 'press-key', params: { key: 'a', tabId: 't1', modifiers: ['meta', 'shift'] } }
+      request: {
+        command: 'press-key',
+        params: { key: 'a', tabId: 't1', modifiers: ['meta', 'shift'] }
+      }
     })
   })
 
@@ -287,5 +300,75 @@ describe('resolveCode', () => {
   })
   it('errors when nothing is given', () => {
     expect('error' in resolveCode(undefined, io)).toBe(true)
+  })
+})
+
+describe("absolutePath — resolved in the caller's shell, never in Mira", () => {
+  const env = { cwd: '/work/self/files/cgm', home: '/Users/mickaelfm' }
+
+  it('leaves an absolute path alone', () => {
+    expect(absolutePath('/tmp/cgm.png', env)).toBe('/tmp/cgm.png')
+  })
+
+  it('expands a leading ~ (a quoted one survives the shell)', () => {
+    expect(absolutePath('~/Downloads/cgm.png', env)).toBe('/Users/mickaelfm/Downloads/cgm.png')
+    expect(absolutePath('~', env)).toBe('/Users/mickaelfm')
+  })
+
+  it("hangs a relative path off the calling shell's cwd", () => {
+    expect(absolutePath('cgm.png', env)).toBe('/work/self/files/cgm/cgm.png')
+    expect(absolutePath('./cgm.png', env)).toBe('/work/self/files/cgm/cgm.png')
+  })
+})
+
+describe('buildScreenshot', () => {
+  const env = { cwd: '/work', home: '/Users/mickaelfm' }
+
+  it('sends no path at all when none was given (the daemon defaults it)', () => {
+    expect(buildScreenshot(undefined, null, env)).toEqual({
+      request: { command: 'screenshot', params: {} }
+    })
+  })
+
+  it('makes the path absolute and carries the pinned tab', () => {
+    expect(buildScreenshot('shot.png', 'tab-9', env).request.params).toEqual({
+      path: '/work/shot.png',
+      tabId: 'tab-9'
+    })
+  })
+
+  it('only sets fullPage when asked, as a real boolean', () => {
+    expect(buildScreenshot(undefined, null, { ...env, full: true }).request.params).toEqual({
+      fullPage: true
+    })
+    expect(buildScreenshot(undefined, null, env).request.params.fullPage).toBeUndefined()
+  })
+})
+
+describe('formatScreenshot', () => {
+  it('reads as one line: where, how big, what scope', () => {
+    expect(formatScreenshot({ path: '/tmp/a.png', width: 1280, height: 720, bytes: 51200 })).toBe(
+      '/tmp/a.png  1280×720  50 KB  (viewport)'
+    )
+  })
+
+  it('says out loud when the page was cut off', () => {
+    const line = formatScreenshot({
+      path: '/tmp/a.png',
+      width: 1280,
+      height: 16384,
+      bytes: 1024,
+      fullPage: true,
+      clamped: true
+    })
+    expect(line).toContain('full page')
+    expect(line).toContain('CUT OFF')
+  })
+})
+
+describe('TAB_BOUND includes screenshot', () => {
+  it('so `mira call screenshot` targets the pinned tab like the shorthand does', () => {
+    expect(TAB_BOUND.has('screenshot')).toBe(true)
+    expect(buildCall('screenshot', undefined, 'tab-3').request.params).toEqual({ tabId: 'tab-3' })
   })
 })

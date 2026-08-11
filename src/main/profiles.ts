@@ -12,8 +12,8 @@
 
 import { randomUUID } from 'crypto'
 import { existsSync } from 'node:fs'
-import { writeFile } from 'node:fs/promises'
-import { extname, join } from 'node:path'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname, extname, join } from 'node:path'
 import {
   app,
   BrowserWindow,
@@ -31,6 +31,12 @@ import {
   type WebContents
 } from 'electron'
 import { CHROME_PARTITION } from './chrome-session'
+import {
+  clampCaptureSize,
+  resolveScreenshotPath,
+  type ScreenshotRequest,
+  type ScreenshotResult
+} from './screenshot'
 import type { ExtensionsService } from './extensions'
 import type {
   BookmarkNode,
@@ -195,6 +201,7 @@ import {
 import { spacesLayout, windowSpaces, moveWindowToSpace } from './mac-spaces'
 import { locationAuthStatus, requestLocationAuthorization } from './mac-location'
 import { extractionScript, type SkillSource } from './skills'
+import { allowQuitNow, suppressQuitPrompt } from './quit'
 import {
   type AppSettings,
   withHomeUrl,
@@ -249,12 +256,7 @@ export function shouldQuitAfterWindowClose(opts: {
   lockingAll: boolean
   scriptClosing: boolean
 }): boolean {
-  return (
-    opts.remainingWindows === 0 &&
-    !opts.quitting &&
-    !opts.lockingAll &&
-    !opts.scriptClosing
-  )
+  return opts.remainingWindows === 0 && !opts.quitting && !opts.lockingAll && !opts.scriptClosing
 }
 
 /** The scheme+host of a URL (e.g. "https://www.google.com") for the permission
@@ -1372,7 +1374,26 @@ export class ProfileManager {
     // 'close' fires while the window is still alive — snapshot its final geometry
     // (position + size + maximized/fullscreen) here, since it can't be read once
     // destroyed. 'closed' then persists tabs and drops it from the open map.
-    window.on('close', () => {
+    window.on('close', (event) => {
+      // Closing the LAST window quits Mira (see below), so it asks the same
+      // question as Cmd+Q — and it asks FIRST, while the window is still alive:
+      // hold the close back, and let the gate re-fire app.quit() (which closes
+      // every window for real) only if the user confirms. Cancelling leaves the
+      // window exactly as it was. Decided before anything is torn down, hence
+      // ahead of saveSession and the webContents destruction below.
+      const scriptClosing = this.scriptClosingWindows.has(window)
+      const closeQuitsApp = shouldQuitAfterWindowClose({
+        remainingWindows: this.openById.size - 1,
+        quitting: this.quitting,
+        lockingAll: this.lockingAll,
+        scriptClosing
+      })
+      // Not consumed above: a prevented close must leave the script-close flag in
+      // place for the close that actually goes through.
+      if (closeQuitsApp && !allowQuitNow()) {
+        event.preventDefault()
+        return
+      }
       this.saveSession(profileWindow)
       // Destroy every tab's webContents here, while the window is still alive.
       // Tabs are WebContentsView layers we hold refs to in `pw.views`, NOT child
@@ -1388,19 +1409,10 @@ export class ProfileManager {
       // first: the 'closed' handler below then takes the quit branch (keeps the
       // open flag, skips its own auto-lock) and the graceful before-quit path
       // handles any unlocked vault. `openById` still holds this closing window
-      // here, so size 1 means it is the last one.
-      const scriptClosing = this.scriptClosingWindows.has(window)
+      // here, so size 1 means it is the last one. No confirmation to ask again:
+      // getting here means the gate already let this close through.
       this.scriptClosingWindows.delete(window)
-      if (
-        shouldQuitAfterWindowClose({
-          remainingWindows: this.openById.size - 1,
-          quitting: this.quitting,
-          lockingAll: this.lockingAll,
-          scriptClosing
-        })
-      ) {
-        app.quit()
-      }
+      if (closeQuitsApp) app.quit()
     })
     window.on('closed', () => {
       // Drop this window from the open map FIRST, so the "does the profile still
@@ -4292,8 +4304,7 @@ export class ProfileManager {
     // fall back to the focused profile window if that link is missing.
     const popupWin = BrowserWindow.fromWebContents(openerWc)
     const parent = popupWin?.getParentWindow() ?? null
-    const target =
-      this.findByWindow(parent) ?? this.findByWindow(BrowserWindow.getFocusedWindow())
+    const target = this.findByWindow(parent) ?? this.findByWindow(BrowserWindow.getFocusedWindow())
     if (!target) return { action: 'allow' }
     // Same foreground/background rule as a page link: a Cmd+click inside an
     // extension popup loads behind. focusChrome is ignored on the background path.
@@ -4417,6 +4428,51 @@ export class ProfileManager {
     return this.tracingSessionCache
   }
 
+  /** Capture a tab's pixels as PNG bytes.
+   *
+   * The viewport path is Electron's own `capturePage`. The full-page path has
+   * to go through CDP (`Page.captureScreenshot` with `captureBeyondViewport`):
+   * `capturePage` can only ever return what is composited, which is the
+   * viewport. A debugger may already be attached — stealth attaches one to every
+   * content view — so it is attached only when missing, and detached only when
+   * we were the ones who attached it. Never detaching someone else's debugger is
+   * the whole reason this is written by hand rather than attach/detach blindly.
+   *
+   * What full-page does NOT do: force lazy content to load. A page that renders
+   * on scroll comes out with its placeholders, which is what the browser itself
+   * would show. */
+  private async captureTabPng(
+    wc: WebContents,
+    fullPage: boolean
+  ): Promise<{ png: Buffer; width: number; height: number; clamped: boolean }> {
+    if (!fullPage) {
+      const image = await wc.capturePage()
+      if (image.isEmpty()) throw new Error('capture came back empty')
+      const size = image.getSize()
+      return { png: image.toPNG(), width: size.width, height: size.height, clamped: false }
+    }
+    const wasAttached = wc.debugger.isAttached()
+    if (!wasAttached) wc.debugger.attach('1.3')
+    try {
+      const metrics = (await wc.debugger.sendCommand('Page.getLayoutMetrics')) as {
+        cssContentSize?: { width: number; height: number }
+        contentSize?: { width: number; height: number }
+      }
+      const content = metrics.cssContentSize ?? metrics.contentSize
+      if (!content) throw new Error('page layout metrics unavailable')
+      const { width, height, clamped } = clampCaptureSize(content)
+      const reply = (await wc.debugger.sendCommand('Page.captureScreenshot', {
+        format: 'png',
+        captureBeyondViewport: true,
+        clip: { x: 0, y: 0, width, height, scale: 1 }
+      })) as { data?: string }
+      if (!reply.data) throw new Error('capture came back empty')
+      return { png: Buffer.from(reply.data, 'base64'), width, height, clamped }
+    } finally {
+      if (!wasAttached && wc.debugger.isAttached()) wc.debugger.detach()
+    }
+  }
+
   private makeContext(target: ProfileWindow | null): CommandContext {
     // The active tab's page webContents, for commands that only make sense on a
     // real page (find-in-page). Throws on the Settings tab / an empty window,
@@ -4534,7 +4590,12 @@ export class ProfileManager {
       // Explicit quit for scripts/agents: app.quit() runs the graceful shutdown
       // (before-quit flushes sessions and re-locks any unlocked vault). Closing
       // the last profile does NOT quit, so this is the only programmatic exit.
-      quitApp: () => app.quit(),
+      // It skips the quit confirmation (see quit.ts): a modal here would hang the
+      // app with the socket client already answered "ok".
+      quitApp: () => {
+        suppressQuitPrompt()
+        app.quit()
+      },
       // Default-browser handoff: openUrl does its OWN targeting (an explicit
       // profileId, else the last-focused profile), independent of this context's
       // target window — the command may arrive over the socket while a different
@@ -4997,6 +5058,28 @@ export class ProfileManager {
         const image = await view.webContents.capturePage()
         if (image.isEmpty()) return null
         return image.toDataURL()
+      },
+      captureTabScreenshot: async (req: ScreenshotRequest): Promise<ScreenshotResult> => {
+        // The `screenshot` command: same tab resolution as exec-js, then the
+        // bytes to a real file. Written with mkdir -p on the parent so a path
+        // into a directory that does not exist yet is a screenshot rather than
+        // an ENOENT the caller has to decode.
+        const wc = this.webContentsForTab(target, req.tabId)
+        const path = resolveScreenshotPath(req.path, {
+          dir: join(this.deps.userDataDir, 'screenshots'),
+          at: new Date()
+        })
+        const shot = await this.captureTabPng(wc, req.fullPage)
+        await mkdir(dirname(path), { recursive: true })
+        await writeFile(path, shot.png)
+        return {
+          path,
+          width: shot.width,
+          height: shot.height,
+          bytes: shot.png.byteLength,
+          fullPage: req.fullPage,
+          ...(shot.clamped ? { clamped: true } : {})
+        }
       },
       summarize: async (prompt: string, text: string) => {
         // Run the configured AI engine (subscription CLI / API / local extractive).

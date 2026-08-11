@@ -49,7 +49,12 @@ function setup(): {
     }),
     listProfiles: () => ({ profiles: [{ id: focused, label: focused, open: true }], focused }),
     listThemes: () => [],
-    createTheme: (input) => ({ id: 'x', name: input.name, background: input.background, text: input.text }),
+    createTheme: (input) => ({
+      id: 'x',
+      name: input.name,
+      background: input.background,
+      text: input.text
+    }),
     updateTheme: (id, patch) => ({ id, name: patch.name ?? id, background: '#000', text: '#fff' }),
     deleteTheme: (id: string) => ({ id }),
     setProfileTheme: (id: string, themeId: string | null) => ({
@@ -120,7 +125,13 @@ function setup(): {
     openDownload: async () => false,
     revealDownload: () => false,
     clearDownloads: () => 0,
-    getDownloadStats: () => ({ active: 0, since: null, receivedBytes: 0, totalBytes: 0, unseen: 0 }),
+    getDownloadStats: () => ({
+      active: 0,
+      since: null,
+      receivedBytes: 0,
+      totalBytes: 0,
+      unseen: 0
+    }),
     // Tab slice: minimal stubs, not exercised by these socket-dispatch tests.
     newTab: (url?: string) => ({
       id: 'tab',
@@ -242,6 +253,8 @@ function setup(): {
     activeUrl: () => null,
     extractText: () => Promise.resolve(''),
     capturePage: () => Promise.resolve(null),
+    captureTabScreenshot: () =>
+      Promise.resolve({ path: '/tmp/shot.png', width: 1, height: 1, bytes: 0, fullPage: false }),
     summarize: (_prompt: string, text: string) => Promise.resolve(text),
     chat: () => Promise.resolve(''),
     // Extensions slice: minimal stubs (loadExtension async, so the socket's

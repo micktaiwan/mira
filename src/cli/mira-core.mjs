@@ -20,7 +20,7 @@
 /** Flags that take no value (their presence alone means `true`). Every other
  * `--flag` consumes the next token as its value unless that token is itself a
  * flag. Keeping this explicit avoids `--json tabs` swallowing `tabs`. */
-export const BOOLEAN_FLAGS = new Set(['json', 'active', 'help', 'new-tab'])
+export const BOOLEAN_FLAGS = new Set(['json', 'active', 'help', 'new-tab', 'full'])
 
 /** Single-letter short flags, mapped to their long boolean name. `-n` == `--new-tab`.
  * A bare `-` is NOT a short flag: it stays a positional (e.g. `mira exec -` = stdin). */
@@ -34,7 +34,8 @@ export const TAB_BOUND = new Set([
   'collect-media',
   'download-media',
   'press-key',
-  'get-console'
+  'get-console',
+  'screenshot'
 ])
 
 /**
@@ -286,4 +287,60 @@ export function resolveCode(arg, io) {
     }
   }
   return { code: arg }
+}
+
+/**
+ * screenshot plan: capture the pinned/active tab into a PNG file.
+ *
+ * The path is made absolute HERE, in the caller's shell, because that is the
+ * only side that knows its working directory — Mira's own cwd is wherever the
+ * app was launched from, and the daemon refuses a relative path for exactly
+ * that reason. A leading `~/` is expanded too, so a quoted "~/shot.png" (which
+ * the shell leaves alone) still lands in the home directory.
+ *
+ * @param {string|undefined} pathArg
+ * @param {string|null} tabId
+ * @param {{ full?: boolean, cwd: string, home: string }} env
+ * @returns {{ request: {command:string, params:object} }}
+ */
+export function buildScreenshot(pathArg, tabId, env) {
+  const params = {}
+  if (typeof pathArg === 'string' && pathArg.trim() !== '') {
+    params.path = absolutePath(pathArg.trim(), env)
+  }
+  if (tabId) params.tabId = tabId
+  if (env.full === true) params.fullPage = true
+  return { request: { command: 'screenshot', params } }
+}
+
+/**
+ * Make one path absolute against a home and a working directory. Pure (no fs,
+ * no process): `~` and `~/x` expand to the home, an absolute path is untouched,
+ * anything else hangs off cwd. Kept naive on purpose — no symlink or `..`
+ * resolution, which is the kernel's job at write time.
+ *
+ * @param {string} p
+ * @param {{ cwd: string, home: string }} env
+ * @returns {string}
+ */
+export function absolutePath(p, { cwd, home }) {
+  if (p === '~') return home
+  if (p.startsWith('~/')) return `${home.replace(/\/$/, '')}/${p.slice(2)}`
+  if (p.startsWith('/')) return p
+  return `${cwd.replace(/\/$/, '')}/${p.replace(/^\.\//, '')}`
+}
+
+/**
+ * Human-readable rendering of a screenshot result: the path, the pixel size and
+ * the file size, with the truncation called out when the page was too tall to
+ * capture whole (silence there would pass a partial image off as the full one).
+ *
+ * @param {{path:string,width:number,height:number,bytes:number,fullPage?:boolean,clamped?:boolean}} res
+ * @returns {string}
+ */
+export function formatScreenshot(res) {
+  const kb = Math.round((res.bytes ?? 0) / 1024)
+  const scope = res.fullPage ? 'full page' : 'viewport'
+  const cut = res.clamped ? ' — CUT OFF: the page is taller than a capture can be' : ''
+  return `${res.path}  ${res.width}×${res.height}  ${kb} KB  (${scope})${cut}`
 }

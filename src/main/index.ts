@@ -1,7 +1,7 @@
 // MUST be the first import: its module-level side effect enables the extension
 // lib's `debug` logging before that lib binds its instances (see log.ts).
 import { initLogging } from './log'
-import { app, BrowserWindow, globalShortcut, ipcMain, session } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, session } from 'electron'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { readFileSync, writeFileSync, mkdirSync } from 'fs'
@@ -34,6 +34,13 @@ import { normalizePermissions, type PermissionGrant } from './permission-store'
 import { normalizeSettings, type AppSettings } from './settings-store'
 import { buildAppMenu } from './menu'
 import { installStealth } from './stealth'
+import {
+  createQuitGate,
+  installQuitGate,
+  allowQuitNow,
+  suppressQuitPrompt,
+  QUIT_CONFIRM
+} from './quit'
 import { installTouchIdWebAuthn } from './webauthn'
 import { aboutPanelOptions } from './about'
 
@@ -57,6 +64,41 @@ app.on('open-url', (event, url) => {
   if (manager) manager.openUrl(url)
   else pendingUrls.push(url)
 })
+
+// Cmd+Q always asks first — whatever the number of open windows or tabs (see
+// quit.ts for the why and for the paths that skip the question). Installed at
+// module scope so the signal handler at the bottom of this file can suppress it;
+// nothing here touches Electron until a quit is actually requested.
+installQuitGate(
+  createQuitGate({
+    prompt: async () => {
+      // Sheet-attached to the window the user is looking at when there is one;
+      // app-modal otherwise (quit with every window closed, on macOS).
+      const parent = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+      const options = {
+        type: 'question' as const,
+        buttons: [QUIT_CONFIRM.quitLabel, QUIT_CONFIRM.cancelLabel],
+        // Enter quits, Esc cancels: the guard is against a mistyped Cmd+Q, not
+        // against a deliberate one, so the fast path stays fast.
+        defaultId: 0,
+        cancelId: 1,
+        message: QUIT_CONFIRM.message,
+        detail: QUIT_CONFIRM.detail
+      }
+      try {
+        const { response } = parent
+          ? await dialog.showMessageBox(parent, options)
+          : await dialog.showMessageBox(options)
+        return response === 0
+      } catch (error) {
+        // A dialog we could not show must never turn into a silent quit.
+        console.error('[mira] quit confirmation failed', error)
+        return false
+      }
+    },
+    quit: () => app.quit()
+  })
+)
 
 // Default-handler handoff for LOCAL FILES: `open foo.html` / a double-click on a
 // file whose type Mira handles (CFBundleDocumentTypes, electron-builder.yml)
@@ -152,6 +194,8 @@ app.whenReady().then(async () => {
     const forwarded = await forwardToRunningInstance(SOCKET_PATH, pendingUrls)
     if (forwarded) {
       pendingUrls.length = 0
+      // A boot that exists only to hand its urls over: no window, nobody to ask.
+      suppressQuitPrompt()
       app.quit()
       return
     }
@@ -582,6 +626,14 @@ app.whenReady().then(async () => {
   // (the second pass skips this block — nothing is unlocked anymore).
   let quitVaultLockStarted = false
   app.on('before-quit', (event) => {
+    // Ask before anything else: beginQuit() below flips state the rest of the app
+    // reads (windows closing during a quit keep their "was open" flag), and a
+    // cancelled quit must leave none of it behind. The gate re-fires app.quit()
+    // itself if the user confirms.
+    if (!allowQuitNow()) {
+      event.preventDefault()
+      return
+    }
     profiles.beginQuit()
     if (quitVaultLockStarted || !profiles.hasUnlockedVaults()) return
     quitVaultLockStarted = true
@@ -617,6 +669,8 @@ app.whenReady().then(async () => {
 // Quit when all windows are closed, except on macOS.
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    // The windows are already gone: the confirmation would have nothing to save.
+    suppressQuitPrompt()
     app.quit()
   }
 })
@@ -637,6 +691,9 @@ app.on('will-quit', () => {
 // app.quit() to run the graceful shutdown path (which logs and cleans up).
 const quitOnSignal = (signal: NodeJS.Signals): void => {
   console.log(`[mira] received ${signal}, quitting`)
+  // A Ctrl-C in the dev terminal must kill Mira, not raise a dialog nobody asked
+  // for in a window the user is not even looking at.
+  suppressQuitPrompt()
   app.quit()
 }
 process.on('SIGINT', quitOnSignal)

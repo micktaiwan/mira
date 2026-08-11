@@ -28,6 +28,7 @@ import type { PaletteContext } from './palette'
 import type { PaneContext } from './pane'
 import type { PermissionContext } from './permissions'
 import type { ProfileContext } from './profiles'
+import type { ScreenshotContext } from './screenshot'
 import type { SettingsContext } from './settings'
 import type { SkillsContext } from './skills'
 import type { SpacesContext } from './spaces'
@@ -66,6 +67,7 @@ export type CommandContext = AppContext &
   PaneContext &
   PermissionContext &
   ProfileContext &
+  ScreenshotContext &
   SettingsContext &
   SkillsContext &
   SpacesContext &

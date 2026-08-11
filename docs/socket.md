@@ -161,6 +161,28 @@ Disabling snaps any magnified tab back to 100%.
 | `toggle-devtools` | —                             | open/close the inspector on the active tab                                                                                                                                                                                                                                     |
 | `inspect-cookies` | —                             | open the inspector on the active tab (if needed, never closes it) and reveal the Cookies view of the Application panel; result `{ open }`. Errors: `no active web page`                                                                                                        |
 
+### Screenshots
+
+| Command      | Params                          | Effect / result |
+| ------------ | ------------------------------- | --------------- |
+| `screenshot` | `tabId?`, `path?`, `fullPage?`  | capture a tab as a PNG **file**. Result `{path, width, height, bytes, fullPage, clamped?}`. Without `tabId`, the active tab (same resolution and errors as `exec-js`). `path` must be **absolute** and end in `.png` (no extension → `.png` appended; another extension is refused rather than writing PNG bytes under a name that lies); omitted, the file lands in `userData/screenshots/shot-<timestamp>.png`. `fullPage` captures the whole document instead of the viewport. Errors: `unknown tab: <id>`, `tab is asleep: <id>`, `not a web page (Settings tab)`, `"path" must be absolute`, `capture came back empty` |
+
+From the CLI: `mira shot [path] [--full]` — the path is made absolute against **your** shell's
+cwd before it is sent (`~` expanded too), because Mira's own working directory is wherever the app
+was launched from. `mira shot` with no path prints where it wrote.
+
+Why a file and not a data URL: a full-page capture runs to megabytes, and the socket answers with
+one JSON line that every client reads whole. The in-memory path already exists for the AI pane
+(`run-prompt --withScreenshot`), which feeds a vision model rather than a person.
+
+The viewport path is Electron's `capturePage`. `fullPage` has to go through CDP
+(`Page.captureScreenshot` with `captureBeyondViewport`), since `capturePage` can only ever return
+what is composited. A debugger is attached only if none was — stealth attaches one to every content
+view — and detached only if we attached it. Two honest limits: a page taller than Chromium's
+maximum texture (16384 px) comes back cut off, and the result says `clamped: true` rather than
+passing a partial image off as the whole page; and nothing forces lazy content to load, so a page
+that renders on scroll is captured with its placeholders, exactly as the browser shows it.
+
 ### Media (collect & download page media)
 
 The media gallery (shortcut `Cmd+Alt+Shift+M`) collects every media on the page from **two sources**, merged with provenance: the live **DOM** (images, video/audio + sources, inline SVG, CSS backgrounds, canvas exported to PNG) and a **continuous per-tab network buffer** (every image / audio-video / font response that transited the wire, metadata only — no bodies held). Each item's `sources` lists `dom`, `network`, or both.
@@ -231,7 +253,7 @@ Every file a page triggers is saved straight to `~/Downloads` (no OS save dialog
 | `set-profile-theme`    | `id`, `themeId` | assign a chrome theme to a profile (see Themes below), or null/'' to clear (→ default theme)                                                                                                                          |
 | `set-profile-color`    | `id`, `color` | legacy tint: `#rrggbb` hex, or null/'' to clear. Superseded by themes; kept for back-compat                                                                                                                            |
 | `focus-app`            | —             | bring Mira to the foreground                                                                                                                                                                                           |
-| `quit`                 | —             | quit Mira entirely (graceful: flushes sessions, re-locks any unlocked vault). The only explicit programmatic exit — `close-profile` never quits, and a user closing the last window does                                |
+| `quit`                 | —             | quit Mira entirely (graceful: flushes sessions, re-locks any unlocked vault). Skips the Cmd+Q confirmation dialog — no modal, it just quits. The only explicit programmatic exit — `close-profile` never quits, and a user closing the last window does                                |
 | `list-spaces`          | —             | macOS virtual desktops per display, in Mission Control order, plus where the target window sits (`window: {displayId, spaceIndex}`, null when unknown). `displays: []` = no Spaces support (non-mac / addon not built) |
 | `move-window-to-space` | `spaceIndex`  | move the target window onto that desktop (0-based index on its display). `moved:false` = was already there. Persisted: the window reopens on that desktop next launch                                                  |
 
