@@ -65,9 +65,11 @@ import {
   type DnrRule
 } from './extension-capabilities'
 import { ExtensionCaptureService } from './extension-capture'
+import { ExternalMessagingService } from './external-messaging-service'
 import { ExtensionCommandsService } from './extension-commands'
 import { formatExtTabLog } from './extensions-tab-log'
 import { OffscreenHostService } from './extension-offscreen'
+import { WebRequestBridgeService } from './extension-web-request-service'
 import {
   type DisabledExtensions,
   type SideloadedExtensions,
@@ -155,6 +157,12 @@ export class ExtensionsService {
   private offscreenHost: OffscreenHostService | null = null
   /** chrome.desktopCapture / chrome.tabCapture backend — lazy, needs userData. */
   private captureService: ExtensionCaptureService | null = null
+  /** `externally_connectable`: the page-to-extension channel Electron has no
+   * implementation for (external-messaging.ts). Lazy — it needs userData. */
+  private externalMessaging: ExternalMessagingService | null = null
+  /** chrome.webRequest delivery to service workers: Electron ships the
+   * namespace but never fires it (extension-web-request.ts). Lazy — userData. */
+  private webRequestBridge: WebRequestBridgeService | null = null
   /** Extension keyboard shortcuts (manifest `commands`). */
   private readonly commandsService = new ExtensionCommandsService()
   /** WebContents whose navigations we already hooked for the [mira-ext-tab]
@@ -216,6 +224,17 @@ export class ExtensionsService {
       // `discarded` would be constant.
     })
     this.bySession.set(ses, instance)
+    // AFTER the lib, unlike every shim above: its service-worker preload
+    // rebuilds chrome.runtime from scratch and then freezes `chrome`, so an
+    // onMessageExternal installed earlier would be thrown away with the
+    // original object (external-messaging-shims.ts).
+    this.externalMessaging ??= new ExternalMessagingService(app.getPath('userData'))
+    this.externalMessaging.attach(ses)
+    // Also after the lib, and for the same reason: its worker preload rebuilds
+    // chrome.webRequest from the (never-fired) native one, so the real events
+    // have to be installed on top of that object, not before it.
+    this.webRequestBridge ??= new WebRequestBridgeService(app.getPath('userData'))
+    this.webRequestBridge.attach(ses)
     this.hookWorkerKeepalive(ses)
   }
 
@@ -657,17 +676,25 @@ export class ExtensionsService {
   /** Install the three webRequest listeners that enforce this session's DNR mods
    * and the extension-frame Permissions-Policy relaxing. Once per session (only
    * one listener per event is allowed); they read the live state, so a later
-   * applyDnr / extension load just updates it. */
+   * applyDnr / extension load just updates it.
+   *
+   * These three slots are also the only way an extension can ever see these
+   * events: Electron allows a single listener per event, so the webRequest
+   * bridge cannot register its own and is fed from here instead
+   * (extension-web-request.ts). Delivery is a side effect of the DNR pass, and
+   * never influences what this handler answers. */
   private installWebRequest(ses: Session): void {
     if (this.dnrHooked.has(ses)) return
     this.dnrHooked.add(ses)
     ses.webRequest.onBeforeRequest((details, cb) => {
+      this.webRequestBridge?.emit(ses, 'onBeforeRequest', details)
       const mods = this.matchingDnr(ses, details)
       if (isDnrBlocked(mods)) return cb({ cancel: true })
       const redirectURL = pickDnrRedirect(mods)
       cb(redirectURL ? { redirectURL } : {})
     })
     ses.webRequest.onBeforeSendHeaders((details, cb) => {
+      this.webRequestBridge?.emit(ses, 'onBeforeSendHeaders', details)
       cb({
         requestHeaders: applyRequestHeaderMods(
           details.requestHeaders,
@@ -676,6 +703,7 @@ export class ExtensionsService {
       })
     })
     ses.webRequest.onHeadersReceived((details, cb) => {
+      this.webRequestBridge?.emit(ses, 'onHeadersReceived', details)
       const headers = details.responseHeaders
       if (!headers) return cb({})
       let out = applyResponseHeaderMods(headers, this.matchingDnr(ses, details))

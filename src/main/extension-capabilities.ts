@@ -973,12 +973,12 @@ const KNOWN_LIMITATIONS: Record<string, { severity: GapSeverity; note: string }>
     note: 'DNR feedback/matched-rules API not provided'
   },
   webRequest: {
-    severity: 'degraded',
-    note: 'chrome.webRequest is unavailable inside MV3 service workers on Electron (electron#52265)'
+    severity: 'info',
+    note: 'Electron ships the namespace in MV3 service workers but never fires it — Mira delivers the events itself from session.webRequest (extension-web-request.ts)'
   },
   webRequestBlocking: {
     severity: 'degraded',
-    note: 'blocking webRequest unavailable in MV3 service workers on Electron'
+    note: "Mira's webRequest delivery is observational: a listener sees every request but cannot cancel or rewrite one (only onAuthRequired is answered)"
   },
   identity: {
     severity: 'breaking',
