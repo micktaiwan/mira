@@ -182,6 +182,7 @@ export class WebRequestBridgeService {
           return { ok: true }
         })
         worker.ipc.on(WEB_REQUEST_REPLY_CHANNEL, (_event, payload) => this.settleAuth(payload))
+        console.log(`[mira-webrequest] wired ${extensionId} worker version=${versionId}`)
       } catch (error) {
         console.warn(`[mira-webrequest] cannot wire the worker of ${extensionId}:`, error)
       }
@@ -202,6 +203,9 @@ export class WebRequestBridgeService {
     else byEvent.set(event, parsed)
     if (byEvent.size === 0) state.subscriptions.delete(extensionId)
     else state.subscriptions.set(extensionId, byEvent)
+    // Rare (one line per addListener/removeListener) and the only way to see,
+    // after the fact, that an extension asked for an event it never received.
+    console.log(`[mira-webrequest] ${extensionId} subscribes ${event} x${parsed.length}`)
   }
 
   /** Every live subscription of `ses` for one event, flattened. */
