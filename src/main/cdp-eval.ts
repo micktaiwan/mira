@@ -30,6 +30,27 @@ export interface RuntimeEvaluateReply {
   }
 }
 
+/** The page itself threw (or failed to parse): the transport worked, the code
+ * did not. Retrying the same code through another channel can only fail the same
+ * way, with a worse message — so `evalInWebContents` rethrows this as-is instead
+ * of falling back to executeJavaScript. */
+export class PageEvalError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'PageEvalError'
+  }
+}
+
+/** Every exec-js call shares ONE page context, so top-level `let`/`const` (and a
+ * `var` colliding with an earlier one) survive between calls and make the NEXT
+ * call fail to parse. The raw V8 message names the identifier but not the cause,
+ * which reads as a mystery failure — so we spell the cause out. */
+function explainRedeclaration(message: string): string {
+  return /has already been declared/.test(message)
+    ? `${message} — exec-js reuses the page's execution context, so top-level let/const from earlier calls are still bound. Wrap the script in an IIFE, or use fresh identifiers.`
+    : message
+}
+
 /** Turn a `Runtime.evaluate` reply (called with returnByValue:true) into the
  * evaluated value, or throw an Error carrying the page-side failure. Mirrors what
  * webContents.executeJavaScript resolves/rejects with, so callers are agnostic to
@@ -42,7 +63,7 @@ export function interpretRuntimeEvaluate(reply: RuntimeEvaluateReply): unknown {
       (typeof ex.exception?.value === 'string' ? ex.exception.value : undefined) ??
       ex.text ??
       'evaluation failed'
-    throw new Error(message)
+    throw new PageEvalError(explainRedeclaration(message))
   }
   const result = reply.result
   if (!result) return undefined
@@ -90,6 +111,11 @@ export async function evalInWebContents(wc: WebContents, code: string): Promise<
       )) as RuntimeEvaluateReply
       return interpretRuntimeEvaluate(reply)
     } catch (error) {
+      // The page threw: the transport did its job. Falling back would run the
+      // same code again and surface Electron's generic "Script failed to
+      // execute" instead of the real SyntaxError/TypeError — the exact reason
+      // this path was undiagnosable. Only transport failures fall through.
+      if (error instanceof PageEvalError) throw error
       console.warn(
         `[cdp-eval] Runtime.evaluate failed, falling back to executeJavaScript: ${error}`
       )

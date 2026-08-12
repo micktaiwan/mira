@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { interpretRuntimeEvaluate } from './cdp-eval'
+import { interpretRuntimeEvaluate, PageEvalError } from './cdp-eval'
 
 describe('interpretRuntimeEvaluate', () => {
   it('returns a serialized value (returnByValue)', () => {
@@ -49,5 +49,38 @@ describe('interpretRuntimeEvaluate', () => {
 
   it('returns undefined on an empty reply (no result, no exception)', () => {
     expect(interpretRuntimeEvaluate({})).toBe(undefined)
+  })
+
+  it('tags a page-side failure as PageEvalError so the caller skips the fallback', () => {
+    expect(() =>
+      interpretRuntimeEvaluate({
+        exceptionDetails: { text: 'Uncaught', exception: { description: 'TypeError: x is null' } }
+      })
+    ).toThrow(PageEvalError)
+  })
+
+  it('explains that a redeclaration comes from the shared execution context', () => {
+    let thrown: unknown
+    try {
+      interpretRuntimeEvaluate({
+        exceptionDetails: {
+          text: 'Uncaught',
+          exception: { description: "SyntaxError: Identifier 'ta' has already been declared" }
+        }
+      })
+    } catch (error) {
+      thrown = error
+    }
+    const message = (thrown as Error).message
+    expect(message).toContain("Identifier 'ta' has already been declared")
+    expect(message).toContain('IIFE')
+  })
+
+  it('leaves an unrelated message untouched', () => {
+    expect(() =>
+      interpretRuntimeEvaluate({
+        exceptionDetails: { exception: { description: 'ReferenceError: y is not defined' } }
+      })
+    ).toThrow('ReferenceError: y is not defined')
   })
 })
