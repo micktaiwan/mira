@@ -4,7 +4,7 @@ import { guardFailureLine, guardedVerdict } from './web-request-guard'
 describe('guardedVerdict', () => {
   it('returns the listener verdict when nothing throws', () => {
     const log = vi.fn()
-    const verdict = guardedVerdict(
+    const verdict = guardedVerdict<{ cancel?: boolean }>(
       'onBeforeRequest',
       'https://x.test/a',
       {},
