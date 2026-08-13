@@ -34,6 +34,7 @@ import { normalizePermissions, type PermissionGrant } from './permission-store'
 import { normalizeSettings, type AppSettings } from './settings-store'
 import { buildAppMenu } from './menu'
 import { installStealth } from './stealth'
+import { isExpectedExit, processGoneLine } from './frame-trace'
 import {
   createQuitGate,
   installQuitGate,
@@ -236,6 +237,16 @@ app.whenReady().then(async () => {
 
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
+  })
+
+  // A CROSS-ORIGIN iframe runs in its own renderer process, which is not the tab's
+  // — so its death never reaches the tab's 'render-process-gone'. This app-level
+  // event is the only place it surfaces: without it, a payment or auth iframe whose
+  // process was killed just showed an empty box, with nothing written anywhere
+  // (frame-trace.ts). Clean exits are Chromium's normal churn and stay quiet.
+  app.on('child-process-gone', (_event, details) => {
+    if (isExpectedExit(details.reason)) return
+    console.error(processGoneLine('child process', details))
   })
 
   // Offer to become the system default browser (like Chrome/Firefox do on launch).

@@ -60,7 +60,8 @@ import {
   TracingSession,
   parseTraceParams
 } from './commands'
-import { PageConsoleStore, draftFromCdpMessage } from './page-console'
+import { PageConsoleStore, attachedSessionId, draftFromCdpMessage } from './page-console'
+import { isAbortedLoad, isExpectedExit, processGoneLine, subframeFailureLine } from './frame-trace'
 import { MediaBuffer, captureStats, fileNameFor, mergeMedia } from './media-capture'
 import { MEDIA_COLLECT_SOURCE, nearestVideoPermalinkSource, parseDomMedia } from './media-collect'
 import { ytdlpDownload } from './ytdlp'
@@ -2263,16 +2264,38 @@ export class ProfileManager {
    * or detach (that would fight stealth / exec-js on the shared transport). The
    * enables are idempotent and best-effort; re-asserted once after the first load
    * in case the attach hadn't landed when a freshly-created view's first sync
-   * load committed. */
+   * load committed.
+   *
+   * The tab's own target is only HALF the console: a cross-origin iframe runs in
+   * its own renderer process and is a separate CDP target, so nothing it logs
+   * reaches these two enables. `Target.setAutoAttach` closes that hole — each
+   * child target (frame or worker) announces itself with its own sessionId, and
+   * the same two domains are enabled on it, feeding the same per-tab buffer. See
+   * the OOPIF section of page-console.ts for why this matters (a payment iframe
+   * that fails to render logs where nobody was listening). `flatten: true` is what
+   * makes Electron deliver child messages on this same transport with a sessionId;
+   * `waitForDebuggerOnStart: false` keeps new frames running (a paused target
+   * would hang the page). Re-armed per child so nested cross-origin frames are
+   * reached too. */
   private wirePageConsole(tabId: string, wc: WebContents): void {
-    const enable = (): void => {
+    const enable = (sessionId?: string): void => {
       if (!wc.debugger.isAttached()) return
-      wc.debugger.sendCommand('Runtime.enable').catch(() => {})
-      wc.debugger.sendCommand('Log.enable').catch(() => {})
+      const send = (method: string, params: object = {}): void => {
+        wc.debugger.sendCommand(method, params, sessionId).catch(() => {})
+      }
+      send('Runtime.enable')
+      send('Log.enable')
+      send('Target.setAutoAttach', {
+        autoAttach: true,
+        waitForDebuggerOnStart: false,
+        flatten: true
+      })
     }
     enable()
-    wc.once('did-finish-load', enable)
+    wc.once('did-finish-load', () => enable())
     wc.debugger.on('message', (_event, method, params) => {
+      const childSession = attachedSessionId(method, params)
+      if (childSession) return enable(childSession)
       const draft = draftFromCdpMessage(method, params)
       if (draft) this.pageConsole.record(tabId, draft)
     })
@@ -2327,13 +2350,30 @@ export class ProfileManager {
       if (action.action === 'open') void this.openDownloadById(action.id)
       else this.revealDownloadById(action.id)
     })
+    // The tab's own renderer dying used to be invisible too: no handler existed
+    // anywhere in main. Chromium reuses and retires processes constantly, so only
+    // an abnormal end is logged (frame-trace.ts isExpectedExit).
+    wc.on('render-process-gone', (_e, details) => {
+      if (isExpectedExit(details.reason)) return
+      console.error(processGoneLine(`tab ${tabId}`, details))
+    })
     wc.on('page-title-updated', (_e, title) => patch({ title }))
     wc.on('did-navigate', (_e, navUrl) => patch({ url: mirrorUrl(navUrl) }))
     // A failed main-frame load (DNS failure, refused connection, timeout…) would
     // leave a blank void: show Mira's error page instead. ERR_ABORTED (-3) is not
     // a failure — it fires when a load is superseded (stop, quick re-navigation).
     wc.on('did-fail-load', (_e, errorCode, errorDescription, validatedURL, isMainFrame) => {
-      if (!isMainFrame || errorCode === -3) return
+      if (isAbortedLoad(errorCode)) return
+      // A subframe gets no error page — replacing an iframe's content is the
+      // page's call, not the browser's — but it no longer disappears in silence:
+      // trace it so an empty payment/auth widget is diagnosable (frame-trace.ts).
+      if (!isMainFrame) {
+        console.warn(
+          subframeFailureLine({ url: validatedURL, errorCode, errorDescription }),
+          `tab ${tabId}`
+        )
+        return
+      }
       failedUrl = validatedURL
       const errProfile = findById(this.profiles, owner().id)
       wc.loadURL(

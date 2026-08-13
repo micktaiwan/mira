@@ -70,6 +70,7 @@ import { ExtensionCommandsService } from './extension-commands'
 import { formatExtTabLog } from './extensions-tab-log'
 import { OffscreenHostService } from './extension-offscreen'
 import { WebRequestBridgeService } from './extension-web-request-service'
+import { guardedVerdict } from './web-request-guard'
 import {
   type DisabledExtensions,
   type SideloadedExtensions,
@@ -686,29 +687,50 @@ export class ExtensionsService {
   private installWebRequest(ses: Session): void {
     if (this.dnrHooked.has(ses)) return
     this.dnrHooked.add(ses)
+    // Each body RETURNS its verdict and the callback is called exactly once, from
+    // inside guardedVerdict: a throw anywhere in the bridge, the DNR match or the
+    // header rewrite then answers neutral instead of leaving Chromium waiting on
+    // that request forever (web-request-guard.ts).
     ses.webRequest.onBeforeRequest((details, cb) => {
-      this.webRequestBridge?.emit(ses, 'onBeforeRequest', details)
-      const mods = this.matchingDnr(ses, details)
-      if (isDnrBlocked(mods)) return cb({ cancel: true })
-      const redirectURL = pickDnrRedirect(mods)
-      cb(redirectURL ? { redirectURL } : {})
+      cb(
+        guardedVerdict('onBeforeRequest', details.url, {}, () => {
+          this.webRequestBridge?.emit(ses, 'onBeforeRequest', details)
+          const mods = this.matchingDnr(ses, details)
+          if (isDnrBlocked(mods)) return { cancel: true }
+          const redirectURL = pickDnrRedirect(mods)
+          return redirectURL ? { redirectURL } : {}
+        })
+      )
     })
     ses.webRequest.onBeforeSendHeaders((details, cb) => {
-      this.webRequestBridge?.emit(ses, 'onBeforeSendHeaders', details)
-      cb({
-        requestHeaders: applyRequestHeaderMods(
-          details.requestHeaders,
-          this.matchingDnr(ses, details)
+      cb(
+        guardedVerdict(
+          'onBeforeSendHeaders',
+          details.url,
+          { requestHeaders: details.requestHeaders },
+          () => {
+            this.webRequestBridge?.emit(ses, 'onBeforeSendHeaders', details)
+            return {
+              requestHeaders: applyRequestHeaderMods(
+                details.requestHeaders,
+                this.matchingDnr(ses, details)
+              )
+            }
+          }
         )
-      })
+      )
     })
     ses.webRequest.onHeadersReceived((details, cb) => {
-      this.webRequestBridge?.emit(ses, 'onHeadersReceived', details)
-      const headers = details.responseHeaders
-      if (!headers) return cb({})
-      let out = applyResponseHeaderMods(headers, this.matchingDnr(ses, details))
-      out = this.relaxDocumentPolicies(ses, details.resourceType, out)
-      cb({ responseHeaders: out })
+      cb(
+        guardedVerdict('onHeadersReceived', details.url, {}, () => {
+          this.webRequestBridge?.emit(ses, 'onHeadersReceived', details)
+          const headers = details.responseHeaders
+          if (!headers) return {}
+          let out = applyResponseHeaderMods(headers, this.matchingDnr(ses, details))
+          out = this.relaxDocumentPolicies(ses, details.resourceType, out)
+          return { responseHeaders: out }
+        })
+      )
     })
   }
 

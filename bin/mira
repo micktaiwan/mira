@@ -22,7 +22,7 @@
 //   mira exec <code|-|@file>        run JS in the pinned/active tab
 //   mira press <key> [--mod a,b]    send a real keypress (e.g. e, Enter, ArrowDown)
 //   mira reload                     reload the pinned (via exec-js) or active tab
-//   mira console [--level e][--limit n][--since seq]  captured page console (console.* + 403/CORS/CSP/exceptions)
+//   mira console [--level e][--limit n][--since seq]  captured page console, iframes included (console.* + 403/CORS/CSP/exceptions)
 //   mira shot [path] [--full]       screenshot the pinned/active tab to a PNG (default: userData/screenshots/)
 //                                   (--full: the whole document, not just the viewport)
 //   mira nav <url> [--new-tab|-n]   navigate the active tab in place (--new-tab: open a fresh tab instead)

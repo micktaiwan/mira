@@ -291,3 +291,49 @@ export class PageConsoleStore {
     if (buf) buf.length = 0
   }
 }
+
+// ── Out-of-process frames (OOPIFs) ──────────────────────────────────────────
+// A cross-origin iframe runs in its OWN renderer process, so Chromium gives it a
+// SEPARATE CDP target: `Runtime.enable` / `Log.enable` on the tab's own target
+// never see a single line from it. Everything logged inside a js.stripe.com or
+// accounts.google.com frame was therefore invisible to get-console — precisely
+// the frames you need to read when a payment or login widget silently fails to
+// render (a Stripe billing-address element that stayed 2px tall logged nothing
+// we could reach, 2026-08-13).
+//
+// The fix is CDP auto-attach: `Target.setAutoAttach` on the tab's session makes
+// every child target arrive as a `Target.attachedToTarget` event carrying its own
+// sessionId; enabling the same two domains on that sessionId tails the child's
+// console into the same per-tab buffer. Child targets can have children of their
+// own (a cross-origin frame inside a cross-origin frame), so auto-attach is
+// re-armed on each new session. The glue lives in profiles.ts; these two helpers
+// are the decision it makes, kept pure so they are unit-testable.
+
+/** Child target types whose console belongs in the tab's buffer: the frames and
+ * workers a page can spawn. Anything else (`browser`, `other`, DevTools' own
+ * targets) has no page console to read. */
+export const CAPTURED_TARGET_TYPES = [
+  'iframe',
+  'page',
+  'webview',
+  'worker',
+  'shared_worker',
+  'service_worker'
+] as const
+
+/** True when a `Target.attachedToTarget` targetInfo is one we tail. */
+export function shouldCaptureTarget(info?: { type?: string } | null): boolean {
+  const type = info?.type
+  return typeof type === 'string' && (CAPTURED_TARGET_TYPES as readonly string[]).includes(type)
+}
+
+/** Read the sessionId of a newly auto-attached child target worth tailing, or
+ * null for any other CDP message. Pure counterpart of draftFromCdpMessage: the
+ * glue asks both of every message — this one says "enable the domains on this
+ * new session", that one says "record this line". */
+export function attachedSessionId(method: string, params: unknown): string | null {
+  if (method !== 'Target.attachedToTarget') return null
+  const p = (params ?? {}) as { sessionId?: unknown; targetInfo?: { type?: string } }
+  if (!shouldCaptureTarget(p.targetInfo)) return null
+  return typeof p.sessionId === 'string' && p.sessionId !== '' ? p.sessionId : null
+}

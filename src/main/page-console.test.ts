@@ -10,7 +10,9 @@ import {
   draftFromLogEntry,
   draftFromException,
   draftFromCdpMessage,
-  isPageLogLevel
+  isPageLogLevel,
+  shouldCaptureTarget,
+  attachedSessionId
 } from './page-console'
 
 describe('level mapping', () => {
@@ -124,9 +126,9 @@ describe('CDP → draft mappers', () => {
   })
 
   it('leaves a plain network line as network (no false security match)', () => {
-    expect(draftFromLogEntry({ entry: { source: 'network', text: 'Failed to load: 403' } }).source).toBe(
-      'network'
-    )
+    expect(
+      draftFromLogEntry({ entry: { source: 'network', text: 'Failed to load: 403' } }).source
+    ).toBe('network')
   })
 
   it('maps an uncaught exception, preferring the stack description', () => {
@@ -213,5 +215,52 @@ describe('PageConsoleStore', () => {
     s.record('t', { level: 'info', message: 'b', source: 'console' })
     s.drop('t')
     expect(s.read('t')).toEqual([])
+  })
+})
+
+describe('out-of-process frame auto-attach', () => {
+  it('tails the frames and workers a page can spawn', () => {
+    expect(shouldCaptureTarget({ type: 'iframe' })).toBe(true)
+    expect(shouldCaptureTarget({ type: 'worker' })).toBe(true)
+    expect(shouldCaptureTarget({ type: 'service_worker' })).toBe(true)
+  })
+
+  it('ignores targets with no page console', () => {
+    expect(shouldCaptureTarget({ type: 'browser' })).toBe(false)
+    expect(shouldCaptureTarget({ type: 'other' })).toBe(false)
+    expect(shouldCaptureTarget({})).toBe(false)
+    expect(shouldCaptureTarget(null)).toBe(false)
+  })
+
+  it('reads the sessionId of a newly attached cross-origin frame', () => {
+    expect(
+      attachedSessionId('Target.attachedToTarget', {
+        sessionId: 'S1',
+        targetInfo: { type: 'iframe', url: 'https://js.stripe.com/v3/elements-inner-address.html' }
+      })
+    ).toBe('S1')
+  })
+
+  it('returns null for other messages, unwanted targets and a missing sessionId', () => {
+    expect(attachedSessionId('Log.entryAdded', { entry: {} })).toBeNull()
+    expect(
+      attachedSessionId('Target.attachedToTarget', {
+        sessionId: 'S1',
+        targetInfo: { type: 'browser' }
+      })
+    ).toBeNull()
+    expect(
+      attachedSessionId('Target.attachedToTarget', { targetInfo: { type: 'iframe' } })
+    ).toBeNull()
+    expect(attachedSessionId('Target.attachedToTarget', {})).toBeNull()
+  })
+
+  it('never mistakes an attach event for a console line', () => {
+    expect(
+      draftFromCdpMessage('Target.attachedToTarget', {
+        sessionId: 'S1',
+        targetInfo: { type: 'iframe' }
+      })
+    ).toBeNull()
   })
 })
