@@ -4,7 +4,7 @@
 //
 // Model split (mirrors how `pinned` works):
 //   - Membership lives ON the tab: TabMeta.folderId (tab-store.ts). It is a tab
-//     property, so it survives a session restore where tab ids are regenerated.
+//     property, so it survived a session restore back when tab ids were regenerated.
 //   - Folder metadata (title, collapsed, ORDER) lives here as an ordered list.
 // A tab is "loose" when it has no folderId. A pinned tab is never in a folder.
 //

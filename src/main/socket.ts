@@ -11,8 +11,41 @@
 import { createServer, type Server, type Socket } from 'net'
 import { existsSync, unlinkSync } from 'fs'
 import type { CommandContext, CommandRegistry, CommandResult } from './commands'
+import type { FocusFeed } from './focus-feed'
 
 export type SocketResponse = CommandResult | { ok: false; error: string }
+
+/** The only topic a client can subscribe to today (Kova names its stream the
+ * same way, so a consumer written for one reads the other). */
+export const FOCUS_TOPIC = 'focus'
+
+/**
+ * Recognize a `subscribe` request, BEFORE the registry sees it.
+ *
+ * Subscribing is not a command: a command answers once and is done, while this
+ * turns the connection into a stream that outlives the request. Keeping it out
+ * of the registry is what keeps every other command synchronous and pure.
+ *
+ * Returns the requested topics, or null when the line is an ordinary request.
+ * Shape (Kova's, verbatim): {"cmd":"subscribe","events":["focus"]}.
+ */
+export function parseSubscribe(line: string): string[] | null {
+  let msg: unknown
+  try {
+    msg = JSON.parse(line)
+  } catch {
+    return null
+  }
+  const { command, cmd, events } = (msg ?? {}) as {
+    command?: unknown
+    cmd?: unknown
+    events?: unknown
+  }
+  const name = typeof command === 'string' ? command : cmd
+  if (name !== 'subscribe') return null
+  if (!Array.isArray(events)) return []
+  return events.filter((e): e is string => typeof e === 'string')
+}
 
 /**
  * Parse one request line and dispatch it to the registry with the given context
@@ -79,17 +112,39 @@ export function startCommandSocket(
   socketPath: string,
   registry: CommandRegistry,
   makeContext: () => CommandContext,
-  rebindCheckMs = 5000
+  rebindCheckMs = 5000,
+  focusFeed?: FocusFeed
 ): CommandSocketHandle {
   const handleConnection = (conn: Socket): void => {
     let buffer = ''
     // Serialize responses through one chain so async commands (import-cookies)
     // still reply in request order.
     let chain: Promise<unknown> = Promise.resolve()
+    // Non-null once this connection subscribed: the stream it must be detached
+    // from when it hangs up, or the feed would write into a dead socket forever.
+    let unsubscribe: (() => void) | null = null
 
     const consume = (line: string): void => {
       const trimmed = line.trim()
       if (trimmed === '') return
+      const topics = parseSubscribe(trimmed)
+      if (topics) {
+        chain = chain.then(() => {
+          if (!focusFeed || !topics.includes(FOCUS_TOPIC)) {
+            conn.write(JSON.stringify({ ok: false, error: 'no such event stream' }) + '\n')
+            return
+          }
+          // Reply with the situation as it stands, so a subscriber that starts
+          // mid-session is immediately right instead of waiting for the next
+          // change (which may be minutes away on a page being read).
+          conn.write(JSON.stringify({ ok: true, data: { focus: focusFeed.current } }) + '\n')
+          unsubscribe?.()
+          unsubscribe = focusFeed.subscribe((focus) => {
+            conn.write(JSON.stringify({ event: FOCUS_TOPIC, tab: focus }) + '\n')
+          })
+        })
+        return
+      }
       chain = chain.then(async () => {
         let response: SocketResponse
         try {
@@ -112,6 +167,14 @@ export function startCommandSocket(
 
     conn.on('end', () => {
       if (buffer.length > 0) consume(buffer)
+    })
+
+    // A subscriber holds its connection open for hours; every way it can end has
+    // to release it. 'close' fires after 'end' and after 'error' alike, so it is
+    // the one place that cannot be skipped.
+    conn.on('close', () => {
+      unsubscribe?.()
+      unsubscribe = null
     })
 
     conn.on('error', () => {

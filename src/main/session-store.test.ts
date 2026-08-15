@@ -21,8 +21,8 @@ describe('toPersisted', () => {
     expect(toPersisted(s, false)).toEqual({
       windowId: expect.any(String),
       tabs: [
-        { url: 'https://a.test', title: 'Alpha', favicon: 'a.ico' },
-        { url: 'https://b.test', title: 'Beta', favicon: null }
+        { id: 'a', url: 'https://a.test', title: 'Alpha', favicon: 'a.ico' },
+        { id: 'b', url: 'https://b.test', title: 'Beta', favicon: null }
       ],
       activeIndex: 0,
       panelCollapsed: false
@@ -75,14 +75,26 @@ describe('toPersisted', () => {
       pinned: true
     })
     const tabs = toPersisted(s, false).tabs
-    expect(tabs[2]).toEqual({ url: 'https://c.test', title: 'Gamma', favicon: null, pinned: true })
+    expect(tabs[2]).toEqual({
+      id: 'c',
+      url: 'https://c.test',
+      title: 'Gamma',
+      favicon: null,
+      pinned: true
+    })
     expect('pinned' in tabs[0]).toBe(false)
   })
 
   it('writes the loaded flag only for the awake tabs (asleep keeps the old shape)', () => {
     // 'a' was awake at quit, 'b' asleep.
     const tabs = toPersisted(twoTabs(), false, undefined, undefined, [], new Set(['a'])).tabs
-    expect(tabs[0]).toEqual({ url: 'https://a.test', title: 'Alpha', favicon: 'a.ico', loaded: true })
+    expect(tabs[0]).toEqual({
+      id: 'a',
+      url: 'https://a.test',
+      title: 'Alpha',
+      favicon: 'a.ico',
+      loaded: true
+    })
     expect('loaded' in tabs[1]).toBe(false)
   })
 
@@ -95,6 +107,7 @@ describe('toPersisted', () => {
     const s = setKeepAwake(twoTabs(), 'a', true)
     const tabs = toPersisted(s, false).tabs
     expect(tabs[0]).toEqual({
+      id: 'a',
       url: 'https://a.test',
       title: 'Alpha',
       favicon: 'a.ico',
@@ -105,6 +118,42 @@ describe('toPersisted', () => {
 })
 
 describe('normalizeSessions', () => {
+  it('keeps a saved tab id, so a tab is the same tab after a restart', () => {
+    const raw = {
+      default: [
+        {
+          windowId: 'w-1',
+          tabs: [{ id: 't-1', url: 'https://x.test', title: 'X', favicon: null }],
+          activeIndex: 0,
+          panelCollapsed: false
+        }
+      ]
+    }
+    expect(normalizeSessions(raw).default[0].tabs[0].id).toBe('t-1')
+  })
+
+  it('reads a file written before ids were persisted, without inventing one', () => {
+    const raw = {
+      default: [
+        {
+          windowId: 'w-1',
+          tabs: [
+            { url: 'https://x.test', title: 'X', favicon: null },
+            { id: '', url: 'https://y.test', title: 'Y', favicon: null },
+            { id: 42, url: 'https://z.test', title: 'Z', favicon: null }
+          ],
+          activeIndex: 0,
+          panelCollapsed: false
+        }
+      ]
+    }
+    // No id at all rather than a made-up one: minting belongs to the restore, which
+    // is the only place that can check the id is not already taken.
+    for (const tab of normalizeSessions(raw).default[0].tabs) {
+      expect('id' in tab).toBe(false)
+    }
+  })
+
   it('keeps well-formed windows (new list shape) and preserves the windowId', () => {
     const raw = {
       default: [

@@ -269,6 +269,22 @@ export function formatTabs(tabs, activeId) {
 }
 
 /**
+ * One line of the focus stream, for a human watching `mira watch`.
+ *
+ * `null` (nobody is in Mira) prints as a dash rather than disappearing: the
+ * whole point of the stream is that leaving the browser is an event too.
+ *
+ * @param {object|null} tab
+ * @returns {string}
+ */
+export function formatFocus(tab) {
+  if (!tab) return '-  (Mira not frontmost)'
+  const where = tab.folderTitle ? `${tab.profileLabel} / ${tab.folderTitle}` : tab.profileLabel
+  const title = (tab.title ?? '').slice(0, 40).padEnd(40)
+  return `[${where}]  ${title}  ${tab.url ?? ''}`
+}
+
+/**
  * Read exec-js code from a positional arg, `-` (stdin), or `@path` (file). The
  * actual reads are injected so this stays pure and testable.
  *

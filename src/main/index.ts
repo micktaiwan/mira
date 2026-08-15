@@ -9,6 +9,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { createCommandRegistry, type CommandContext } from './commands'
 import { startCommandSocket, cleanupSocket, type CommandSocketHandle } from './socket'
+import { FocusFeed } from './focus-feed'
 import { forwardToRunningInstance } from './single-instance'
 import { ProfileManager, DEFAULT_PROFILE_ID } from './profiles'
 import { CHROME_PARTITION, DEFAULT_SESSION_ALIAS } from './chrome-session'
@@ -431,6 +432,7 @@ app.whenReady().then(async () => {
 
   // One profile = one window with its own session partition. The manager owns
   // window creation, layout and the id<->window mapping.
+  const focusFeed = new FocusFeed()
   const profiles = new ProfileManager({
     toolbarHeight: TOOLBAR_HEIGHT,
     statusBarHeight: STATUS_BAR_HEIGHT,
@@ -470,6 +472,10 @@ app.whenReady().then(async () => {
     getProcessMemory: () =>
       app.getAppMetrics().map((m) => ({ pid: m.pid, bytes: m.memory.workingSetSize * 1024 })),
     extensions: extensionsService,
+    // The push side of the control socket: which tab is being looked at, and
+    // whether Mira is frontmost at all. The manager publishes, the socket fans
+    // out to whoever subscribed (see focus-feed.ts).
+    focusFeed,
     onChange: () => {
       rebuildMenu()
       // Keep any open Settings tab's profile list live. The Settings surface is a
@@ -586,7 +592,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('command', (event, name: string, params?: unknown) => {
     return registry.execute(name, params, profiles.contextForChrome(event.sender))
   })
-  commandSocket = startCommandSocket(SOCKET_PATH, registry, () => profiles.contextForFocused())
+  commandSocket = startCommandSocket(
+    SOCKET_PATH,
+    registry,
+    () => profiles.contextForFocused(),
+    undefined,
+    focusFeed
+  )
   console.log(`[mira] control socket listening on ${SOCKET_PATH}`)
 
   // System-wide shortcut to summon Mira from any app (like Panorama's

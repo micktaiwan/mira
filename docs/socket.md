@@ -50,7 +50,9 @@ Each request binds to the **focused Mira window** at the moment it runs (fallbac
 open window). With several windows open this is flaky for an external caller — so
 commands that can take an explicit target id should be preferred:
 
-- Tab ids are **UUIDs, globally unique across all windows**. `exec-js` resolves its
+- Tab ids are **UUIDs, globally unique across all windows, and stable across a restart**
+  (persisted with the tab; only a file written before that, or a duplicate id in it, gets a
+  fresh one). `exec-js` resolves its
   `tabId` across every open window; you are not tied to the focused one.
 - `list-tabs` defaults to the target (focused) window, but takes an optional
   `windowId` (from `list-windows`) to list ANY open window's strip — so every tab
@@ -344,6 +346,45 @@ Defaults suit an intermittent stall: `mode` is `record-continuously` (a ring buf
 
 `list-palette`, `toggle-palette {open?, mode?, query?}`, `show-tooltip {text, anchor}`,
 `hide-tooltip`.
+
+## The focus stream (push, not request/response)
+
+Everything above answers once and is done. `subscribe` is the exception: it keeps the
+connection open and pushes one line every time the answer changes.
+
+```bash
+mira watch                  # human-readable: profile / folder / title / url
+mira watch --json           # one raw event per line, for a program
+```
+
+- Request: `{"cmd":"subscribe","events":["focus"]}` — `focus` is the only topic today.
+  Anything else answers `{"ok":false,"error":"no such event stream"}` rather than
+  holding a mute socket. Not usable through `nc -U`, which drops everything after the
+  first line.
+- First line back is the situation **as it stands**:
+  `{"ok":true,"data":{"focus":<tab|null>}}`, so a subscriber starting mid-session is
+  immediately right instead of waiting for the next change (which may be minutes away
+  on a page being read).
+- Every line after that is `{"event":"focus","tab":<tab|null>}`.
+- The connection stays usable for ordinary commands while subscribed.
+
+The `tab` payload: `windowId`, `profileId`, `profileLabel`, `tabId`, `url`, `title`,
+`folderId`, `folderTitle` (the last two `null` for a loose tab). The profile and the
+folder matter as much as the url: they are the two groupings maintained BY HAND, hence
+the only labels on a page certain to mean something — the url alone is ambiguous on the
+domains carrying the most traffic (mail, calendar, search).
+
+**`null` is a real value, not an error**: no Mira window holds the keyboard focus, i.e.
+the user is in another app. A consumer measuring attention has to tell "reading this
+page" from "this page is open behind Slack", and only the browser knows. Kova reports
+its own foreground-ness on the same stream in the same shape, which is why the request
+is spelled this way: a client written for one reads the other. Mira's own Settings tab
+reports as `null` too — it is Mira's UI, not a page.
+
+Emitted from every path that changes what is on screen (the tab-strip push choke point,
+plus window focus/blur). Identical consecutive snapshots are dropped, so a subscriber
+only sees real changes: `src/main/focus-feed.ts` owns the fan-out,
+`ProfileManager.focusSnapshot()` builds the payload.
 
 ## Keeping this doc honest
 

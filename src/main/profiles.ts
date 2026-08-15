@@ -11,6 +11,7 @@
 // CommandContext built by contextForChrome / contextForFocused.
 
 import { randomUUID } from 'crypto'
+import type { FocusFeed, TabFocus } from './focus-feed'
 import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
@@ -360,7 +361,7 @@ interface ProfileWindow {
    * focus history has no reason to survive a restart). Recorded on every active-tab
    * change (notifyExtensionsActiveTab), pruned when a tab leaves the window. */
   mru: MruHistory
-  /** Tab ids (the NEW ids minted at restore) of the tabs that were awake, not
+  /** Tab ids of the tabs that were awake, not
    * asleep, when Mira last quit — read from each PersistedTab.loaded. Populated
    * once by restoreSession; `wake-all-tabs` (Cmd+Shift+A) materializes exactly
    * these. Empty for a window opened fresh (never restored). */
@@ -510,6 +511,10 @@ export interface ProfileManagerDeps {
   /** Called when the set of profiles, their labels, or the focused one changes,
    * so the app menu can be rebuilt. */
   onChange?: () => void
+  /** Push channel for "which tab is Mickael looking at", consumed by socket
+   * subscribers (see focus-feed.ts). Owned by index.ts, which also hands it to
+   * the control socket. Absent in tests and in any build with no socket. */
+  focusFeed?: FocusFeed
   /** Run a registry command targeting the window that owns `wc`. Used by the
    * page right-click menu so its Mira actions (back / forward / reload / open in
    * new tab) route through the same registry bus as every other surface. Owned by
@@ -1359,10 +1364,18 @@ export class ProfileManager {
     window.on('ready-to-show', () => window.show())
     // Track focus so the menu's active-profile checkmark stays in sync — but only
     // rebuild when focus moves to a DIFFERENT profile (skip plain re-focus).
+    // Leaving Mira (for Kova, Slack, anything) is as much a fact for a focus
+    // subscriber as arriving on a tab: without it, time spent elsewhere would
+    // keep being credited to the page left open here.
+    // Deferred by a tick: moving between two Mira windows fires blur BEFORE the
+    // next window's focus, so publishing straight away would emit a phantom "not
+    // in the browser" between them.
+    window.on('blur', () => setImmediate(() => this.publishFocus()))
     window.on('focus', () => {
       // A genuine focus means Mira is now foreground: drop any activation
       // suppression tail so it never eats a real user-driven activation.
       this.endActivationSuppression()
+      this.publishFocus()
       // Also re-snapshot geometry: dragging a window to another virtual desktop
       // in Mission Control fires no move/resize event (same coordinates on every
       // Space), so the Space capture would otherwise wait until close. Focusing
@@ -1831,12 +1844,29 @@ export class ProfileManager {
     return { id: tab.id }
   }
 
+  /** Is this tab id already in use, in ANY open window? Tab ids are global (see
+   * list-tabs / exec-js, which resolve a tabId across every window), so a restore
+   * cannot check its own strip alone. */
+  private isTabIdTaken(id: string): boolean {
+    for (const pw of this.openById.values()) {
+      if (pw.state.tabs.some((t) => t.id === id)) return true
+    }
+    return false
+  }
+
   /** Recreate a profile window's saved tabs and restore its active tab + panel.
    * The tabs enter the strip unloaded (metadata only); only the active tab gets
    * its WebContentsView now — the rest materialize when first selected. */
   private restoreSession(pw: ProfileWindow, saved: PersistedWindow): void {
     for (const t of saved.tabs) {
-      const id = randomUUID()
+      // The saved id is reused so a tab is the SAME tab across a restart. Two guards,
+      // because the file is not a trusted source of uniqueness: a tab id is global
+      // (exec-js resolves it across every window), and a hand-edited or duplicated
+      // entry could repeat one. So a saved id already taken — here or in another open
+      // window — is dropped for a fresh one, and a file written before ids were
+      // persisted simply has none.
+      const saw = t.id
+      const id = saw && !this.isTabIdTaken(saw) ? saw : randomUUID()
       pw.state = addTab(pw.state, {
         id,
         title: t.title,
@@ -1844,7 +1874,7 @@ export class ProfileManager {
         favicon: t.favicon,
         // Saved order already has the pinned block at the head of the strip.
         ...(t.pinned === true ? { pinned: true } : {}),
-        // Folder membership rides on the tab (ids are new, but folderId is stable).
+        // Folder membership rides on the tab, like the id itself.
         ...(t.folderId ? { folderId: t.folderId } : {}),
         // Keep-awake is durable tab state: it comes back set so the tab is woken
         // below and stays immune to discard.
@@ -2652,6 +2682,47 @@ export class ProfileManager {
       // folder and reflects collapse/rename without a separate poll.
       folders: pw.folders
     })
+    // Every change of what is on screen funnels through here (tab switch,
+    // navigation, title, folder move), so this is also where outside subscribers
+    // learn about it. The feed drops the publishes that changed nothing, which is
+    // most of them — this channel also carries audio and loading state.
+    this.publishFocus()
+  }
+
+  /** What an outside observer sees right now: the active tab of the FOCUSED
+   * window, or null when no Mira window holds the keyboard focus.
+   *
+   * Null is a real answer, not a failure: a consumer measuring attention has to
+   * tell "reading this page" from "this page is open behind Slack", and only the
+   * browser knows. Kova reports its own foreground-ness on the same stream for
+   * the same reason.
+   *
+   * The Settings tab is reported as no focus: it is Mira's own UI, not a page.
+   */
+  focusSnapshot(): TabFocus | null {
+    const pw = this.findByWindow(BrowserWindow.getFocusedWindow())
+    if (!pw || pw.window.isDestroyed()) return null
+    const id = pw.state.activeId
+    if (!id || id === pw.settingsTabId) return null
+    const tab = pw.state.tabs.find((t) => t.id === id)
+    if (!tab) return null
+    const folder = tab.folderId ? (pw.folders.find((f) => f.id === tab.folderId) ?? null) : null
+    return {
+      windowId: pw.windowId,
+      profileId: pw.id,
+      profileLabel: this.profiles.find((p) => p.id === pw.id)?.label ?? pw.id,
+      tabId: tab.id,
+      url: tab.url,
+      title: tab.title,
+      folderId: tab.folderId ?? null,
+      folderTitle: folder?.title ?? null
+    }
+  }
+
+  /** Hand the current snapshot to the feed. Safe to call from any path that may
+   * have changed the answer: the feed swallows an unchanged publish. */
+  private publishFocus(): void {
+    this.deps.focusFeed?.publish(this.focusSnapshot())
   }
 
   /** Debounced strip push for the page-event path (title / favicon / in-page

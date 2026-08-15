@@ -28,6 +28,8 @@
 //   mira nav <url> [--new-tab|-n]   navigate the active tab in place (--new-tab: open a fresh tab instead)
 //   mira open <url>                 open <url> in a NEW tab, leaving the current tab untouched
 //   mira windows                    list open windows (id / profile / tabs), * = focused
+//   mira watch                      follow the focused tab live (profile / folder / title / url), until Ctrl-C
+//                                   (--json: one raw event per line, for a program)
 //   mira quit                       quit Mira entirely (close-profile never quits; this is the explicit exit)
 //   mira cookies [--url <url>]      print the active site's cookie string (HttpOnly incl.); for export KONDO_COOKIE="$(mira cookies)"
 //   mira forget <domain> [--profile <id>]  wipe a domain's cookies + storage + history (all subdomains); no tab needed
@@ -55,6 +57,7 @@ import {
   formatTabs,
   formatConsole,
   formatWindows,
+  formatFocus,
   resolveCode
 } from '../src/cli/mira-core.mjs'
 
@@ -89,6 +92,50 @@ function call(request, socketPath, timeoutMs = 30000) {
         reject(new Error(`no Mira socket at ${socketPath} (is Mira running?)`))
       else if (e && e.code === 'ECONNREFUSED')
         reject(new Error(`stale socket at ${socketPath} (Mira not listening)`))
+      else reject(e)
+    })
+  })
+}
+
+/** Subscribe to the focus stream and print every line until the user stops us.
+ * Unlike `call`, this connection stays open: the first line is the situation as
+ * it stands, the rest arrive as they happen. */
+function watch(socketPath, { json }) {
+  return new Promise((_resolveP, reject) => {
+    const conn = createConnection(socketPath)
+    let buf = ''
+    conn.on('connect', () => conn.write('{"cmd":"subscribe","events":["focus"]}\n'))
+    conn.on('data', (chunk) => {
+      buf += chunk.toString()
+      let nl
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl)
+        buf = buf.slice(nl + 1)
+        let msg
+        try {
+          msg = JSON.parse(line)
+        } catch {
+          continue
+        }
+        if (msg.ok === false) {
+          conn.end()
+          reject(new Error(msg.error ?? 'subscribe refused'))
+          return
+        }
+        if (json) {
+          process.stdout.write(line + '\n')
+          continue
+        }
+        // The subscribe reply carries the snapshot under data.focus; every line
+        // after it is an event carrying `tab`.
+        const tab = msg.data ? msg.data.focus : msg.tab
+        process.stdout.write(formatFocus(tab) + '\n')
+      }
+    })
+    conn.on('end', () => reject(new Error('Mira closed the stream')))
+    conn.on('error', (e) => {
+      if (e && e.code === 'ENOENT')
+        reject(new Error(`no Mira socket at ${socketPath} (is Mira running?)`))
       else reject(e)
     })
   })
@@ -150,6 +197,9 @@ async function main() {
       return send(req, { json, pretty: (r) => formatTabs(r.tabs, r.activeId) })
     }
 
+    case 'watch':
+      return watch(socketPath, { json }).catch((e) => die(e.message, 2))
+
     case 'commands':
       return send(
         { command: 'list-commands' },
@@ -168,7 +218,12 @@ async function main() {
     case 'press': {
       const key = positionals[0]
       const modifiers =
-        typeof flags.mod === 'string' ? flags.mod.split(',').map((m) => m.trim()).filter(Boolean) : []
+        typeof flags.mod === 'string'
+          ? flags.mod
+              .split(',')
+              .map((m) => m.trim())
+              .filter(Boolean)
+          : []
       const built = buildPress(key, tabId, modifiers)
       if ('error' in built) return die(built.error, 2)
       return send(built.request, { json })
@@ -194,16 +249,16 @@ async function main() {
       // Read the captured web-page console (console.* + browser lines: failed
       // loads/403, CORS, CSP, exceptions) of the pinned/active tab. Flags:
       // --level <verbose|info|warning|error>, --limit <n>, --since <seq>.
-      return send(buildConsole(tabId, { level: flags.level, limit: flags.limit, since: flags.since }), {
-        json,
-        pretty: (r) => formatConsole(r.messages)
-      })
+      return send(
+        buildConsole(tabId, { level: flags.level, limit: flags.limit, since: flags.since }),
+        {
+          json,
+          pretty: (r) => formatConsole(r.messages)
+        }
+      )
 
     case 'windows':
-      return send(
-        { command: 'list-windows' },
-        { json, pretty: (r) => formatWindows(r.windows) }
-      )
+      return send({ command: 'list-windows' }, { json, pretty: (r) => formatWindows(r.windows) })
 
     case 'nav':
     case 'navigate': {
@@ -269,7 +324,11 @@ async function main() {
       if (typeof flags.profile === 'string') params.profileId = flags.profile
       return send(
         { command: 'forget-domain', params },
-        { json, pretty: (r) => `cleared ${r.domain}: ${r.cookiesRemoved} cookies, ${r.historyRemoved} history` }
+        {
+          json,
+          pretty: (r) =>
+            `cleared ${r.domain}: ${r.cookiesRemoved} cookies, ${r.historyRemoved} history`
+        }
       )
     }
 

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  formatFocus,
   parseArgs,
   resolveTabId,
   pickTabByUrl,
@@ -370,5 +371,35 @@ describe('TAB_BOUND includes screenshot', () => {
   it('so `mira call screenshot` targets the pinned tab like the shorthand does', () => {
     expect(TAB_BOUND.has('screenshot')).toBe(true)
     expect(buildCall('screenshot', undefined, 'tab-3').request.params).toEqual({ tabId: 'tab-3' })
+  })
+})
+
+describe('formatFocus', () => {
+  const tab = {
+    windowId: 'w1',
+    profileId: 'default',
+    profileLabel: 'pro: lempire',
+    tabId: 't1',
+    url: 'https://app.trykondo.com/',
+    title: 'Kondo',
+    folderId: null,
+    folderTitle: null
+  }
+
+  it('shows the profile, the title and the url', () => {
+    const line = formatFocus(tab)
+    expect(line).toContain('[pro: lempire]')
+    expect(line).toContain('Kondo')
+    expect(line).toContain('https://app.trykondo.com/')
+  })
+
+  it('adds the folder when the tab is in one', () => {
+    expect(formatFocus({ ...tab, folderId: 'f1', folderTitle: 'Prod' })).toContain(
+      '[pro: lempire / Prod]'
+    )
+  })
+
+  it('prints leaving the browser as an event of its own', () => {
+    expect(formatFocus(null)).toContain('not frontmost')
   })
 })

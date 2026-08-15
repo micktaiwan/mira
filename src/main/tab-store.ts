@@ -22,7 +22,7 @@ export interface TabMeta {
   pinned?: boolean
   /** Id of the tab folder this tab belongs to, or absent when the tab is "loose"
    * (in no folder). Folder membership lives ON the tab — like `pinned` — so it
-   * survives a session restore (tab ids are regenerated, so a separate id→folder
+   * survives a session restore (it predates persisted tab ids, when a separate id→folder
    * map could not). Folder metadata (title, collapsed, order) lives separately in
    * tab-folder-store.ts. A pinned tab is never in a folder (pinning clears it). */
   folderId?: string

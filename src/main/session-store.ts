@@ -7,8 +7,10 @@
 // another profile's window changes. A profile can have SEVERAL windows open at
 // once (a tab torn off into its own window — see detach-tab), so the value is a
 // LIST of windows, each with its own tabs + geometry, correlated to the live
-// window by `windowId`. The active tab is stored as an index (not an id) because
-// tab ids are regenerated on restore.
+// window by `windowId`. The active tab is stored as an INDEX rather than an id:
+// that was forced back when restored tabs got brand new ids, and it stays for
+// file compatibility even though ids are persisted now (so a tab is the same tab
+// after a restart).
 
 import { randomUUID } from 'node:crypto'
 import type { TabState } from './tab-store'
@@ -18,14 +20,20 @@ import { normalizeTabFolders, type TabFolders } from './tab-folder-store'
  * `pinned` is only written when true, so pre-pin files and unpinned tabs keep
  * the old shape (absent = not pinned). */
 export interface PersistedTab {
+  /** The tab's id, kept so it is the SAME tab after a restart — an id that changed
+   * on every launch could not carry anything posed on a single tab (an external
+   * consumer following the focused tab, a per-tab rule). Optional: a file written
+   * before this existed has none, and those tabs get a fresh id like they always
+   * did. Uniqueness is re-checked on restore, never assumed from the file. */
+  id?: string
   url: string
   title: string
   favicon: string | null
   pinned?: boolean
   /** Id of the tab folder this tab was in, or absent when loose. Written only
-   * when set (like `pinned`), so a pre-folders file keeps the old shape. On
-   * restore, tabs are recreated with a NEW id but carry this folderId, which is
-   * how folder membership survives (a separate id map could not — ids change). */
+   * when set (like `pinned`), so a pre-folders file keeps the old shape. Folder
+   * membership lives on the tab rather than in a separate id map, which is what
+   * made it survive back when restored tabs were given brand new ids. */
   folderId?: string
   /** Whether this tab had a live WebContentsView (was awake, not asleep) when
    * Mira last quit. Written only when true (like `pinned`), so a pre-feature file
@@ -118,6 +126,7 @@ export function toPersisted(
     // type non-optional for the rare caller (tests) that omits it.
     windowId: windowId ?? randomUUID(),
     tabs: state.tabs.map((t) => ({
+      id: t.id,
       url: t.url,
       title: t.title,
       favicon: t.favicon,
@@ -170,6 +179,7 @@ function normalizeWindow(value: unknown): PersistedWindow | null {
     const tv = t as Record<string, unknown>
     if (typeof tv.url !== 'string' || tv.url === '') continue
     tabs.push({
+      ...(typeof tv.id === 'string' && tv.id !== '' ? { id: tv.id } : {}),
       url: tv.url,
       title: typeof tv.title === 'string' ? tv.title : '',
       favicon: typeof tv.favicon === 'string' ? tv.favicon : null,
