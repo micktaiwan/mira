@@ -242,6 +242,18 @@ function setup(): {
     lockProfile: async (id: string) => ({ id, locked: true }),
     lockAllVaults: async () => ({ locked: [] }),
     listVaults: () => ({ encrypted: [], unlocked: [] }),
+    listCardVaults: () => [],
+    setCardVault: async (profileId: string, appDataDir: string) => ({
+      profileId,
+      appDataDir,
+      unlocked: false
+    }),
+    removeCardVault: (profileId: string) => ({ profileId }),
+    cardVaultStatus: async () => ({ state: 'locked' }),
+    unlockCardVault: async (profileId: string) => ({ profileId }),
+    listCards: async () => ({ profileId: 'default', cards: [] }),
+    deleteCard: async (_id: string) => ({ profileId: 'default', name: 'Visa 4242' }),
+    saveCard: async () => ({ id: 'item-1', label: 'Visa 4242' }),
     openLocationSettings: () => ({ opened: true }),
     locationAuthStatus: () => 'authorized' as const,
     requestLocationAuthorization: () => 'authorized' as const,

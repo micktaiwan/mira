@@ -284,6 +284,23 @@ A profile marked `encrypted` keeps its data (browsing trails + session partition
 | `lock-all-vaults` | —                | lock EVERY currently-unlocked vault at once (closes each window, re-encrypts, wipes). Returns `{locked:[ids]}`. A panic-lock; also the path app quit uses to not lose a session left unlocked |
 | `list-vaults`     | —                | `{encrypted:[ids], unlocked:[ids]}`                                                                                                                                                           |
 
+### Cards (save a payment card to Bitwarden)
+
+Mira watches the pages of a profile that is MAPPED to a Bitwarden account, and when a full card is typed (Luhn-valid number + a readable, unexpired expiry) it offers to save it. The card is written by the `bw` CLI, on stdin, so no card number ever appears in a process argument list. The security code is never captured.
+
+A vault here means one Bitwarden ACCOUNT, addressed by its `BITWARDENCLI_APPDATA_DIR` (that env var is what makes the CLI single-account). Nothing to do with `encrypt-profile` above. A profile with no mapping never captures anything — that absence is what keeps cards out of a work account.
+
+| Command             | Params                                                 | Effect / result                                                                                                        |
+| ------------------- | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
+| `list-card-vaults`  | —                                                      | `{vaults:[{profileId, appDataDir, email?, unlocked}]}` — every profile allowed to save cards                            |
+| `set-card-vault`    | `profileId`, `appDataDir`                              | map a profile to a Bitwarden account (absolute path, `~` allowed). Reads `bw status` to record which account it is      |
+| `remove-card-vault` | `profileId`                                            | unmap: the profile stops watching pages and offering to save                                                           |
+| `card-vault-status` | `profileId`                                            | `{state}` — `unauthenticated` / `locked` / `unlocked` (unlocked = Mira holds a session key for it)                      |
+| `unlock-card-vault` | `profileId`, `password`                                | unlock with the master password; the session key stays in memory until Mira quits                                       |
+| `list-cards`        | `profileId?`                                           | the cards already in that vault: `{cards:[{id,name,brand,last4,expMonth,expYear,holder}]}`. Only the LAST FOUR digits come back. A locked vault pops the native master-password bubble instead of failing |
+| `delete-card`       | `id`, `profileId?`                                     | send one card to Bitwarden's trash (soft delete, recoverable). The id must belong to a CARD of that vault, so a wrong id cannot take a login down with it                                             |
+| `save-card`         | `number`, `expiry`, `holder?`, `origin?`, `profileId?` | write a card straight into the vault (same Luhn + expiry gate). `{id, label}` — the label is `Visa 4242`, never the PAN |
+
 ### Settings
 
 | Command                                      | Params                          | Effect / result                                                                          |

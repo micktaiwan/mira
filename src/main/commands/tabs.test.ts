@@ -323,7 +323,12 @@ describe('duplicate-active-tab', () => {
     const registry = createCommandRegistry()
     registry.execute('new-tab', { url: 'example.com' }, ctx) // tab-2, active
     const result = registry.execute('duplicate-active-tab', {}, ctx)
-    expect(result).toMatchObject({ ok: true, duplicated: true, id: 'tab-3', url: 'example.com' })
+    expect(result).toMatchObject({
+      ok: true,
+      duplicated: true,
+      id: 'tab-3',
+      url: 'https://example.com'
+    })
     // The copy slots right under its source and becomes active.
     expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-1', 'tab-2', 'tab-3'])
     expect(tabState().activeId).toBe('tab-3')
@@ -750,5 +755,28 @@ describe('recent-tab-back / recent-tab-forward (MRU focus history)', () => {
     registry.execute('new-tab', {}, ctx) // tab-4
     expect(registry.execute('close-active-tab', {}, ctx)).toMatchObject({ closed: true })
     expect(tabState().activeId).toBe('tab-1')
+  })
+})
+
+describe('new-tab url normalization', () => {
+  it('turns a local path into a file url (it used to die on ERR_INVALID_URL)', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', { url: '/Users/foo/page.html' }, ctx)
+    expect(tabState().tabs.at(-1)?.url).toBe('file:///Users/foo/page.html')
+  })
+
+  it('defaults a bare domain to https, like the address bar', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', { url: 'example.com' }, ctx)
+    expect(tabState().tabs.at(-1)?.url).toBe('https://example.com')
+  })
+
+  it('leaves a full url alone', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', { url: 'file:///etc/hosts' }, ctx)
+    expect(tabState().tabs.at(-1)?.url).toBe('file:///etc/hosts')
   })
 })

@@ -17,6 +17,7 @@ import type { CommandContext } from './context'
 import { appCommands } from './app'
 import { audioCommands } from './audio'
 import { bookmarksCommands } from './bookmarks'
+import { cardsCommands } from './cards'
 import { consoleCommands } from './console'
 import { cookieCommands } from './cookies'
 import { devtoolsCommands } from './devtools'
@@ -61,6 +62,7 @@ export type { AppContext } from './app'
 export type { AudioContext } from './audio'
 export type { BookmarkContext } from './bookmarks'
 export type { BookmarkNode, BookmarkUrl, BookmarkFolder, BookmarkTree } from '../bookmark-store'
+export type { CardsContext, CardVaultInfo } from './cards'
 export type { ConsoleContext } from './console'
 export type {
   PageConsoleEntry,
@@ -173,6 +175,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...appCommands,
     ...audioCommands,
     ...bookmarksCommands,
+    ...cardsCommands,
     ...consoleCommands,
     ...cookieCommands,
     ...devtoolsCommands,

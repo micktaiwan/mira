@@ -9,6 +9,7 @@
 import type { AppContext } from './app'
 import type { AudioContext } from './audio'
 import type { BookmarkContext } from './bookmarks'
+import type { CardsContext } from './cards'
 import type { ConsoleContext } from './console'
 import type { CookieContext } from './cookies'
 import type { DevtoolsContext } from './devtools'
@@ -48,6 +49,7 @@ import type { ZenContext } from './zen'
 export type CommandContext = AppContext &
   AudioContext &
   BookmarkContext &
+  CardsContext &
   ConsoleContext &
   CookieContext &
   DevtoolsContext &

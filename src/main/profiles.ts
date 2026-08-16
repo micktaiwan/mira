@@ -107,6 +107,8 @@ import {
   findTheme,
   resolveProfileTheme
 } from './theme-store'
+import { CardService } from './card-service'
+import type { FragmentSource } from './card-capture-service'
 import { vaultPlan, needsUnlock, noncePartitionDir } from './vault'
 import { computeDiskUsage } from './disk-usage'
 import * as vaultService from './vault-service'
@@ -600,6 +602,9 @@ export class ProfileManager {
    * profile), so this is NOT keyed by profile id — use windowsForProfile /
    * aWindowForProfile to resolve a profile's window(s). */
   private readonly openById = new Map<string, ProfileWindow>()
+  /** The card feature (capture agent, save bubble, Bitwarden CLI). Built lazily
+   * so a run that never opens a card-enabled profile pays nothing. */
+  private cardService: CardService | null = null
   /** Per-tab web-page console capture (console.* calls + browser-emitted lines:
    * failed loads, CORS, CSP, uncaught exceptions), tailed off each tab's CDP
    * debugger. Read back by the get-console command; dropped when a tab is torn
@@ -1645,6 +1650,9 @@ export class ProfileManager {
     // dialog) and track them, so the chrome shows progress + a done toast. Once
     // per partition (guarded inside).
     this.ensureDownloadHandler(partition, pw.id)
+    // Watch this profile's pages for a typed card — a no-op unless the profile is
+    // mapped to a Bitwarden account (card-service.ts).
+    this.cards.attach(pw.id, this.sessionFor(pw.id), (id) => this.resolveFragmentSource(id))
     const view = new WebContentsView({
       // nodeIntegrationInSubFrames: without it Electron runs preload scripts in
       // the MAIN frame only, and the extension service-worker bridge (the frame
@@ -4428,6 +4436,36 @@ export class ProfileManager {
   // detach-tab). These helpers replace the old `openById.get(profileId)` (which
   // assumed one window per profile) everywhere a profile's window(s) are needed.
 
+  /** The card service, built on first use. */
+  private get cards(): CardService {
+    return (this.cardService ??= new CardService({
+      userDataDir: this.deps.userDataDir,
+      windowFor: (profileId) => this.aWindowForProfile(profileId)?.window ?? null,
+      toast: (profileId, message) => {
+        const pw = this.aWindowForProfile(profileId)
+        if (pw) void showToast(pw, message)
+      }
+    }))
+  }
+
+  /** Which tab (and therefore which profile and which page) a card fragment came
+   * from. The ipc sender is the TAB's webContents even when the field lives in a
+   * cross-origin payment iframe, so a plain lookup over the open views is enough. */
+  private resolveFragmentSource(webContentsId: number): FragmentSource | null {
+    for (const pw of this.openById.values()) {
+      if (pw.window.isDestroyed()) continue
+      for (const [tabId, view] of pw.views) {
+        if (view.webContents.id !== webContentsId) continue
+        return {
+          profileId: pw.id,
+          tabKey: `${pw.id}:${tabId}`,
+          pageUrl: view.webContents.getURL()
+        }
+      }
+    }
+    return null
+  }
+
   /** Every open, live window of a profile (0, 1, or several). */
   private windowsForProfile(profileId: string): ProfileWindow[] {
     const out: ProfileWindow[] = []
@@ -5404,6 +5442,16 @@ export class ProfileManager {
       lockProfile: (id) => this.lockProfileVault(id),
       lockAllVaults: () => this.lockAllVaults(),
       listVaults: () => this.listVaultsState(),
+      // Cards: saving a payment card into a Bitwarden account. Distinct from the
+      // profile vault above (disk encryption) — see commands/cards.ts.
+      listCardVaults: () => this.cards.listCardVaults(),
+      setCardVault: (profileId, appDataDir) => this.cards.setCardVault(profileId, appDataDir),
+      removeCardVault: (profileId) => this.cards.removeCardVault(profileId),
+      cardVaultStatus: (profileId) => this.cards.cardVaultStatus(profileId),
+      unlockCardVault: (profileId, password) => this.cards.unlockCardVault(profileId, password),
+      listCards: (profileId) => this.cards.listCards(profileId),
+      deleteCard: (id, profileId) => this.cards.deleteCard(id, profileId),
+      saveCard: (params) => this.cards.saveCard(params),
       // Extensions act on the TARGET window's profile session — sets are per
       // profile (D2): installing in "Work" leaves "Default" untouched.
       listExtensions: () => {

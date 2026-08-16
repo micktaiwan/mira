@@ -45,6 +45,24 @@ export const TAB_BOUND = new Set([
  * @param {string[]} argv
  * @returns {{ command: string|null, positionals: string[], flags: Record<string, string|boolean> }}
  */
+/** How long the CLI waits for one reply, in ms, from `--timeout <seconds>`.
+ *
+ * WHY IT IS A KNOB: most commands answer instantly, so 30 s is a fine default
+ * for spotting a hung daemon. But a few WAIT ON A HUMAN — `list-cards` pops the
+ * vault bubble and sits there until a master password is typed — and 30 s is not
+ * a human timeout. Junk, zero and negative values fall back to the default
+ * rather than making the CLI hang or give up instantly.
+ * @param {Record<string, string|boolean>} flags
+ * @returns {number}
+ */
+export function resolveTimeoutMs(flags) {
+  const raw = flags && flags.timeout
+  if (typeof raw !== 'string') return 30000
+  const seconds = Number(raw)
+  if (!Number.isFinite(seconds) || seconds <= 0) return 30000
+  return Math.round(seconds * 1000)
+}
+
 export function parseArgs(argv) {
   /** @type {string[]} */
   const positionals = []

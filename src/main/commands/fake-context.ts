@@ -14,6 +14,7 @@ import type {
   TabKind
 } from '.'
 import { buildTabMemoryReport, selectServiceWorkerLogs } from '.'
+import { cardLabel, validateCapture } from '../card'
 import type { CookieSetDetails } from '../chrome-import'
 import type { TooltipRect } from '../tooltip'
 import type { SkillSource } from '../skills'
@@ -437,6 +438,11 @@ export function makeContext(
   // are unlocked this "session". The real ones shell out to hdiutil + fs.
   const encryptedProfiles = new Set<string>()
   const unlockedProfiles = new Set<string>()
+  // Card vaults (Bitwarden accounts): profileId -> appdata dir, plus which of
+  // them Mira holds a session key for. No bw process is ever run here.
+  const cardVaults = new Map<string, { appDataDir: string; email?: string }>()
+  const unlockedCardVaults = new Set<string>()
+  const savedCards: Array<{ profileId: string; number: string; expiry: string }> = []
   const ctx: CommandContext = {
     focusApp: () => {
       focusCalls.push(true)
@@ -1289,6 +1295,85 @@ export function makeContext(
       const cleared = state.permissions.length
       state.permissions = []
       return { cleared }
+    },
+    // Card vaults: in-memory stand-ins for the bw-backed real methods.
+    listCardVaults: () =>
+      [...cardVaults.entries()].map(([profileId, v]) => ({
+        profileId,
+        appDataDir: v.appDataDir,
+        ...(v.email ? { email: v.email } : {}),
+        unlocked: unlockedCardVaults.has(profileId)
+      })),
+    setCardVault: async (profileId: string, appDataDir: string) => {
+      if (!appDataDir.startsWith('/')) throw new Error('"appDataDir" must be an absolute path')
+      cardVaults.set(profileId, { appDataDir })
+      return { profileId, appDataDir, unlocked: unlockedCardVaults.has(profileId) }
+    },
+    removeCardVault: (profileId: string) => {
+      if (!cardVaults.delete(profileId)) throw new Error(`no card vault for profile: ${profileId}`)
+      unlockedCardVaults.delete(profileId)
+      return { profileId }
+    },
+    cardVaultStatus: async (profileId: string) => {
+      if (!cardVaults.has(profileId)) throw new Error(`no card vault for profile: ${profileId}`)
+      return { state: unlockedCardVaults.has(profileId) ? 'unlocked' : 'locked' }
+    },
+    unlockCardVault: async (profileId: string, password: string) => {
+      if (!cardVaults.has(profileId)) throw new Error(`no card vault for profile: ${profileId}`)
+      if (password !== 'good-password') throw new Error('Invalid master password')
+      unlockedCardVaults.add(profileId)
+      return { profileId }
+    },
+    listCards: async (profileId?: string) => {
+      const id = profileId ?? state.focused ?? 'default'
+      if (!cardVaults.has(id)) throw new Error(`no card vault for profile: ${id}`)
+      if (!unlockedCardVaults.has(id)) throw new Error('vault is locked')
+      return {
+        profileId: id,
+        cards: savedCards
+          .filter((c) => c.profileId === id)
+          .map((c, i) => ({
+            id: `item-${i + 1}`,
+            name: `Card ${c.number.slice(-4)}`,
+            brand: 'Visa',
+            last4: c.number.slice(-4),
+            expMonth: c.expiry.split('/')[0] ?? '',
+            expYear: c.expiry.split('/')[1] ?? '',
+            holder: ''
+          }))
+      }
+    },
+    deleteCard: async (id: string, profileId?: string) => {
+      const pid = profileId ?? state.focused ?? 'default'
+      if (!cardVaults.has(pid)) throw new Error(`no card vault for profile: ${pid}`)
+      if (!unlockedCardVaults.has(pid)) throw new Error('vault is locked')
+      const index = savedCards.findIndex((c, i) => c.profileId === pid && `item-${i + 1}` === id)
+      if (index === -1) throw new Error(`no card with id ${id} in this vault`)
+      const [removed] = savedCards.splice(index, 1)
+      return { profileId: pid, name: `Card ${removed.number.slice(-4)}` }
+    },
+    saveCard: async (params: {
+      profileId?: string
+      number: string
+      expiry: string
+      holder?: string
+      origin?: string
+    }) => {
+      const profileId = params.profileId ?? state.focused ?? 'default'
+      if (!cardVaults.has(profileId)) throw new Error(`no card vault for profile: ${profileId}`)
+      if (!unlockedCardVaults.has(profileId)) throw new Error('vault is locked')
+      const card = validateCapture(
+        {
+          number: params.number,
+          expiry: params.expiry,
+          holder: params.holder ?? '',
+          origin: params.origin ?? ''
+        },
+        new Date()
+      )
+      if (!card) throw new Error('not a valid, unexpired card')
+      savedCards.push({ profileId, number: card.number, expiry: params.expiry })
+      return { id: `item-${savedCards.length}`, label: cardLabel(card.brand, card.number) }
     },
     // Vault: in-memory stand-ins for the hdiutil-backed real methods. encrypt marks
     // the profile encrypted+locked; unlock/lock flip the unlocked flag.

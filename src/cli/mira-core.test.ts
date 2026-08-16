@@ -16,8 +16,9 @@ import {
   formatConsole,
   formatWindows,
   resolveCode,
-  TAB_BOUND
-  // @ts-expect-error — plain-ESM sibling module, no .d.ts (the CLI ships without a build)
+  TAB_BOUND,
+  resolveTimeoutMs
+  // @ts-expect-error — plain-ESM sibling module, no .d.ts (the CLI ships without a build),
 } from './mira-core.mjs'
 
 describe('parseArgs', () => {
@@ -401,5 +402,22 @@ describe('formatFocus', () => {
 
   it('prints leaving the browser as an event of its own', () => {
     expect(formatFocus(null)).toContain('not frontmost')
+  })
+})
+
+describe('resolveTimeoutMs', () => {
+  it('defaults to 30 seconds', () => {
+    expect(resolveTimeoutMs({})).toBe(30000)
+  })
+
+  it('reads --timeout in seconds (a human typing a master password needs more)', () => {
+    expect(resolveTimeoutMs({ timeout: '300' })).toBe(300000)
+  })
+
+  it('falls back on junk, zero and a bare flag', () => {
+    expect(resolveTimeoutMs({ timeout: 'soon' })).toBe(30000)
+    expect(resolveTimeoutMs({ timeout: '0' })).toBe(30000)
+    expect(resolveTimeoutMs({ timeout: '-5' })).toBe(30000)
+    expect(resolveTimeoutMs({ timeout: true })).toBe(30000)
   })
 })

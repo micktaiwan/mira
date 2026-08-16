@@ -5,6 +5,7 @@
 // implemented by the ProfileManager (src/main/profiles.ts).
 
 import { type CommandMap, fail } from './registry'
+import { normalizeInput } from '../url'
 import type { CommandContext } from './context'
 
 /** What a tab holds. `'web'` is a normal site (a WebContentsView); `'settings'`
@@ -194,7 +195,12 @@ export const tabsCommands: CommandMap<CommandContext> = {
       return { ok: false, error: '"background" must be a boolean' }
     }
     try {
-      const tab = ctx.newTab(url?.trim() || undefined, background === true)
+      // Same normalization as `navigate` and the address bar: a bare domain, a
+      // search phrase or a local PATH ("/Users/…/page.html") all become a real
+      // url. Without it a plain path reached loadURL untouched and the tab died
+      // on ERR_INVALID_URL — while the identical input worked in `navigate`.
+      const target = url?.trim() ? normalizeInput(url) : undefined
+      const tab = ctx.newTab(target, background === true)
       return { ok: true, ...tab }
     } catch (error) {
       return fail(error)
