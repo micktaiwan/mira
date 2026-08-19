@@ -27,6 +27,7 @@ import { extensionsCommands } from './extensions'
 import { findCommands } from './find'
 import { folderMenuCommands } from './folder-menu'
 import { forgetCommands } from './forget'
+import { formMemoryCommands } from './form-memory'
 import { historyCommands } from './history'
 import { inputCommands } from './input'
 import { magnifierCommands } from './magnifier'
@@ -63,6 +64,7 @@ export type { AudioContext } from './audio'
 export type { BookmarkContext } from './bookmarks'
 export type { BookmarkNode, BookmarkUrl, BookmarkFolder, BookmarkTree } from '../bookmark-store'
 export type { CardsContext, CardVaultInfo } from './cards'
+export type { FormMemoryContext, FormMemoryEntryInfo } from './form-memory'
 export type { ConsoleContext } from './console'
 export type {
   PageConsoleEntry,
@@ -176,6 +178,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...audioCommands,
     ...bookmarksCommands,
     ...cardsCommands,
+    ...formMemoryCommands,
     ...consoleCommands,
     ...cookieCommands,
     ...devtoolsCommands,

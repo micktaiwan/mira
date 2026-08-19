@@ -301,6 +301,19 @@ A vault here means one Bitwarden ACCOUNT, addressed by its `BITWARDENCLI_APPDATA
 | `delete-card`       | `id`, `profileId?`                                     | send one card to Bitwarden's trash (soft delete, recoverable). The id must belong to a CARD of that vault, so a wrong id cannot take a login down with it                                             |
 | `save-card`         | `number`, `expiry`, `holder?`, `origin?`, `profileId?` | write a card straight into the vault (same Luhn + expiry gate). `{id, label}` — the label is `Visa 4242`, never the PAN |
 
+### Form memory (ordinary text fields, offered back)
+
+What was typed into a plain text field is remembered per profile and per site, and offered back the next time the same field is focused, through Chromium's native `<datalist>` popup. This is form history, not a password manager and not card autofill: passwords, one-time codes, captchas, every card field and any value that looks like a card number are refused outright, and there is never a "save this?" question — a value typed once is simply remembered.
+
+A field is keyed by its `name` (else its `id`, else its `aria-label`), a site by its registrable domain, so `cfspart.impots.gouv.fr` and `www.impots.gouv.fr` share their fields while `service-public.gouv.fr` sees nothing of them. Five values per field are kept, most recently used first. It lives in `userData/form-memory.json`.
+
+| Command               | Params                                       | Effect / result                                                                                                                                    |
+| --------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list-form-memory`    | `profileId?`, `domain?`                      | `{entries:[{profileId, domain, field, values:[{value, used, count}]}]}`, most recently used first. `domain` accepts a bare domain, a hostname or a full url |
+| `forget-form-memory`  | `profileId?`, `domain?`, `field?`, `value?`  | forget the narrowest thing named — one value, a field, a site, or (with nothing else given) everything that profile ever typed. `{profileId, removed}` |
+| `remember-form-value` | `url`, `field`, `value`, `profileId?`        | record a value as if it had been typed there, through the same gate as a real page. `{domain, field, remembered}` — `remembered:false` when the rule refused it |
+| `suggest-form-values` | `url`, `field`, `profileId?`                 | what the popup would offer for that field on that page: `{values:[…]}`                                                                             |
+
 ### Settings
 
 | Command                                      | Params                          | Effect / result                                                                          |

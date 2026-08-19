@@ -254,6 +254,20 @@ function setup(): {
     listCards: async () => ({ profileId: 'default', cards: [] }),
     deleteCard: async (_id: string) => ({ profileId: 'default', name: 'Visa 4242' }),
     saveCard: async () => ({ id: 'item-1', label: 'Visa 4242' }),
+    listFormMemory: () => [],
+    forgetFormMemory: () => ({ profileId: 'default', removed: 0 }),
+    rememberFormValue: () => ({
+      profileId: 'default',
+      domain: 'example.com',
+      field: 'q',
+      remembered: true
+    }),
+    suggestFormValues: () => ({
+      profileId: 'default',
+      domain: 'example.com',
+      field: 'q',
+      values: []
+    }),
     openLocationSettings: () => ({ opened: true }),
     locationAuthStatus: () => 'authorized' as const,
     requestLocationAuthorization: () => 'authorized' as const,
