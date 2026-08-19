@@ -19,6 +19,7 @@ import type { ExtensionsContext } from './extensions'
 import type { FindContext } from './find'
 import type { FolderMenuContext } from './folder-menu'
 import type { ForgetContext } from './forget'
+import type { FormMemoryContext } from './form-memory'
 import type { HistoryContext } from './history'
 import type { InputContext } from './input'
 import type { MagnifierContext } from './magnifier'
@@ -59,6 +60,7 @@ export type CommandContext = AppContext &
   FindContext &
   FolderMenuContext &
   ForgetContext &
+  FormMemoryContext &
   HistoryContext &
   InputContext &
   MagnifierContext &

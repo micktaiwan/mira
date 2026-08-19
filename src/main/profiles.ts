@@ -109,6 +109,7 @@ import {
 } from './theme-store'
 import { CardService } from './card-service'
 import type { FragmentSource } from './card-capture-service'
+import { FormMemoryService } from './form-memory-service'
 import { vaultPlan, needsUnlock, noncePartitionDir } from './vault'
 import { computeDiskUsage } from './disk-usage'
 import * as vaultService from './vault-service'
@@ -605,6 +606,7 @@ export class ProfileManager {
   /** The card feature (capture agent, save bubble, Bitwarden CLI). Built lazily
    * so a run that never opens a card-enabled profile pays nothing. */
   private cardService: CardService | null = null
+  private formMemoryService: FormMemoryService | null = null
   /** Per-tab web-page console capture (console.* calls + browser-emitted lines:
    * failed loads, CORS, CSP, uncaught exceptions), tailed off each tab's CDP
    * debugger. Read back by the get-console command; dropped when a tab is torn
@@ -1653,6 +1655,9 @@ export class ProfileManager {
     // Watch this profile's pages for a typed card — a no-op unless the profile is
     // mapped to a Bitwarden account (card-service.ts).
     this.cards.attach(pw.id, this.sessionFor(pw.id), (id) => this.resolveFragmentSource(id))
+    // Same resolver: it answers "which profile does this webContents belong to",
+    // which is all form memory needs to keep profiles apart.
+    this.formMemory.attach(this.sessionFor(pw.id), (id) => this.resolveFragmentSource(id))
     const view = new WebContentsView({
       // nodeIntegrationInSubFrames: without it Electron runs preload scripts in
       // the MAIN frame only, and the extension service-worker bridge (the frame
@@ -4448,6 +4453,13 @@ export class ProfileManager {
     }))
   }
 
+  /** Form memory (ordinary text fields, offered back through a datalist), built
+   * on first use. Unlike the card service it needs nothing but a place on disk:
+   * every profile remembers its own fields. */
+  private get formMemory(): FormMemoryService {
+    return (this.formMemoryService ??= new FormMemoryService(this.deps.userDataDir))
+  }
+
   /** Which tab (and therefore which profile and which page) a card fragment came
    * from. The ipc sender is the TAB's webContents even when the field lives in a
    * cross-origin payment iframe, so a plain lookup over the open views is enough. */
@@ -4620,6 +4632,13 @@ export class ProfileManager {
     } finally {
       if (!wasAttached && wc.debugger.isAttached()) wc.debugger.detach()
     }
+  }
+
+  /** The profile a command with no explicit profileId acts on: the target
+   * window's, or the default profile when the command came from a socket with no
+   * window in play. Same rule as forgetDomain. */
+  private contextProfileId(target: ProfileWindow | null): string {
+    return target && !target.window.isDestroyed() ? target.id : DEFAULT_PROFILE_ID
   }
 
   private makeContext(target: ProfileWindow | null): CommandContext {
@@ -5452,6 +5471,23 @@ export class ProfileManager {
       listCards: (profileId) => this.cards.listCards(profileId),
       deleteCard: (id, profileId) => this.cards.deleteCard(id, profileId),
       saveCard: (params) => this.cards.saveCard(params),
+      // Form memory: what was typed into ordinary text fields, per profile and
+      // per site. Cards never land here — see commands/form-memory.ts.
+      listFormMemory: (filter) => this.formMemory.list(filter),
+      forgetFormMemory: (filter) => {
+        const profileId = filter.profileId ?? this.contextProfileId(target)
+        return { profileId, ...this.formMemory.forget({ ...filter, profileId }) }
+      },
+      rememberFormValue: (params) =>
+        this.formMemory.rememberTyped({
+          ...params,
+          profileId: params.profileId ?? this.contextProfileId(target)
+        }),
+      suggestFormValues: (params) =>
+        this.formMemory.suggestFor({
+          ...params,
+          profileId: params.profileId ?? this.contextProfileId(target)
+        }),
       // Extensions act on the TARGET window's profile session — sets are per
       // profile (D2): installing in "Work" leaves "Default" untouched.
       listExtensions: () => {

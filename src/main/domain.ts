@@ -15,8 +15,24 @@
 
 /** Second-level labels that are public suffixes under a 2-letter country TLD:
  * "co" in co.uk, "com" in com.au, "ne"/"or" in ne.jp / or.jp, … Under such a
- * pair the registrable domain has THREE labels, not two. */
-const COUNTRY_SECOND_LEVEL = new Set(['co', 'com', 'net', 'org', 'gov', 'edu', 'ac', 'ne', 'or'])
+ * pair the registrable domain has THREE labels, not two.
+ *
+ * "gouv" is here for gouv.fr: it IS a public suffix, and without it every French
+ * administration would share one bucket — impots.gouv.fr and ameli's neighbours
+ * would see each other's form memory (form-memory.ts) and one "forget site"
+ * would wipe them all. */
+const COUNTRY_SECOND_LEVEL = new Set([
+  'co',
+  'com',
+  'net',
+  'org',
+  'gov',
+  'gouv',
+  'edu',
+  'ac',
+  'ne',
+  'or'
+])
 
 /** The registrable domain of `host`, lower-cased: its last two labels, or its
  * last three when the last two form a country public suffix (see

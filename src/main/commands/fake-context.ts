@@ -15,6 +15,16 @@ import type {
 } from '.'
 import { buildTabMemoryReport, selectServiceWorkerLogs } from '.'
 import { cardLabel, validateCapture } from '../card'
+import {
+  fieldKey,
+  forgetEntries,
+  listEntries,
+  memoryDomain,
+  rememberValue,
+  shouldRemember,
+  suggestionsFor,
+  type FormMemory
+} from '../form-memory'
 import type { CookieSetDetails } from '../chrome-import'
 import type { TooltipRect } from '../tooltip'
 import type { SkillSource } from '../skills'
@@ -443,6 +453,7 @@ export function makeContext(
   const cardVaults = new Map<string, { appDataDir: string; email?: string }>()
   const unlockedCardVaults = new Set<string>()
   const savedCards: Array<{ profileId: string; number: string; expiry: string }> = []
+  let formMemory: FormMemory = {}
   const ctx: CommandContext = {
     focusApp: () => {
       focusCalls.push(true)
@@ -1374,6 +1385,54 @@ export function makeContext(
       if (!card) throw new Error('not a valid, unexpired card')
       savedCards.push({ profileId, number: card.number, expiry: params.expiry })
       return { id: `item-${savedCards.length}`, label: cardLabel(card.brand, card.number) }
+    },
+    // Form memory: the real pure store (form-memory.ts), held in a local object.
+    // No Electron, no disk — the rules under test are the same ones the page
+    // agent goes through.
+    listFormMemory: (filter: { profileId?: string; domain?: string }) =>
+      listEntries(formMemory, filter),
+    forgetFormMemory: (filter: {
+      profileId?: string
+      domain?: string
+      field?: string
+      value?: string
+    }) => {
+      const profileId = filter.profileId ?? state.focused ?? 'default'
+      const result = forgetEntries(formMemory, { ...filter, profileId })
+      formMemory = result.memory
+      return { profileId, removed: result.removed }
+    },
+    rememberFormValue: (params: {
+      profileId?: string
+      url: string
+      field: string
+      value: string
+    }) => {
+      const profileId = params.profileId ?? state.focused ?? 'default'
+      const domain = memoryDomain(params.url)
+      const attrs = { name: params.field, type: 'text' }
+      const field = fieldKey(attrs) ?? ''
+      const ok = domain !== '' && field !== '' && shouldRemember(attrs, params.value)
+      if (ok) {
+        formMemory = rememberValue(formMemory, {
+          profileId,
+          domain,
+          field,
+          value: params.value,
+          now: Date.now()
+        })
+      }
+      return { profileId, domain, field, remembered: ok }
+    },
+    suggestFormValues: (params: { profileId?: string; url: string; field: string }) => {
+      const profileId = params.profileId ?? state.focused ?? 'default'
+      const domain = memoryDomain(params.url)
+      const field = fieldKey({ name: params.field, type: 'text' }) ?? ''
+      const values =
+        domain === '' || field === ''
+          ? []
+          : suggestionsFor(formMemory, { profileId, domain, field })
+      return { profileId, domain, field, values }
     },
     // Vault: in-memory stand-ins for the hdiutil-backed real methods. encrypt marks
     // the profile encrypted+locked; unlock/lock flip the unlocked flag.
