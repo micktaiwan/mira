@@ -301,6 +301,20 @@ A vault here means one Bitwarden ACCOUNT, addressed by its `BITWARDENCLI_APPDATA
 | `delete-card`       | `id`, `profileId?`                                     | send one card to Bitwarden's trash (soft delete, recoverable). The id must belong to a CARD of that vault, so a wrong id cannot take a login down with it                                             |
 | `save-card`         | `number`, `expiry`, `holder?`, `origin?`, `profileId?` | write a card straight into the vault (same Luhn + expiry gate). `{id, label}` — the label is `Visa 4242`, never the PAN |
 
+### Logins (save a password to Bitwarden)
+
+Same wall, same mapping as the cards above: a profile MAPPED to a Bitwarden account gets a page agent that watches login forms; a profile with no mapping never has one installed, so its passwords are never read at all. One master password unlocks the vault for both features.
+
+Nothing is offered until the page reports a SUBMIT (a form submission, Enter in a field, or a click on a button whose label means "log in") — a half-typed password looks exactly like a whole one. The username and the password may be typed on two different pages of the same tab (the "type your email, press Continue" shape): the halves are merged per tab for ten minutes, in memory only. A signup form is saved only once its confirmation field agrees with the new password. The pair is written by `bw` on stdin, so no password appears in a process argument list, and Mira holds it in memory only until the prompt is answered.
+
+Before offering, an unlocked vault is asked whether it already holds that account (same host + same username): identical password, nothing happens at all; different password, the bubble offers to UPDATE the existing item rather than adding a second one. No command ever returns a password.
+
+| Command        | Params                                             | Effect / result                                                                                                                                                        |
+| -------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `list-logins`  | `profileId?`, `domain?`                            | the logins in that vault: `{logins:[{id,name,username,hosts}]}` — never the passwords. `domain` keeps the items whose uri is on that host (or a subdomain of it). A locked vault pops the native master-password bubble instead of failing |
+| `save-login`   | `url`, `password`, `username?`, `profileId?`       | write a login straight into the vault. `{id, label, updated}` — `updated:true` means the account was already there and its password was replaced instead of duplicated. Refuses a non-http(s) url or a password under 4 characters |
+| `delete-login` | `id`, `profileId?`                                 | send one login to Bitwarden's trash (soft delete, recoverable). The id must belong to a LOGIN of that vault, so a wrong id cannot take a card down with it              |
+
 ### Form memory (ordinary text fields, offered back)
 
 What was typed into a plain text field is remembered per profile and per site, and offered back the next time the same field is focused, through Chromium's native `<datalist>` popup. This is form history, not a password manager and not card autofill: passwords, one-time codes, captchas, every card field and any value that looks like a card number are refused outright, and there is never a "save this?" question — a value typed once is simply remembered.

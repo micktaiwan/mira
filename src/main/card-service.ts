@@ -37,6 +37,14 @@ import {
 } from './card-vault-store'
 import { validateCapture, cardLabel } from './card'
 
+/** What card-service lends to the login feature. Deliberately narrow: the bw
+ * process wrapper (which holds the unlocked session keys) and the profile →
+ * account lookup. Nothing about cards crosses. */
+export interface VaultAccess {
+  bitwarden: BitwardenService
+  vaultFor: (profileId: string) => CardVault | null
+}
+
 export interface CardServiceDeps {
   userDataDir: string
   /** The window a profile's bubble belongs to, or null when it is closed. */
@@ -75,6 +83,17 @@ export class CardService {
   /** A tab went away / navigated: drop its half-typed card. */
   forgetTab(tabKey: string): void {
     this.capture.forgetTab(tabKey)
+  }
+
+  /** The Bitwarden plumbing a sibling feature reuses (login-service.ts): the SAME
+   * session keys, so one master password typed at a checkout also covers the next
+   * login saved, and the SAME profile → account map, so the wall between the
+   * perso and the pro accounts is ONE wall rather than two that can disagree. */
+  vaultAccess(): VaultAccess {
+    return {
+      bitwarden: this.bitwarden,
+      vaultFor: (profileId) => vaultFor(this.map, profileId)
+    }
   }
 
   // ── command context ──────────────────────────────────────────────────────

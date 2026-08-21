@@ -109,6 +109,7 @@ import {
 } from './theme-store'
 import { CardService } from './card-service'
 import type { FragmentSource } from './card-capture-service'
+import { LoginService } from './login-service'
 import { FormMemoryService } from './form-memory-service'
 import { vaultPlan, needsUnlock, noncePartitionDir } from './vault'
 import { computeDiskUsage } from './disk-usage'
@@ -606,6 +607,7 @@ export class ProfileManager {
   /** The card feature (capture agent, save bubble, Bitwarden CLI). Built lazily
    * so a run that never opens a card-enabled profile pays nothing. */
   private cardService: CardService | null = null
+  private loginService: LoginService | null = null
   private formMemoryService: FormMemoryService | null = null
   /** Per-tab web-page console capture (console.* calls + browser-emitted lines:
    * failed loads, CORS, CSP, uncaught exceptions), tailed off each tab's CDP
@@ -1655,6 +1657,10 @@ export class ProfileManager {
     // Watch this profile's pages for a typed card — a no-op unless the profile is
     // mapped to a Bitwarden account (card-service.ts).
     this.cards.attach(pw.id, this.sessionFor(pw.id), (id) => this.resolveFragmentSource(id))
+    // Same for a typed login: also a no-op unless the profile is mapped to a
+    // Bitwarden account, and the reason a password is never even READ on an
+    // unmapped profile (login-service.ts).
+    this.logins.attach(pw.id, this.sessionFor(pw.id), (id) => this.resolveFragmentSource(id))
     // Same resolver: it answers "which profile does this webContents belong to",
     // which is all form memory needs to keep profiles apart.
     this.formMemory.attach(this.sessionFor(pw.id), (id) => this.resolveFragmentSource(id))
@@ -2876,6 +2882,11 @@ export class ProfileManager {
       // on the already-closed id, and aborts this teardown halfway (tab closed in
       // state but still on screen, webContents leaked).
       pw.views.delete(id)
+      // The page is gone: drop whatever it had half-typed. A card or a login
+      // draft would otherwise sit in memory until its TTL, long after the tab
+      // that held it stopped existing.
+      this.cards.forgetTab(`${pw.id}:${id}`)
+      this.logins.forgetTab(`${pw.id}:${id}`)
       this.deps.extensions.removeTab(view.webContents)
       pw.window.contentView.removeChildView(view)
       view.webContents.close()
@@ -4453,6 +4464,22 @@ export class ProfileManager {
     }))
   }
 
+  /** The login service, built on first use. It BORROWS the card service's
+   * Bitwarden plumbing (session keys + the profile → account map), so the two
+   * features never disagree on which vault a profile writes to and one unlock
+   * covers both. */
+  private get logins(): LoginService {
+    return (this.loginService ??= new LoginService({
+      userDataDir: this.deps.userDataDir,
+      access: this.cards.vaultAccess(),
+      windowFor: (profileId) => this.aWindowForProfile(profileId)?.window ?? null,
+      toast: (profileId, message) => {
+        const pw = this.aWindowForProfile(profileId)
+        if (pw) void showToast(pw, message)
+      }
+    }))
+  }
+
   /** Form memory (ordinary text fields, offered back through a datalist), built
    * on first use. Unlike the card service it needs nothing but a place on disk:
    * every profile remembers its own fields. */
@@ -5471,6 +5498,20 @@ export class ProfileManager {
       listCards: (profileId) => this.cards.listCards(profileId),
       deleteCard: (id, profileId) => this.cards.deleteCard(id, profileId),
       saveCard: (params) => this.cards.saveCard(params),
+      // Logins: username + password typed into a page, saved into the SAME
+      // Bitwarden account the cards go to — see commands/logins.ts.
+      listLogins: (params) =>
+        this.logins.listLogins({
+          ...params,
+          profileId: params.profileId ?? this.contextProfileId(target)
+        }),
+      saveLogin: (params) =>
+        this.logins.saveLogin({
+          ...params,
+          profileId: params.profileId ?? this.contextProfileId(target)
+        }),
+      deleteLogin: (id, profileId) =>
+        this.logins.deleteLogin(id, profileId ?? this.contextProfileId(target)),
       // Form memory: what was typed into ordinary text fields, per profile and
       // per site. Cards never land here — see commands/form-memory.ts.
       listFormMemory: (filter) => this.formMemory.list(filter),

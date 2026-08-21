@@ -33,7 +33,15 @@ import {
   type VaultStatus
 } from './bitwarden'
 import { cardItem } from './bitwarden'
+import {
+  encodeBwItem,
+  loginItem,
+  parseLoginItems,
+  withNewPassword,
+  type VaultLogin
+} from './bitwarden-login'
 import type { ValidatedCard } from './card'
+import type { ValidatedLogin } from './login-capture'
 
 /** A bw invocation that failed, with the reason the UI acts on. */
 export class BitwardenError extends Error {
@@ -136,6 +144,57 @@ export class BitwardenService {
       // `bw list items` returns the WHOLE vault; the type filter is ours.
       const { stdout } = await this.run(['list', 'items'], vault)
       return parseCardItems(stdout)
+    } catch (error) {
+      if (error instanceof BitwardenError && error.reason === 'locked') this.forget(vault)
+      throw error
+    }
+  }
+
+  /** Write a login into the vault as a Bitwarden login item, returning its id.
+   * The password goes in on STDIN like a card number, never in argv. */
+  async saveLogin(vault: CardVault, login: ValidatedLogin, now: Date): Promise<string | null> {
+    const session = this.sessions.get(vault.appDataDir)
+    if (!session) throw new BitwardenError('locked', 'vault is locked')
+    const encoded = encodeBwItem(loginItem(login, now))
+    try {
+      const { stdout } = await this.run(['create', 'item'], { vault, session, stdin: encoded })
+      return parseCreatedId(stdout)
+    } catch (error) {
+      if (error instanceof BitwardenError && error.reason === 'locked') this.forget(vault)
+      throw error
+    }
+  }
+
+  /** Replace an existing login's password, carrying every other field of the item
+   * through untouched (`bw edit item` replaces the WHOLE item, so a partial
+   * payload would silently drop its uris, notes and custom fields). */
+  async updateLogin(vault: CardVault, existing: VaultLogin, password: string): Promise<void> {
+    const session = this.sessions.get(vault.appDataDir)
+    if (!session) throw new BitwardenError('locked', 'vault is locked')
+    if (!existing.id) throw new BitwardenError('failed', 'vault item has no id')
+    const encoded = encodeBwItem(withNewPassword(existing, password))
+    try {
+      // The id is a UUID, not a secret, so argv is fine; the password is on stdin.
+      await this.run(['edit', 'item', existing.id], { vault, session, stdin: encoded })
+    } catch (error) {
+      if (error instanceof BitwardenError && error.reason === 'locked') this.forget(vault)
+      throw error
+    }
+  }
+
+  /** Every LOGIN in the vault, WITH its password: this feeds the "is this account
+   * already saved, under the same password or another one?" decision, and it is
+   * the caller's job to redact before anything leaves the main process
+   * (redactLogins in bitwarden-login.ts). Throws BitwardenError('locked') when
+   * there is no session key yet. */
+  async listLogins(vault: CardVault): Promise<VaultLogin[]> {
+    if (!this.sessions.has(vault.appDataDir)) {
+      throw new BitwardenError('locked', 'vault is locked')
+    }
+    try {
+      // `bw list items` returns the WHOLE vault; the type filter is ours.
+      const { stdout } = await this.run(['list', 'items'], vault)
+      return parseLoginItems(stdout)
     } catch (error) {
       if (error instanceof BitwardenError && error.reason === 'locked') this.forget(vault)
       throw error

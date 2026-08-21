@@ -29,6 +29,7 @@ import { folderMenuCommands } from './folder-menu'
 import { forgetCommands } from './forget'
 import { formMemoryCommands } from './form-memory'
 import { historyCommands } from './history'
+import { loginsCommands } from './logins'
 import { inputCommands } from './input'
 import { magnifierCommands } from './magnifier'
 import { mediaCommands } from './media'
@@ -102,6 +103,7 @@ export type { PopoutBounds } from './extensions'
 export type { FindContext, FindStopAction } from './find'
 export type { FolderMenuContext } from './folder-menu'
 export type { HistoryContext } from './history'
+export type { LoginsContext, LoginInfo } from './logins'
 export type { HistoryEntry } from '../history-store'
 export type { InputContext, PressKeyParams } from './input'
 export type { MagnifierContext } from './magnifier'
@@ -189,6 +191,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...folderMenuCommands,
     ...forgetCommands,
     ...historyCommands,
+    ...loginsCommands,
     ...inputCommands,
     ...magnifierCommands,
     ...mediaCommands,
