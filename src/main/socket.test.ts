@@ -254,6 +254,13 @@ function setup(): {
     listCards: async () => ({ profileId: 'default', cards: [] }),
     deleteCard: async (_id: string) => ({ profileId: 'default', name: 'Visa 4242' }),
     saveCard: async () => ({ id: 'item-1', label: 'Visa 4242' }),
+    listLogins: async () => ({ profileId: 'default', logins: [] }),
+    saveLogin: async () => ({
+      id: 'login-1',
+      label: 'me@example.com on example.com',
+      updated: false
+    }),
+    deleteLogin: async (_id: string) => ({ profileId: 'default', name: 'example.com' }),
     listFormMemory: () => [],
     forgetFormMemory: () => ({ profileId: 'default', removed: 0 }),
     rememberFormValue: () => ({

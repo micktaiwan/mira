@@ -96,20 +96,10 @@ export function promptBounds(
   return { x, y, width: size.width, height: size.height }
 }
 
-/** The bubble's document. Self-contained (inline CSS + one script), dark like the
- * rest of Mira's overlays. Pure. */
-export function renderCardPromptHtml(req: CardPromptRequest): string {
-  const where = req.host ? ` on ${escapeHtml(req.host)}` : ''
-  const unlocking = req.mode === 'unlock' || req.mode === 'unlock-vault'
-  const vaultOnly = req.mode === 'unlock-vault'
-  const title = vaultOnly ? 'Unlock the Bitwarden vault?' : 'Save this card to Bitwarden?'
-  const subject = vaultOnly
-    ? ''
-    : `<p class="line"><span class="brand">${escapeHtml(req.cardLabel)}</span>${where}</p>`
-  const confirm = vaultOnly ? 'Unlock' : unlocking ? 'Unlock and save' : 'Save'
-  return `<!doctype html>
-<html><head><meta charset="utf-8"><style>
-  html, body { margin: 0; background: transparent; overflow: hidden; }
+/** The bubble's stylesheet, shared by every prompt Mira draws in a child window
+ * (the card one below, the login one in login-prompt.ts). Exported so a second
+ * bubble does not mean a second copy of the same dark overlay CSS. */
+export const PROMPT_CSS = `  html, body { margin: 0; background: transparent; overflow: hidden; }
   body {
     padding: 10px;
     font: 13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -151,7 +141,65 @@ export function renderCardPromptHtml(req: CardPromptRequest): string {
   }
   button.primary { background: #6988e6; border-color: #6988e6; color: #10131a; font-weight: 600; }
   button:hover { border-color: #6988e6; }
-</style></head>
+`
+
+/** The bubble's inline script, shared the same way. It implements ONE contract:
+ * the window never closes on click — it switches to a progress line (main keeps
+ * updating it through miraCardBusy while `bw` works) and main closes it when the
+ * vault work is really done. `savingLabel` is what that line says once the user
+ * has said yes. Pure. */
+export function promptScript(savingLabel: string): string {
+  return `
+    let done = false;
+    const busyEl = document.getElementById('busy');
+    const row = document.getElementById('row');
+    window.miraCardBusy = (label) => {
+      busyEl.textContent = label;
+      busyEl.hidden = false;
+      row.hidden = true;
+      const pwEl = document.getElementById('pw');
+      if (pwEl) pwEl.disabled = true;
+    };
+    const answer = (payload) => {
+      if (done) return;
+      done = true;
+      if (payload) {
+        window.miraCardBusy(
+          payload.action === 'unlock' ? 'Unlocking the vault…' : ${JSON.stringify(savingLabel)}
+        );
+      }
+      window.miraCardPrompt.answer(JSON.stringify(payload));
+    };
+    const pw = document.getElementById('pw');
+    document.getElementById('no').addEventListener('click', () => answer(null));
+    document.getElementById('yes').addEventListener('click', () => {
+      if (pw) answer({ action: 'unlock', password: pw.value });
+      else answer({ action: 'save' });
+    });
+    if (pw) {
+      pw.focus();
+      pw.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') answer({ action: 'unlock', password: pw.value });
+      });
+    }
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') answer(null); });
+  `
+}
+
+/** The bubble's document. Self-contained (inline CSS + one script), dark like the
+ * rest of Mira's overlays. Pure. */
+export function renderCardPromptHtml(req: CardPromptRequest): string {
+  const where = req.host ? ` on ${escapeHtml(req.host)}` : ''
+  const unlocking = req.mode === 'unlock' || req.mode === 'unlock-vault'
+  const vaultOnly = req.mode === 'unlock-vault'
+  const title = vaultOnly ? 'Unlock the Bitwarden vault?' : 'Save this card to Bitwarden?'
+  const subject = vaultOnly
+    ? ''
+    : `<p class="line"><span class="brand">${escapeHtml(req.cardLabel)}</span>${where}</p>`
+  const confirm = vaultOnly ? 'Unlock' : unlocking ? 'Unlock and save' : 'Save'
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><style>
+${PROMPT_CSS}</style></head>
 <body>
   <div class="card">
     <h1>${title}</h1>
@@ -170,39 +218,7 @@ export function renderCardPromptHtml(req: CardPromptRequest): string {
     // the server, several seconds. So the bubble does NOT vanish on click — it
     // switches to a progress line (set here immediately, then updated by main
     // through miraCardBusy) and closes only once the card is really saved.
-    let done = false;
-    const busyEl = document.getElementById('busy');
-    const row = document.getElementById('row');
-    window.miraCardBusy = (label) => {
-      busyEl.textContent = label;
-      busyEl.hidden = false;
-      row.hidden = true;
-      const pwEl = document.getElementById('pw');
-      if (pwEl) pwEl.disabled = true;
-    };
-    const answer = (payload) => {
-      if (done) return;
-      done = true;
-      if (payload) {
-        window.miraCardBusy(
-          payload.action === 'unlock' ? 'Unlocking the vault…' : 'Saving the card…'
-        );
-      }
-      window.miraCardPrompt.answer(JSON.stringify(payload));
-    };
-    const pw = document.getElementById('pw');
-    document.getElementById('no').addEventListener('click', () => answer(null));
-    document.getElementById('yes').addEventListener('click', () => {
-      if (pw) answer({ action: 'unlock', password: pw.value });
-      else answer({ action: 'save' });
-    });
-    if (pw) {
-      pw.focus();
-      pw.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') answer({ action: 'unlock', password: pw.value });
-      });
-    }
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') answer(null); });
+${promptScript('Saving the card…')}
   </script>
 </body></html>`
 }
@@ -237,14 +253,32 @@ export interface CardPromptOptions {
   raise?: boolean
 }
 
-/** Show the bubble and resolve with the answer (null = not now / closed). The
- * only impure function here.
- *
- * showInactive keeps the keyboard focus in the checkout field: the bubble appears
- * beside what you are doing instead of stealing the caret, and only takes focus
- * if you actually click it. */
+/** Show the card bubble and resolve with the answer (null = not now / closed). */
 export function showCardPrompt(req: CardPromptRequest, opts: CardPromptOptions): CardPromptHandle {
-  const size = promptSize(req.mode)
+  return showPromptWindow(renderCardPromptHtml(req), promptSize(req.mode), {
+    ...opts,
+    // A password box is useless without the caret in it.
+    focus: req.mode !== 'save',
+    label: `card:${req.mode}`
+  })
+}
+
+/** Show ANY of Mira's vault bubbles: it owns the child window, the reveal, the
+ * answer promise and the progress line, and knows nothing about what is being
+ * saved. The card bubble above and the login bubble (login-prompt.ts) are the
+ * two callers — same window contract, different document.
+ *
+ * The only impure function here.
+ *
+ * showInactive keeps the keyboard focus in the page: the bubble appears beside
+ * what you are doing instead of stealing the caret, and takes focus only when it
+ * has a field to type in (`focus`) or when it answers a command run from outside
+ * Mira (`raise`). */
+export function showPromptWindow(
+  html: string,
+  size: { width: number; height: number },
+  opts: CardPromptOptions & { focus?: boolean; label?: string }
+): CardPromptHandle {
   const win = new BrowserWindow({
     parent: opts.parent,
     ...size,
@@ -294,7 +328,7 @@ export function showCardPrompt(req: CardPromptRequest, opts: CardPromptOptions):
     const reveal = (via: string): void => {
       if (shown || win.isDestroyed()) return
       shown = true
-      console.log(`[mira-card] prompt reveal via ${via} mode=${req.mode} raise=${!!opts.raise}`)
+      console.log(`[mira-card] prompt reveal via ${via} ${opts.label ?? ''} raise=${!!opts.raise}`)
       if (opts.raise && !opts.parent.isDestroyed()) {
         // Surface the whole stack: the parent first (a child window cannot be
         // seen in front of a hidden parent), then the bubble.
@@ -303,15 +337,15 @@ export function showCardPrompt(req: CardPromptRequest, opts: CardPromptOptions):
       }
       // Inactive: the caret stays in the payment form the user is still filling.
       win.showInactive()
-      // The password field is useless without focus, so those modes do take it.
-      if (opts.raise || req.mode === 'unlock' || req.mode === 'unlock-vault') win.focus()
+      // A bubble with a field to type in has to take the caret.
+      if (opts.raise || opts.focus) win.focus()
       console.log(
         `[mira-card] prompt visible=${win.isVisible()} bounds=${JSON.stringify(win.getBounds())}`
       )
     }
     win.webContents.once('did-finish-load', () => reveal('did-finish-load'))
     win.once('ready-to-show', () => reveal('ready-to-show'))
-    win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(renderCardPromptHtml(req))}`)
+    win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
   }
 
   return {

@@ -15,6 +15,7 @@ import type {
 } from '.'
 import { buildTabMemoryReport, selectServiceWorkerLogs } from '.'
 import { cardLabel, validateCapture } from '../card'
+import { loginItemName, loginLabel, validateLogin } from '../login-capture'
 import {
   fieldKey,
   forgetEntries,
@@ -453,6 +454,18 @@ export function makeContext(
   const cardVaults = new Map<string, { appDataDir: string; email?: string }>()
   const unlockedCardVaults = new Set<string>()
   const savedCards: Array<{ profileId: string; number: string; expiry: string }> = []
+  // The fake login vault: same shape as a Bitwarden login item, keyed by the
+  // profile whose vault it belongs to. It enforces the ONE rule the real vault
+  // enforces — an account (host + username) exists once and is updated, never
+  // duplicated — so the command tests exercise that rule and not a stub.
+  const savedLogins: Array<{
+    profileId: string
+    id: string
+    name: string
+    username: string
+    password: string
+    host: string
+  }> = []
   let formMemory: FormMemory = {}
   const ctx: CommandContext = {
     focusApp: () => {
@@ -1385,6 +1398,70 @@ export function makeContext(
       if (!card) throw new Error('not a valid, unexpired card')
       savedCards.push({ profileId, number: card.number, expiry: params.expiry })
       return { id: `item-${savedCards.length}`, label: cardLabel(card.brand, card.number) }
+    },
+    // Logins: the same vault gate as the cards above (mapped profile + unlocked),
+    // over the fake login store.
+    listLogins: async (params: { profileId?: string; domain?: string }) => {
+      const id = params.profileId ?? state.focused ?? 'default'
+      if (!cardVaults.has(id)) throw new Error(`no card vault for profile: ${id}`)
+      if (!unlockedCardVaults.has(id)) throw new Error('vault is locked')
+      const host = (params.domain ?? '').trim().toLowerCase()
+      return {
+        profileId: id,
+        logins: savedLogins
+          .filter((l) => l.profileId === id)
+          .filter((l) => !host || l.host === host || l.host.endsWith(`.${host}`))
+          .map((l) => ({ id: l.id, name: l.name, username: l.username, hosts: [l.host] }))
+      }
+    },
+    saveLogin: async (params: {
+      profileId?: string
+      url: string
+      username?: string
+      password: string
+    }) => {
+      const profileId = params.profileId ?? state.focused ?? 'default'
+      if (!cardVaults.has(profileId)) throw new Error(`no card vault for profile: ${profileId}`)
+      if (!unlockedCardVaults.has(profileId)) throw new Error('vault is locked')
+      const login = validateLogin({
+        username: (params.username ?? '').trim(),
+        password: params.password,
+        kind: 'current',
+        usernameExpected: false,
+        url: params.url,
+        updatedAt: Date.now()
+      })
+      if (!login) throw new Error('not a valid login (needs an http(s) url and a real password)')
+      const existing = savedLogins.find(
+        (l) =>
+          l.profileId === profileId &&
+          l.host === login.host &&
+          l.username.toLowerCase() === login.username.toLowerCase()
+      )
+      if (existing) {
+        const updated = existing.password !== login.password
+        existing.password = login.password
+        return { id: existing.id, label: loginLabel(login), updated }
+      }
+      const id = `login-${savedLogins.length + 1}`
+      savedLogins.push({
+        profileId,
+        id,
+        name: loginItemName(login.host),
+        username: login.username,
+        password: login.password,
+        host: login.host
+      })
+      return { id, label: loginLabel(login), updated: false }
+    },
+    deleteLogin: async (id: string, profileId?: string) => {
+      const pid = profileId ?? state.focused ?? 'default'
+      if (!cardVaults.has(pid)) throw new Error(`no card vault for profile: ${pid}`)
+      if (!unlockedCardVaults.has(pid)) throw new Error('vault is locked')
+      const index = savedLogins.findIndex((l) => l.profileId === pid && l.id === id)
+      if (index === -1) throw new Error(`no login with id ${id} in this vault`)
+      const [removed] = savedLogins.splice(index, 1)
+      return { profileId: pid, name: removed.name }
     },
     // Form memory: the real pure store (form-memory.ts), held in a local object.
     // No Electron, no disk — the rules under test are the same ones the page
