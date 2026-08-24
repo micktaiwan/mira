@@ -31,13 +31,24 @@ export interface NavigateParams {
    * palette sets this: a page pick opens a new tab in launcher mode (Cmd+K) and
    * on Cmd+Enter from the URL bar. The url is normalized either way. */
   newTab?: boolean
+  /** With `newTab`, open it HIDDEN: the window does not even switch to it, so a
+   * script can load a page without anything changing on screen. Same flag as
+   * `new-tab` — it exists here so `navigate {newTab:true}` (what `mira open`
+   * sends) can reach it too. No effect on an in-place navigation.
+   *
+   * Note this is only about the TAB: no socket/MCP command ever brings Mira to
+   * the foreground any more, background or not (see foreground-policy.ts). */
+  background?: boolean
 }
 
 export const navigationCommands: CommandMap<CommandContext> = {
   navigate: (ctx, params) => {
-    const { url, newTab } = (params ?? {}) as Partial<NavigateParams>
+    const { url, newTab, background } = (params ?? {}) as Partial<NavigateParams>
     if (newTab !== undefined && typeof newTab !== 'boolean') {
       return { ok: false, error: '"newTab" must be a boolean' }
+    }
+    if (background !== undefined && typeof background !== 'boolean') {
+      return { ok: false, error: '"background" must be a boolean' }
     }
     // Internal pages first: chrome://extensions & co open the Settings surface
     // on the right section instead of turning into a Google search or a load
@@ -70,6 +81,11 @@ export const navigationCommands: CommandMap<CommandContext> = {
         t.kind === 'web' && sameUrl(t.url, normalized) && (newTab === true || t.id !== activeId)
     )
     if (existing) {
+      // background:true means "change nothing on screen": hand back the tab that
+      // already shows this url without switching the window onto it.
+      if (background === true) {
+        return { ok: true, url: normalized, id: existing.id, focused: false }
+      }
       try {
         ctx.selectTab(existing.id)
         return { ok: true, url: normalized, id: existing.id, focused: true }
@@ -79,7 +95,7 @@ export const navigationCommands: CommandMap<CommandContext> = {
     }
     if (newTab === true || activeId === null || active?.kind === 'settings') {
       try {
-        const tab = ctx.newTab(normalized)
+        const tab = ctx.newTab(normalized, background === true)
         return { ok: true, url: normalized, id: tab.id }
       } catch (error) {
         return fail(error)

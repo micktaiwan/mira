@@ -82,6 +82,8 @@ import {
 } from './download-doc'
 import { setActivationSuppressed } from './mac-activation'
 import { shouldSuppressActivation, type NavKind } from './activation-policy'
+import { mayForeground, type CommandOrigin } from './foreground-policy'
+import { isLiveContents } from './live-contents'
 import { type LlmConfig, type ChatMessage, type PageContext } from './llm'
 import { LlmRunner } from './llm-runner'
 import { type BookmarkTree } from './bookmark-store'
@@ -977,12 +979,19 @@ export class ProfileManager {
    * has a window open. A profile may have several windows (a tear-off); this focuses
    * one and never opens a second. When none are open it creates one, restoring the
    * profile's primary saved window (its first entry) so the user lands where they
-   * left off. */
-  openProfile(id: string): { id: string; created: boolean } {
+   * left off.
+   *
+   * `raise` (default true, the UI path) decides whether the window is actually
+   * brought forward. A socket/MCP caller passes false: the profile still opens
+   * and becomes the target of subsequent commands, but Mira stays behind whatever
+   * the user is working in (see foreground-policy.ts). */
+  openProfile(id: string, raise = true): { id: string; created: boolean } {
     const existing = this.aWindowForProfile(id)
     if (existing && !existing.window.isDestroyed()) {
+      // A minimized window must be restored even without a raise, or the caller's
+      // next command would drive a window that is not on screen at all.
       if (existing.window.isMinimized()) existing.window.restore()
-      existing.window.focus()
+      if (raise) existing.window.focus()
       // Record the focus target SYNCHRONOUSLY. window.focus() only fires the OS
       // 'focus' event asynchronously (and not at all when Mira is a background
       // app), so a scripted `open-profile` then `open-url` would otherwise still
@@ -1001,7 +1010,13 @@ export class ProfileManager {
     // Restore the profile's primary (first-known) saved window, or a fresh home tab
     // if it has never been open.
     const primary = this.savedWindows(id)[0]
-    this.create(profile, primary ? { saved: primary, content: 'restore' } : { content: 'home' })
+    this.create(profile, {
+      ...(primary ? { saved: primary, content: 'restore' as const } : { content: 'home' as const }),
+      // Same rule for a window that has to be CREATED: a scripted open-profile
+      // shows it without activating the app (showInactive), so it never steals
+      // the keyboard from the editor.
+      inactive: !raise
+    })
     this.deps.onChange?.()
     return { id, created: true }
   }
@@ -1032,8 +1047,13 @@ export class ProfileManager {
    * browser) in a new tab. Targets the focused window, else the LAST focused
    * profile window, else any open one; if Mira was launched by the click and has
    * no window yet, opens the default profile first. The tab takes page focus (not
-   * the address bar) — the user asked for this page, not to type one. */
-  openUrl(url: string, profileId?: string): void {
+   * the address bar) — the user asked for this page, not to type one.
+   *
+   * `raise` (default true) is what the OS handoff wants: the user clicked a link
+   * in another app and expects the browser to come forward. The socket/MCP
+   * `open-url` command passes false — a script opening a page must not yank Mira
+   * in front of the user (see foreground-policy.ts). */
+  openUrl(url: string, profileId?: string, raise = true): void {
     const trimmed = url.trim()
     if (!trimmed) return
     let target: ProfileWindow | null
@@ -1042,7 +1062,7 @@ export class ProfileManager {
       // it is closed (throws on an unknown/locked id), then aim at its window.
       // Deterministic — no dependency on the flaky OS focus state, which the
       // last-focused fallback below can't control when Mira is a background app.
-      this.openProfile(profileId)
+      this.openProfile(profileId, raise)
       target = this.aWindowForProfile(profileId)
     } else {
       // A link/file opened from ANOTHER app (a terminal `open foo.html`, a chat
@@ -1056,14 +1076,16 @@ export class ProfileManager {
         null
     }
     if (!target || target.window.isDestroyed()) {
-      this.openProfile(DEFAULT_PROFILE_ID)
+      this.openProfile(DEFAULT_PROFILE_ID, raise)
       target =
         this.aWindowForProfile(DEFAULT_PROFILE_ID) ?? this.openById.values().next().value ?? null
     }
     if (!target || target.window.isDestroyed()) return
     this.newTabIn(target, trimmed, false)
-    // Opening a URL is an explicit foreground request (default-browser handoff,
-    // socket open): clear any suppression tail so the raise below is not swallowed.
+    if (!raise) return
+    // The OS handoff IS an explicit foreground request (the user clicked a link
+    // in another app): clear any suppression tail so the raise below is not
+    // swallowed. A scripted open-url returned above and never gets here.
     this.endActivationSuppression()
     if (target.window.isMinimized()) target.window.restore()
     target.window.show()
@@ -1209,6 +1231,9 @@ export class ProfileManager {
       saved?: PersistedWindow
       bounds?: PersistedBounds
       content?: 'restore' | 'home' | 'empty'
+      /** Show the window WITHOUT activating the app (showInactive). Set when the
+       * window is created by a scripted command — see foreground-policy.ts. */
+      inactive?: boolean
     } = {}
   ): ProfileWindow {
     const content = opts.content ?? (opts.saved ? 'restore' : 'home')
@@ -1370,7 +1395,10 @@ export class ProfileManager {
     // move — especially of a maximized window, whose close-time getNormalBounds
     // is a stale rectangle on the OLD display — was lost across sessions.
     window.on('moved', () => this.saveSession(profileWindow))
-    window.on('ready-to-show', () => window.show())
+    // showInactive orders the window in without activating the app: a window born
+    // of a scripted command appears where it belongs but never takes the keyboard
+    // away from what the user is doing (foreground-policy.ts).
+    window.on('ready-to-show', () => (opts.inactive ? window.showInactive() : window.show()))
     // Track focus so the menu's active-profile checkmark stays in sync — but only
     // rebuild when focus moves to a DIFFERENT profile (skip plain re-focus).
     // Leaving Mira (for Kova, Slack, anything) is as much a fact for a focus
@@ -2505,6 +2533,15 @@ export class ProfileManager {
       const pw = owner()
       if (pw.htmlFullScreen?.tabId === tabId) this.leaveHtmlFullScreenIn(pw)
       this.downloadDocSource.delete(tabId)
+      // Drop the dead view from the map. The close/discard paths already delete
+      // it, but a view can die on its own (renderer crash, a view torn down
+      // underneath us): leaving it behind marked the tab "loaded" while every
+      // page-bound command on it failed — and any live read of its webContents
+      // was a crash waiting for the next push (see liveContents).
+      const view = pw.views.get(tabId)
+      // Only drop OUR dead view: a tear-off or a re-materialize may already have
+      // put a LIVE view under this id, and that one must stay.
+      if (view && !isLiveContents(view.webContents)) pw.views.delete(tabId)
     })
   }
 
@@ -2661,6 +2698,20 @@ export class ProfileManager {
   /** The tab strip augmented with each tab's lazy-load state (loaded vs asleep),
    * which lives natively — whether a WebContentsView exists — not in the metadata
    * (see materializeTab). The active tab is always loaded. */
+  /** A tab's webContents ONLY if it is still alive. `pw.views` can hold a view
+   * whose webContents is already gone: Electron nulls `view.webContents` once the
+   * WebContents is destroyed, and a view can die without us removing it (a
+   * renderer crash, or a transient view the extension layer tears down). Reading
+   * `view.webContents.<anything>` then threw `Cannot read properties of undefined`
+   * from inside a debounced pushTabs timer — an UNCAUGHT exception in main, i.e.
+   * the whole browser down. Vérifié le 2026-08-24 16:43 : crash de Mira sur cette
+   * ligne exacte (`isCurrentlyAudible`), 2.7 s après un webContents détruit par un
+   * flux OAuth. Every live read of a view's webContents goes through here. */
+  private liveContents(pw: ProfileWindow, tabId: string): WebContents | null {
+    const wc = pw.views.get(tabId)?.webContents
+    return isLiveContents(wc) ? wc : null
+  }
+
   private tabInfos(pw: ProfileWindow): TabInfo[] {
     return pw.state.tabs.map((t) => ({
       ...t,
@@ -2672,11 +2723,11 @@ export class ProfileManager {
       // Live audio state read straight from the native view (like `loaded` from
       // pw.views): true while the page emits sound. An asleep tab has no view, so
       // it is never audible. Refreshed by the audio-state-changed push (wireView).
-      audible: pw.views.get(t.id)?.webContents.isCurrentlyAudible() === true,
+      audible: this.liveContents(pw, t.id)?.isCurrentlyAudible() === true,
       // Live loading state, same source: true while the main frame is fetching a
       // page. Drives the toolbar reload spinner. An asleep tab has no view, so it
       // is never loading. Refreshed by the did-start/did-stop-loading push.
-      loading: pw.views.get(t.id)?.webContents.isLoadingMainFrame() === true
+      loading: this.liveContents(pw, t.id)?.isLoadingMainFrame() === true
     }))
   }
 
@@ -3036,7 +3087,8 @@ export class ProfileManager {
   private async detachTabTo(
     source: ProfileWindow,
     tabId: string,
-    point?: { x: number; y: number }
+    point?: { x: number; y: number },
+    raise = false
   ): Promise<{ windowId: string; created: boolean }> {
     const tab = source.state.tabs.find((t) => t.id === tabId)
     if (!tab) throw new Error(`unknown tab: ${tabId}`)
@@ -3069,7 +3121,11 @@ export class ProfileManager {
       }
       const profile = findById(this.profiles, source.id)
       if (!profile) throw new Error(`unknown profile: ${source.id}`)
-      target = this.create(profile, { bounds: this.detachBounds(source, point), content: 'empty' })
+      target = this.create(profile, {
+        bounds: this.detachBounds(source, point),
+        content: 'empty',
+        inactive: !raise
+      })
       created = true
       // Wait for the fresh window's chrome + extensions to be ready before driving it.
       await target.ready
@@ -3083,10 +3139,17 @@ export class ProfileManager {
     // main instead. Best-effort: a failed hit-test just appends.
     const insertion = !created && point ? await this.hitTestTabDrop(target, point) : undefined
     this.attachTab(source, target, tabId, insertion)
+    // A drag-and-drop tear-off ends with the new window under the cursor and
+    // focused; a scripted detach must not pull the app forward, so it only makes
+    // sure the window is on screen (foreground-policy.ts).
     if (!target.window.isDestroyed()) {
       if (target.window.isMinimized()) target.window.restore()
-      target.window.show()
-      target.window.focus()
+      if (raise) {
+        target.window.show()
+        target.window.focus()
+      } else if (!target.window.isVisible()) {
+        target.window.showInactive()
+      }
     }
     return { windowId: target.windowId, created }
   }
@@ -3247,8 +3310,14 @@ export class ProfileManager {
   }
 
   /** Move a tab into a specific existing window (both must be the same profile) —
-   * the deterministic, pilotable counterpart to the drag-driven detachTabTo. */
-  private moveTabToWindowById(tabId: string, targetWindowId: string): { windowId: string } {
+   * the deterministic, pilotable counterpart to the drag-driven detachTabTo.
+   * `raise` (the UI drop) focuses the destination window; a scripted move leaves
+   * the foreground alone (foreground-policy.ts). */
+  private moveTabToWindowById(
+    tabId: string,
+    targetWindowId: string,
+    raise = false
+  ): { windowId: string } {
     const src = this.ownerOf(tabId)
     if (!src) throw new Error(`unknown tab: ${tabId}`)
     if (tabId === src.settingsTabId) throw new Error('cannot move the Settings tab')
@@ -3257,27 +3326,33 @@ export class ProfileManager {
     if (dst === src) return { windowId: targetWindowId }
     if (dst.id !== src.id) throw new Error('cannot move a tab to a window of another profile')
     this.attachTab(src, dst, tabId)
-    if (!dst.window.isDestroyed()) dst.window.focus()
+    if (raise && !dst.window.isDestroyed()) dst.window.focus()
     return { windowId: targetWindowId }
   }
 
-  /** Make `tabId` the visible/active tab in its own window, and bring that window
-   * forward — wherever the tab lives. The cross-window counterpart to selectTabIn
-   * (which only acts on the focused window's context). Real-input commands need
-   * this first: Chromium drops input on a hidden tab. Throws on an unknown tab. */
-  private activateTabById(tabId: string): { windowId: string; id: string } {
+  /** Make `tabId` the visible/active tab in its own window — wherever the tab
+   * lives. The cross-window counterpart to selectTabIn (which only acts on the
+   * focused window's context). Real-input commands need this first: Chromium drops
+   * input on a hidden tab. Throws on an unknown tab.
+   *
+   * `raise` decides whether the window is also brought forward. Default false:
+   * selecting a tab makes it the live one inside its window, which is all a script
+   * needs, and the user keeps their foreground app (foreground-policy.ts). The UI
+   * path passes true. */
+  private activateTabById(tabId: string, raise = false): { windowId: string; id: string } {
     const pw = this.ownerOf(tabId)
     if (!pw) throw new Error(`unknown tab: ${tabId}`)
-    // An explicit request to foreground this tab: cancel any activation
-    // suppression tail first, or the native swizzle would swallow the show/focus
-    // below if a background reload happened to arm it in the last 500 ms.
-    this.endActivationSuppression()
-    // show()+focus() so the OS raises the window (and macOS un-minimizes it),
-    // then select the tab so it becomes the visible WebContentsView.
-    if (!pw.window.isDestroyed()) {
+    if (raise && !pw.window.isDestroyed()) {
+      // An explicit request to foreground this tab: cancel any activation
+      // suppression tail first, or the native swizzle would swallow the show/focus
+      // below if a background reload happened to arm it in the last 500 ms.
+      this.endActivationSuppression()
+      // show()+focus() so the OS raises the window (and macOS un-minimizes it).
       pw.window.show()
       pw.window.focus()
     }
+    // Select the tab so it becomes the visible WebContentsView of its window —
+    // with or without the raise above.
     this.selectTabIn(pw, tabId)
     return { windowId: pw.windowId, id: tabId }
   }
@@ -3293,10 +3368,18 @@ export class ProfileManager {
     }
   }
 
-  /** Ensure `wc`'s tab is visible so real input (press-key) can land. If already
-   * visible, a no-op. Otherwise activate its tab (raise the window + select it),
-   * then poll until the page reports visible (layout + compositor need a beat).
-   * Returns whether it became visible within the budget. */
+  /** Ensure `wc`'s tab is visible so real input (press-key) can land — Chromium
+   * silently drops a key sent to a hidden page. If already visible, a no-op.
+   *
+   * The escalation is deliberately focus-free, because press-key is a scripting
+   * command and a script must not steal the foreground (foreground-policy.ts):
+   *   1. select the tab in its own window — no raise, no activation;
+   *   2. still hidden? the window is minimized or fully covered by another app's
+   *      window (macOS occlusion marks the page hidden). restore + showInactive +
+   *      moveTop put it back on screen and on top of the z-order WITHOUT
+   *      activating Mira: the keyboard stays where the user left it.
+   * Returns whether the page reported visible within the budget; the caller turns
+   * a false into an error rather than a silent no-op keypress. */
   private async ensurePageVisibleForInput(wc: WebContents, id?: string): Promise<boolean> {
     if (await this.isPageVisible(wc)) return true
     if (id) {
@@ -3306,7 +3389,21 @@ export class ProfileManager {
         // Unknown/asleep tab: fall through to the poll, which will fail cleanly.
       }
     }
-    for (let i = 0; i < 20; i++) {
+    if (await this.pollPageVisible(wc, 10)) return true
+    // Second try: put the window back on screen, still without activating the app.
+    const pw = id ? this.ownerOf(id) : null
+    if (pw && !pw.window.isDestroyed()) {
+      if (pw.window.isMinimized()) pw.window.restore()
+      if (!pw.window.isVisible()) pw.window.showInactive()
+      pw.window.moveTop()
+    }
+    return this.pollPageVisible(wc, 10)
+  }
+
+  /** Poll `isPageVisible` up to `tries` times, 50 ms apart (layout + compositor
+   * need a beat after a tab switch or a window reorder). */
+  private async pollPageVisible(wc: WebContents, tries: number): Promise<boolean> {
+    for (let i = 0; i < tries; i++) {
       if (await this.isPageVisible(wc)) return true
       await new Promise((resolve) => setTimeout(resolve, 50))
     }
@@ -3687,7 +3784,7 @@ export class ProfileManager {
     // session snapshot (tab count, memory) is current. A first-time materialize
     // (wasLoaded false) already loaded a fresh home, so skip the reload then.
     if (wasLoaded && tab.url === '' && id !== pw.settingsTabId) {
-      pw.views.get(id)?.webContents.loadURL(this.blankPageUrl(pw))
+      this.liveContents(pw, id)?.loadURL(this.blankPageUrl(pw))
     }
     this.notifyExtensionsActiveTab(pw)
     this.layout(pw)
@@ -3991,7 +4088,7 @@ export class ProfileManager {
     if (pw.window.isDestroyed()) return
     const chrome = pw.window.webContents
     const audible = pw.state.tabs.filter(
-      (t) => pw.views.get(t.id)?.webContents.isCurrentlyAudible() === true
+      (t) => this.liveContents(pw, t.id)?.isCurrentlyAudible() === true
     )
     const items = buildAudioMenu(audible.map((t) => ({ id: t.id, title: t.title, url: t.url })))
     const template = items.map((item) => this.audioMenuItemToTemplate(item, chrome))
@@ -4589,19 +4686,22 @@ export class ProfileManager {
     else delete this.sessions[pw.id]
   }
 
-  /** Context bound to the window that owns `sender` (the chrome that sent IPC). */
+  /** Context bound to the window that owns `sender` (the chrome that sent IPC).
+   * Origin 'ui': the user is in Mira, so a command may foreground it. */
   contextForChrome(sender: WebContents): CommandContext {
-    return this.makeContext(this.findByWindow(BrowserWindow.fromWebContents(sender)))
+    return this.makeContext(this.findByWindow(BrowserWindow.fromWebContents(sender)), 'ui')
   }
 
   /** Context bound to the focused window (external socket/MCP). Falls back to
-   * any open window so a request still lands somewhere sensible. */
+   * any open window so a request still lands somewhere sensible. Origin
+   * 'external': the user is working in another app, so nothing here may pull Mira
+   * in front of them (foreground-policy.ts). */
   contextForFocused(): CommandContext {
     const target =
       this.findByWindow(BrowserWindow.getFocusedWindow()) ??
       this.openById.values().next().value ??
       null
-    return this.makeContext(target)
+    return this.makeContext(target, 'external')
   }
 
   /** The app-wide tracing session, created on first use so `this.deps` is set.
@@ -4668,7 +4768,12 @@ export class ProfileManager {
     return target && !target.window.isDestroyed() ? target.id : DEFAULT_PROFILE_ID
   }
 
-  private makeContext(target: ProfileWindow | null): CommandContext {
+  private makeContext(target: ProfileWindow | null, origin: CommandOrigin): CommandContext {
+    // Whether a command built on THIS context may raise/activate the app. False
+    // for every socket/MCP/agent call: Mira must never jump in front of the user
+    // because a script opened a tab (foreground-policy.ts). `focus-app` is the
+    // one command that foregrounds whatever the origin — it is the explicit ask.
+    const raiseAllowed = mayForeground(origin)
     // The active tab's page webContents, for commands that only make sense on a
     // real page (find-in-page). Throws on the Settings tab / an empty window,
     // unlike getTargetWebContents' inert stub — a search there is an error, not
@@ -4795,8 +4900,8 @@ export class ProfileManager {
       // profileId, else the last-focused profile), independent of this context's
       // target window — the command may arrive over the socket while a different
       // window is "focused".
-      openExternalUrl: (url, profileId) => this.openUrl(url, profileId),
-      openProfile: (id) => this.openProfile(id),
+      openExternalUrl: (url, profileId) => this.openUrl(url, profileId, raiseAllowed),
+      openProfile: (id) => this.openProfile(id, raiseAllowed),
       closeProfile: (id) => this.closeProfile(id),
       createProfile: (label) => this.createProfile(label),
       renameProfile: (id, label) => this.renameProfile(id, label),
@@ -5192,11 +5297,15 @@ export class ProfileManager {
         const wc = this.webContentsForTab(target, tabId)
         // Chromium delivers input ONLY to a visible tab; a hidden/background tab
         // silently drops it (a misleading "ok" with no effect). Make the target
-        // the visible/active tab first, then confirm — never report a false
-        // success.
+        // the visible tab of its window first — without activating the app — then
+        // confirm; never report a false success.
         const id = tabId ?? target?.state.activeId ?? undefined
         const visible = await this.ensurePageVisibleForInput(wc, id)
-        if (!visible) throw new Error('tab could not be made visible for input')
+        if (!visible) {
+          throw new Error(
+            'tab could not be made visible for input (Mira may be hidden — `focus-app` first)'
+          )
+        }
         const events = keyToDispatchEvents(key, modifiers)
         const dbg = wc.debugger
         const wasAttached = dbg.isAttached()
@@ -5299,13 +5408,15 @@ export class ProfileManager {
       newTab: (url, background = false) => {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
         // focusChrome: opening a tab (click or Cmd+T) focuses the address bar so a
-        // url can be typed straight away. Not for the startup / restored tabs.
-        // background:true (a socket/MCP caller testing a page) opens the tab hidden
-        // without focusing the chrome, so Mira does not jump to the foreground.
+        // url can be typed straight away — and brings Mira forward. Reserved for
+        // the UI origin: a socket/MCP `new-tab` / `navigate {newTab}` opens the tab
+        // for real but never foregrounds the app (foreground-policy.ts).
+        // background:true additionally leaves the tab hidden: the window does not
+        // even switch to it, so nothing changes on screen at all.
         const tab = this.newTabIn(
           target,
           url ?? this.appSettings.homeUrl,
-          !background,
+          !background && raiseAllowed,
           undefined,
           background
         )
@@ -5358,10 +5469,12 @@ export class ProfileManager {
       detachTab: (id, point) => {
         if (!target) throw new Error('no target window')
         const src = this.ownerOf(id) ?? target
-        return this.detachTabTo(src, id, point)
+        return this.detachTabTo(src, id, point, raiseAllowed)
       },
-      moveTabToWindow: (id, windowId) => this.moveTabToWindowById(id, windowId),
-      activateTab: (id) => this.activateTabById(id),
+      moveTabToWindow: (id, windowId) => this.moveTabToWindowById(id, windowId, raiseAllowed),
+      // The UI's "go to that tab" raises its window; a scripted activate-tab only
+      // selects the tab in place (foreground-policy.ts).
+      activateTab: (id) => this.activateTabById(id, raiseAllowed),
       listWindows: () => this.listOpenWindows(),
       pinTab: (id) => {
         if (!target) throw new Error('no target window')
