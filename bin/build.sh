@@ -28,4 +28,8 @@ npm run build:mac
 rm -rf /Applications/Mira.app
 ditto dist/mac-arm64/Mira.app /Applications/Mira.app
 
-open /Applications/Mira.app
+# `open -a`, never `open <bundle>`: a .app is a directory, and a plain `open` on a
+# bundle that LaunchServices has not re-registered yet (which is exactly the state
+# right after the ditto above) can fall through to the "folder" handler — it opens
+# the file explorer and never launches Mira (seen 2026-08-22).
+open -a /Applications/Mira.app

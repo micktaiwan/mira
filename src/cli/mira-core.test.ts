@@ -17,11 +17,23 @@ import {
   formatWindows,
   resolveCode,
   TAB_BOUND,
-  resolveTimeoutMs
+  resolveTimeoutMs,
+  background
   // @ts-expect-error — plain-ESM sibling module, no .d.ts (the CLI ships without a build),
 } from './mira-core.mjs'
 
 describe('parseArgs', () => {
+  it('reads --background / -b as a boolean flag', () => {
+    expect(parseArgs(['open', 'example.com', '--background'])).toEqual({
+      command: 'open',
+      positionals: ['example.com'],
+      flags: { background: true }
+    })
+    expect(parseArgs(['open', 'example.com', '-b']).flags).toEqual({ background: true })
+    expect(background(parseArgs(['open', 'example.com']).flags)).toBe(false)
+    expect(background(parseArgs(['open', 'example.com', '-b']).flags)).toBe(true)
+  })
+
   it('takes the first bare token as the command, the rest as positionals', () => {
     expect(parseArgs(['exec', 'document.title'])).toEqual({
       command: 'exec',

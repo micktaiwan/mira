@@ -77,6 +77,45 @@ describe('navigate', () => {
     expect(tabState().tabs.map((t) => t.url)).toEqual(['home', 'https://example.com'])
   })
 
+  it('opens the new tab hidden with background, leaving the active tab in place', () => {
+    const { ctx, tabState, loaded } = makeContext()
+    const registry = createCommandRegistry()
+    const result = registry.execute(
+      'navigate',
+      { url: 'example.com', newTab: true, background: true },
+      ctx
+    )
+    expect(result).toEqual({ ok: true, url: 'https://example.com', id: 'tab-2' })
+    expect(loaded).toEqual([])
+    // The tab exists but the window never switched onto it — nothing moved on screen.
+    expect(tabState().tabs.map((t) => t.url)).toEqual(['home', 'https://example.com'])
+    expect(tabState().activeId).toBe('tab-1')
+  })
+
+  it('hands back an already-open tab with background without switching to it', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('navigate', { url: 'example.com', newTab: true }, ctx)
+    registry.execute('new-tab', { url: 'https://other.test' }, ctx)
+    expect(tabState().activeId).toBe('tab-3')
+    const result = registry.execute(
+      'navigate',
+      { url: 'example.com', newTab: true, background: true },
+      ctx
+    )
+    expect(result).toEqual({ ok: true, url: 'https://example.com', id: 'tab-2', focused: false })
+    expect(tabState().activeId).toBe('tab-3')
+    expect(tabState().tabs).toHaveLength(3)
+  })
+
+  it('rejects a non-boolean background', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(
+      registry.execute('navigate', { url: 'example.com', newTab: true, background: 'yes' }, ctx)
+    ).toEqual({ ok: false, error: '"background" must be a boolean' })
+  })
+
   it('rejects a non-boolean newTab', () => {
     const { ctx } = makeContext()
     const registry = createCommandRegistry()

@@ -20,11 +20,25 @@
 /** Flags that take no value (their presence alone means `true`). Every other
  * `--flag` consumes the next token as its value unless that token is itself a
  * flag. Keeping this explicit avoids `--json tabs` swallowing `tabs`. */
-export const BOOLEAN_FLAGS = new Set(['json', 'active', 'help', 'new-tab', 'full'])
+export const BOOLEAN_FLAGS = new Set(['json', 'active', 'help', 'new-tab', 'full', 'background'])
 
 /** Single-letter short flags, mapped to their long boolean name. `-n` == `--new-tab`.
  * A bare `-` is NOT a short flag: it stays a positional (e.g. `mira exec -` = stdin). */
-export const SHORT_FLAGS = new Map([['n', 'new-tab']])
+export const SHORT_FLAGS = new Map([
+  ['n', 'new-tab'],
+  ['b', 'background']
+])
+
+/** True when the caller asked for a hidden tab (`--background` / `-b`): the new
+ * tab loads without the window switching onto it. Mira never comes to the
+ * foreground for a CLI command either way — this is only about the tab.
+ *
+ * @param {Record<string, string|boolean>} flags
+ * @returns {boolean}
+ */
+export function background(flags) {
+  return flags?.background === true
+}
 
 /** Registry commands that accept a `tabId` param (see docs/socket.md). Only for
  * these does a resolved tab target get injected into params — injecting `tabId`

@@ -26,7 +26,9 @@
 //   mira shot [path] [--full]       screenshot the pinned/active tab to a PNG (default: userData/screenshots/)
 //                                   (--full: the whole document, not just the viewport)
 //   mira nav <url> [--new-tab|-n]   navigate the active tab in place (--new-tab: open a fresh tab instead)
-//   mira open <url>                 open <url> in a NEW tab, leaving the current tab untouched
+//   mira open <url> [--background|-b]  open <url> in a NEW tab, leaving the current tab untouched
+//                                   (--background: load it hidden — the window does not switch to it)
+// No command here ever brings Mira to the foreground; `mira call focus-app` is the explicit way.
 //   mira windows                    list open windows (id / profile / tabs), * = focused
 //   mira watch                      follow the focused tab live (profile / folder / title / url), until Ctrl-C
 //                                   (--json: one raw event per line, for a program)
@@ -59,7 +61,8 @@ import {
   formatWindows,
   formatFocus,
   resolveCode,
-  resolveTimeoutMs
+  resolveTimeoutMs,
+  background
 } from '../src/cli/mira-core.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -270,8 +273,12 @@ async function main() {
       const url = positionals[0]
       if (!url) return die('nav needs a url', 2)
       // In place by default (URL-bar semantics); --new-tab / -n spawns a fresh
-      // tab instead, leaving the active tab untouched.
-      const params = flags['new-tab'] === true ? { url, newTab: true } : { url }
+      // tab instead, leaving the active tab untouched. --background / -b loads
+      // that new tab hidden (no visible change in the window).
+      const params =
+        flags['new-tab'] === true
+          ? { url, newTab: true, ...(background(flags) ? { background: true } : {}) }
+          : { url }
       return send({ command: 'navigate', params }, { json })
     }
 
@@ -280,7 +287,8 @@ async function main() {
       // tab keeps its page. The registry dedups to an existing tab on same URL.
       const url = positionals[0]
       if (!url) return die('open needs a url', 2)
-      return send({ command: 'navigate', params: { url, newTab: true } }, { json })
+      const params = { url, newTab: true, ...(background(flags) ? { background: true } : {}) }
+      return send({ command: 'navigate', params }, { json })
     }
 
     case 'use': {
