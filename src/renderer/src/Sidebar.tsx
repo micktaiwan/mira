@@ -214,12 +214,13 @@ function PinnedSquare({
   )
 }
 
-function TabRow({
+export function TabRow({
   tab,
   active,
   dragging,
   dropPos,
   onSelect,
+  onClose,
   onContextMenu,
   onDragStart,
   onDragOver,
@@ -231,6 +232,8 @@ function TabRow({
   dragging: boolean
   dropPos: DropPos | null
   onSelect: () => void
+  /** The × button: close this tab. */
+  onClose: () => void
   /** Right-click: ask main to pop the native tab menu for this tab. */
   onContextMenu: () => void
   onDragStart: () => void
@@ -294,6 +297,25 @@ function TabRow({
         {isSettings ? 'Settings' : tab.title || tab.url || 'New tab'}
       </span>
       {tab.audible && <AudioIcon />}
+      {/* Close button: last in the row and always taking its slot (CSS hides it
+          with opacity, never with display), so every row's × sits at the same x
+          and the titles never reflow when the pointer enters a row. */}
+      <button
+        type="button"
+        className="tab-close"
+        aria-label="Close tab"
+        title="Close tab"
+        // The row's own onClick selects the tab — closing must not select first.
+        onClick={(e) => {
+          e.stopPropagation()
+          onClose()
+        }}
+        // A drag started on the button would otherwise bubble up as a tab drag.
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
+      >
+        ×
+      </button>
     </li>
   )
 }
@@ -302,6 +324,7 @@ function Sidebar({
   tabs,
   activeId,
   onSelect,
+  onClose,
   onNew,
   onMove,
   onContextMenu,
@@ -319,6 +342,8 @@ function Sidebar({
   tabs: TabInfo[]
   activeId: string | null
   onSelect: (id: string) => void
+  /** Close a tab (the × on a row, shown on hover). */
+  onClose: (id: string) => void
   onNew: () => void
   onMove: (id: string, toIndex: number) => void
   /** Right-click on a tab: main pops the native tab menu for that tab id. */
@@ -491,6 +516,7 @@ function Sidebar({
       dragging={t.id === draggingId}
       dropPos={dropTarget?.id === t.id && t.id !== draggingId ? dropTarget.pos : null}
       onSelect={() => onSelect(t.id)}
+      onClose={() => onClose(t.id)}
       onContextMenu={() => onContextMenu(t.id)}
       onDragStart={() => beginDrag(t.id)}
       onDragOver={(pos) => setDropOn(t, pos)}

@@ -612,6 +612,7 @@ function App(): React.JSX.Element {
             tabs={tabs}
             activeId={activeId}
             onSelect={(id) => window.mira.command('select-tab', { id })}
+            onClose={(id) => window.mira.command('close-tab', { id })}
             onNew={() => window.mira.command('new-tab')}
             onMove={(id, toIndex) => window.mira.command('move-tab', { id, toIndex })}
             onContextMenu={(id) => window.mira.command('show-tab-menu', { tabId: id })}
