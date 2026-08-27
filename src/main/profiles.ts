@@ -4768,6 +4768,30 @@ export class ProfileManager {
     return target && !target.window.isDestroyed() ? target.id : DEFAULT_PROFILE_ID
   }
 
+  /** The profile an extension command acts on. An explicit `profileId` wins and
+   * works with no focused window at all — extensions are per profile (D2) and a
+   * socket caller cannot steer focus, so this is the only deterministic way to
+   * reach a profile that is not the focused one. Absent → the target window's
+   * profile (unchanged behaviour, still `no target window` when there is none).
+   *
+   * An unknown id is refused rather than passed to sessionFor, which would
+   * happily build a brand-new partition and install into a directory nothing
+   * ever loads. A locked encrypted profile is refused too: its plaintext data is
+   * not on disk, so the session behind it is not the one that will hold its
+   * extensions once unlocked. */
+  private extensionProfileId(target: ProfileWindow | null, profileId?: string): string {
+    if (profileId === undefined) {
+      if (!target) throw new Error('no target window')
+      return target.id
+    }
+    const profile = findById(this.profiles, profileId)
+    if (!profile) throw new Error(`unknown profile: ${profileId}`)
+    if (profile.encrypted && !this.unlockedVaults.has(profileId)) {
+      throw new Error(`locked profile: ${profileId}`)
+    }
+    return profileId
+  }
+
   private makeContext(target: ProfileWindow | null, origin: CommandOrigin): CommandContext {
     // Whether a command built on THIS context may raise/activate the app. False
     // for every socket/MCP/agent call: Mira must never jump in front of the user
@@ -5643,36 +5667,35 @@ export class ProfileManager {
           profileId: params.profileId ?? this.contextProfileId(target)
         }),
       // Extensions act on the TARGET window's profile session — sets are per
-      // profile (D2): installing in "Work" leaves "Default" untouched.
-      listExtensions: () => {
-        if (!target) throw new Error('no target window')
-        return this.deps.extensions.list(this.sessionFor(target.id), target.id)
+      // profile (D2): installing in "Work" leaves "Default" untouched. An
+      // explicit profileId picks the profile instead (extensionProfileId).
+      listExtensions: (profileId) => {
+        const id = this.extensionProfileId(target, profileId)
+        return this.deps.extensions.list(this.sessionFor(id), id)
       },
-      loadExtension: (path) => {
-        if (!target) throw new Error('no target window')
-        return this.deps.extensions.load(this.sessionFor(target.id), target.id, path)
+      loadExtension: (path, profileId) => {
+        const id = this.extensionProfileId(target, profileId)
+        return this.deps.extensions.load(this.sessionFor(id), id, path)
       },
-      installExtension: (id) => {
-        if (!target) throw new Error('no target window')
-        return this.deps.extensions.installFromStore(this.sessionFor(target.id), target.id, id)
+      installExtension: (extensionId, profileId) => {
+        const id = this.extensionProfileId(target, profileId)
+        return this.deps.extensions.installFromStore(this.sessionFor(id), id, extensionId)
       },
-      updateExtensions: () => {
-        if (!target) throw new Error('no target window')
-        return this.deps.extensions.update(this.sessionFor(target.id), target.id)
+      updateExtensions: (profileId) => {
+        const id = this.extensionProfileId(target, profileId)
+        return this.deps.extensions.update(this.sessionFor(id), id)
       },
-      disableExtension: (id) => {
-        if (!target) throw new Error('no target window')
-        return Promise.resolve(
-          this.deps.extensions.disable(this.sessionFor(target.id), target.id, id)
-        )
+      disableExtension: (extensionId, profileId) => {
+        const id = this.extensionProfileId(target, profileId)
+        return Promise.resolve(this.deps.extensions.disable(this.sessionFor(id), id, extensionId))
       },
-      enableExtension: (id) => {
-        if (!target) throw new Error('no target window')
-        return this.deps.extensions.enable(this.sessionFor(target.id), target.id, id)
+      enableExtension: (extensionId, profileId) => {
+        const id = this.extensionProfileId(target, profileId)
+        return this.deps.extensions.enable(this.sessionFor(id), id, extensionId)
       },
-      uninstallExtension: (id) => {
-        if (!target) throw new Error('no target window')
-        return this.deps.extensions.uninstall(this.sessionFor(target.id), target.id, id)
+      uninstallExtension: (extensionId, profileId) => {
+        const id = this.extensionProfileId(target, profileId)
+        return this.deps.extensions.uninstall(this.sessionFor(id), id, extensionId)
       },
       readServiceWorkerConsole: (query) => {
         // Explicit profileId wins (extensions are per profile, D2) and works even

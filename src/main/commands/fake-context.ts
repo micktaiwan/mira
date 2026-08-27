@@ -449,6 +449,24 @@ export function makeContext(
   // are unlocked this "session". The real ones shell out to hdiutil + fs.
   const encryptedProfiles = new Set<string>()
   const unlockedProfiles = new Set<string>()
+
+  /** Which profile an extension command acts on, mirroring
+   * ProfileManager.extensionProfileId: an explicit id wins (and needs no
+   * focused window), unknown and locked-encrypted ids are refused, else the
+   * focused profile. Throws — callers returning a Promise wrap it. */
+  const extensionProfile = (profileId?: string): string => {
+    if (profileId === undefined) {
+      if (!state.focused) throw new Error('no target window')
+      return state.focused
+    }
+    if (!state.profiles.some((p) => p.id === profileId)) {
+      throw new Error(`unknown profile: ${profileId}`)
+    }
+    if (encryptedProfiles.has(profileId) && !unlockedProfiles.has(profileId)) {
+      throw new Error(`locked profile: ${profileId}`)
+    }
+    return profileId
+  }
   // Card vaults (Bitwarden accounts): profileId -> appdata dir, plus which of
   // them Mira holds a session key for. No bw process is ever run here.
   const cardVaults = new Map<string, { appDataDir: string; email?: string }>()
@@ -1590,19 +1608,27 @@ export function makeContext(
     },
     // Extensions slice: an in-memory per-profile store mirroring the real
     // ExtensionsService (per-session sets, D2). The FOCUSED profile is the
-    // target, like the real context is bound to the target window's profile.
-    listExtensions: () => {
-      if (!state.focused) throw new Error('no target window')
-      return (state.extensions.get(state.focused) ?? []).slice()
+    // target, like the real context is bound to the target window's profile —
+    // unless the caller names a profileId, which wins and works with no focused
+    // window (mirrors ProfileManager.extensionProfileId, unknown/locked
+    // profiles refused the same way).
+    listExtensions: (profileId?: string) => {
+      const id = extensionProfile(profileId)
+      return (state.extensions.get(id) ?? []).slice()
     },
-    loadExtension: (path: string) => {
-      if (!state.focused) return Promise.reject(new Error('no target window'))
+    loadExtension: (path: string, profileId?: string) => {
       // Model loadExtension's failure mode (bad dir / manifest) so the command's
       // rejection path is testable: any path flagged 'missing' rejects.
+      let target: string
+      try {
+        target = extensionProfile(profileId)
+      } catch (error) {
+        return Promise.reject(error)
+      }
       if (path.includes('missing')) {
         return Promise.reject(new Error(`unable to load extension at ${path}`))
       }
-      const list = state.extensions.get(state.focused) ?? []
+      const list = state.extensions.get(target) ?? []
       const existing = list.find((e) => e.path === path)
       if (existing) return Promise.resolve(existing)
       const info: ExtensionInfo = {
@@ -1612,67 +1638,93 @@ export function makeContext(
         path,
         enabled: true
       }
-      state.extensions.set(state.focused, [...list, info])
+      state.extensions.set(target, [...list, info])
       return Promise.resolve(info)
     },
-    installExtension: (id: string) => {
+    installExtension: (id: string, profileId?: string) => {
       // Model a Web Store install: same per-profile store as loadExtension, the
       // path mirroring the store layout (Extensions/<profile>/<id>).
-      if (!state.focused) return Promise.reject(new Error('no target window'))
+      let target: string
+      try {
+        target = extensionProfile(profileId)
+      } catch (error) {
+        return Promise.reject(error)
+      }
       if (id.includes('unknown')) {
         return Promise.reject(new Error(`Failed to download extension: ${id}`))
       }
-      const list = state.extensions.get(state.focused) ?? []
+      const list = state.extensions.get(target) ?? []
       const existing = list.find((e) => e.id === id)
       if (existing) return Promise.resolve(existing)
       const info: ExtensionInfo = {
         id,
         name: `store:${id}`,
         version: '1.0.0',
-        path: `/extensions/${state.focused}/${id}`,
+        path: `/extensions/${target}/${id}`,
         enabled: true
       }
-      state.extensions.set(state.focused, [...list, info])
+      state.extensions.set(target, [...list, info])
       return Promise.resolve(info)
     },
-    updateExtensions: () => {
-      // The fake has no store to check; record nothing, succeed.
+    updateExtensions: (profileId?: string) => {
+      // The fake has no store to check; it only resolves the profile (so a bad
+      // id fails here too) and succeeds.
+      try {
+        extensionProfile(profileId)
+      } catch (error) {
+        return Promise.reject(error)
+      }
       return Promise.resolve()
     },
-    disableExtension: (id: string) => {
+    disableExtension: (id: string, profileId?: string) => {
       // Mirror the real service: pause = flip to enabled:false, keep the entry
       // (files stay on disk); idempotent on an already-paused id.
-      if (!state.focused) return Promise.reject(new Error('no target window'))
-      const list = state.extensions.get(state.focused) ?? []
+      let target: string
+      try {
+        target = extensionProfile(profileId)
+      } catch (error) {
+        return Promise.reject(error)
+      }
+      const list = state.extensions.get(target) ?? []
       const ext = list.find((e) => e.id === id)
       if (!ext) return Promise.reject(new Error(`unknown extension: ${id}`))
       const paused = { ...ext, enabled: false }
       state.extensions.set(
-        state.focused,
+        target,
         list.map((e) => (e.id === id ? paused : e))
       )
       return Promise.resolve(paused)
     },
-    enableExtension: (id: string) => {
-      if (!state.focused) return Promise.reject(new Error('no target window'))
-      const list = state.extensions.get(state.focused) ?? []
+    enableExtension: (id: string, profileId?: string) => {
+      let target: string
+      try {
+        target = extensionProfile(profileId)
+      } catch (error) {
+        return Promise.reject(error)
+      }
+      const list = state.extensions.get(target) ?? []
       const ext = list.find((e) => e.id === id)
       if (!ext) return Promise.reject(new Error(`unknown extension: ${id}`))
       const resumed = { ...ext, enabled: true }
       state.extensions.set(
-        state.focused,
+        target,
         list.map((e) => (e.id === id ? resumed : e))
       )
       return Promise.resolve(resumed)
     },
-    uninstallExtension: (id: string) => {
-      if (!state.focused) return Promise.reject(new Error('no target window'))
-      const list = state.extensions.get(state.focused) ?? []
+    uninstallExtension: (id: string, profileId?: string) => {
+      let target: string
+      try {
+        target = extensionProfile(profileId)
+      } catch (error) {
+        return Promise.reject(error)
+      }
+      const list = state.extensions.get(target) ?? []
       if (!list.some((e) => e.id === id)) {
         return Promise.reject(new Error(`unknown extension: ${id}`))
       }
       state.extensions.set(
-        state.focused,
+        target,
         list.filter((e) => e.id !== id)
       )
       return Promise.resolve({ removed: true })

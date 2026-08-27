@@ -140,8 +140,7 @@ export function selectServiceWorkerLogs(
   const min = query.minLevel ? SW_LOG_LEVELS.indexOf(query.minLevel) : 0
   const matched = entries.filter(
     (entry) =>
-      (!query.id || entry.extensionId === query.id) &&
-      SW_LOG_LEVELS.indexOf(entry.level) >= min
+      (!query.id || entry.extensionId === query.id) && SW_LOG_LEVELS.indexOf(entry.level) >= min
   )
   const limit = query.limit && query.limit > 0 ? Math.floor(query.limit) : matched.length
   return matched.slice(-limit)
@@ -191,31 +190,37 @@ export function toExtensionInfo(
 }
 
 /** Extensions capability slice: act on the TARGET window's profile session
- * (install/uninstall are per profile — D2). Native; injected via the command
- * context so it stays mockable. */
+ * (install/uninstall are per profile — D2), or on `profileId` when the caller
+ * names one. Native; injected via the command context so it stays mockable.
+ *
+ * Every method takes the same optional `profileId`: extensions are per profile,
+ * and a socket/MCP caller has no focus to steer with (a request binds to the
+ * focused window, fallback any open one — docs/socket.md § Targeting), so an
+ * explicit id is the only deterministic way to reach a profile that is not the
+ * focused one. Absent → the target window's profile, as before. */
 export interface ExtensionsContext {
   /** Extensions of the target profile: loaded ones (enabled) plus paused ones
    * from the disabled registry (enabled: false). */
-  listExtensions: () => ExtensionInfo[]
+  listExtensions: (profileId?: string) => ExtensionInfo[]
   /** Load an unpacked extension directory into the target profile's session and
    * remember it so it reloads at boot. Rejects on a bad path / invalid manifest. */
-  loadExtension: (path: string) => Promise<ExtensionInfo>
+  loadExtension: (path: string, profileId?: string) => Promise<ExtensionInfo>
   /** Install an extension from the Chrome Web Store by id into the target
    * profile's session (downloaded/unpacked under the profile's store dir). */
-  installExtension: (id: string) => Promise<ExtensionInfo>
+  installExtension: (id: string, profileId?: string) => Promise<ExtensionInfo>
   /** Check the target profile's extensions for Web Store updates, install any. */
-  updateExtensions: () => Promise<void>
+  updateExtensions: (profileId?: string) => Promise<void>
   /** Pause an extension: unload it from the target profile's session without
    * touching its files, and remember the pause so it survives restarts.
    * Idempotent on an already-paused id; rejects on an unknown id. */
-  disableExtension: (id: string) => Promise<ExtensionInfo>
+  disableExtension: (id: string, profileId?: string) => Promise<ExtensionInfo>
   /** Resume a paused extension: load it back from its directory and forget the
    * pause. Idempotent on an already-enabled id; rejects on an unknown id. */
-  enableExtension: (id: string) => Promise<ExtensionInfo>
+  enableExtension: (id: string, profileId?: string) => Promise<ExtensionInfo>
   /** Remove an extension from the target profile's session (unload + delete its
    * store directory if store-installed + forget any sideload record). Rejects
    * on an unknown id. */
-  uninstallExtension: (id: string) => Promise<{ removed: boolean }>
+  uninstallExtension: (id: string, profileId?: string) => Promise<{ removed: boolean }>
   /** Captured console output of an extension service worker, filtered/capped by
    * the query, oldest-first. Reads `query.profileId`'s session when given, else
    * the target (focused) window's profile. Empty if capture found nothing (e.g.
@@ -223,10 +228,40 @@ export interface ExtensionsContext {
   readServiceWorkerConsole: (query: ServiceWorkerConsoleQuery) => ServiceWorkerLogEntry[]
 }
 
+/** The optional `profileId` every extension command accepts: which profile to
+ * act on instead of the focused window's. Returns `{}` when absent, `{error}`
+ * when present but unusable. Pure, tested. */
+export function readProfileId(params: unknown): { profileId?: string; error?: string } {
+  const { profileId } = (params ?? {}) as { profileId?: unknown }
+  if (profileId === undefined) return {}
+  if (typeof profileId !== 'string' || profileId.trim() === '') {
+    return { error: '"profileId" must be a non-empty string' }
+  }
+  return { profileId }
+}
+
+/** The `id` + optional `profileId` shape shared by the per-extension commands.
+ * Pure, tested. */
+export function readIdParams(params: unknown): {
+  id?: string
+  profileId?: string
+  error?: string
+} {
+  const { id } = (params ?? {}) as { id?: unknown }
+  if (typeof id !== 'string' || id.trim() === '') {
+    return { error: '"id" must be a non-empty string' }
+  }
+  const { profileId, error } = readProfileId(params)
+  if (error) return { error }
+  return { id, profileId }
+}
+
 export const extensionsCommands: CommandMap<CommandContext> = {
-  'list-extensions': (ctx) => {
+  'list-extensions': (ctx, params) => {
+    const { profileId, error: bad } = readProfileId(params)
+    if (bad) return { ok: false, error: bad }
     try {
-      return { ok: true, extensions: ctx.listExtensions() }
+      return { ok: true, extensions: ctx.listExtensions(profileId) }
     } catch (error) {
       return fail(error)
     }
@@ -237,8 +272,10 @@ export const extensionsCommands: CommandMap<CommandContext> = {
     if (typeof path !== 'string' || path.trim() === '') {
       return { ok: false, error: '"path" must be a non-empty string' }
     }
+    const { profileId, error: bad } = readProfileId(params)
+    if (bad) return { ok: false, error: bad }
     try {
-      const extension = await ctx.loadExtension(path)
+      const extension = await ctx.loadExtension(path, profileId)
       return { ok: true, extension }
     } catch (error) {
       return fail(error)
@@ -246,21 +283,21 @@ export const extensionsCommands: CommandMap<CommandContext> = {
   },
 
   'install-extension': async (ctx, params) => {
-    const { id } = (params ?? {}) as { id?: unknown }
-    if (typeof id !== 'string' || id.trim() === '') {
-      return { ok: false, error: '"id" must be a non-empty string' }
-    }
+    const { id, profileId, error: bad } = readIdParams(params)
+    if (bad || !id) return { ok: false, error: bad ?? '"id" must be a non-empty string' }
     try {
-      const extension = await ctx.installExtension(id)
+      const extension = await ctx.installExtension(id, profileId)
       return { ok: true, extension }
     } catch (error) {
       return fail(error)
     }
   },
 
-  'update-extensions': async (ctx) => {
+  'update-extensions': async (ctx, params) => {
+    const { profileId, error: bad } = readProfileId(params)
+    if (bad) return { ok: false, error: bad }
     try {
-      await ctx.updateExtensions()
+      await ctx.updateExtensions(profileId)
       return { ok: true }
     } catch (error) {
       return fail(error)
@@ -268,12 +305,10 @@ export const extensionsCommands: CommandMap<CommandContext> = {
   },
 
   'disable-extension': async (ctx, params) => {
-    const { id } = (params ?? {}) as { id?: unknown }
-    if (typeof id !== 'string' || id.trim() === '') {
-      return { ok: false, error: '"id" must be a non-empty string' }
-    }
+    const { id, profileId, error: bad } = readIdParams(params)
+    if (bad || !id) return { ok: false, error: bad ?? '"id" must be a non-empty string' }
     try {
-      const extension = await ctx.disableExtension(id)
+      const extension = await ctx.disableExtension(id, profileId)
       return { ok: true, extension }
     } catch (error) {
       return fail(error)
@@ -281,12 +316,10 @@ export const extensionsCommands: CommandMap<CommandContext> = {
   },
 
   'enable-extension': async (ctx, params) => {
-    const { id } = (params ?? {}) as { id?: unknown }
-    if (typeof id !== 'string' || id.trim() === '') {
-      return { ok: false, error: '"id" must be a non-empty string' }
-    }
+    const { id, profileId, error: bad } = readIdParams(params)
+    if (bad || !id) return { ok: false, error: bad ?? '"id" must be a non-empty string' }
     try {
-      const extension = await ctx.enableExtension(id)
+      const extension = await ctx.enableExtension(id, profileId)
       return { ok: true, extension }
     } catch (error) {
       return fail(error)
@@ -294,12 +327,10 @@ export const extensionsCommands: CommandMap<CommandContext> = {
   },
 
   'uninstall-extension': async (ctx, params) => {
-    const { id } = (params ?? {}) as { id?: unknown }
-    if (typeof id !== 'string' || id.trim() === '') {
-      return { ok: false, error: '"id" must be a non-empty string' }
-    }
+    const { id, profileId, error: bad } = readIdParams(params)
+    if (bad || !id) return { ok: false, error: bad ?? '"id" must be a non-empty string' }
     try {
-      return { ok: true, ...(await ctx.uninstallExtension(id)) }
+      return { ok: true, ...(await ctx.uninstallExtension(id, profileId)) }
     } catch (error) {
       return fail(error)
     }
