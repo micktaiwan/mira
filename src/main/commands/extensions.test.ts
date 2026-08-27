@@ -233,6 +233,111 @@ describe('extensions commands', () => {
     })
     expect(fake.extensionsFor('default')).toHaveLength(1)
   })
+
+  // An explicit profileId is the only deterministic way for a socket caller to
+  // reach a profile that is not the focused window's (docs/socket.md §
+  // Targeting): nothing over the socket may steal focus, so without it every
+  // extension command lands on whichever window happens to be focused.
+  it('profileId targets another profile, leaving the focused one untouched', async () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    const created = registry.execute('create-profile', { label: 'Work' }, fake.ctx) as {
+      ok: boolean
+      id: string
+    }
+    // Focus is on "Work"; install into 'default' by naming it.
+    const res = await registry.execute(
+      'install-extension',
+      { id: 'abcdef', profileId: 'default' },
+      fake.ctx
+    )
+    expect(res).toMatchObject({ ok: true, extension: { id: 'abcdef' } })
+    expect(fake.extensionsFor('default')).toHaveLength(1)
+    expect(fake.extensionsFor(created.id)).toHaveLength(0)
+    expect(registry.execute('list-extensions', {}, fake.ctx)).toEqual({ ok: true, extensions: [] })
+    expect(registry.execute('list-extensions', { profileId: 'default' }, fake.ctx)).toMatchObject({
+      ok: true,
+      extensions: [{ id: 'abcdef' }]
+    })
+  })
+
+  it('profileId drives the whole lifecycle on the named profile', async () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('create-profile', { label: 'Work' }, fake.ctx)
+    const target = { profileId: 'default' }
+    await registry.execute('load-extension', { path: '/ext/dark-reader', ...target }, fake.ctx)
+    expect(fake.extensionsFor('default')).toMatchObject([{ enabled: true }])
+    expect(
+      await registry.execute('disable-extension', { id: 'ext-1', ...target }, fake.ctx)
+    ).toMatchObject({ ok: true, extension: { enabled: false } })
+    expect(fake.extensionsFor('default')).toMatchObject([{ enabled: false }])
+    expect(
+      await registry.execute('enable-extension', { id: 'ext-1', ...target }, fake.ctx)
+    ).toMatchObject({ ok: true, extension: { enabled: true } })
+    expect(await registry.execute('update-extensions', target, fake.ctx)).toEqual({ ok: true })
+    expect(
+      await registry.execute('uninstall-extension', { id: 'ext-1', ...target }, fake.ctx)
+    ).toEqual({ ok: true, removed: true })
+    expect(fake.extensionsFor('default')).toHaveLength(0)
+  })
+
+  it('works with no focused window at all', async () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('close-profile', { id: 'default' }, fake.ctx)
+    // Nothing focused: the implicit form fails, the explicit one still lands.
+    expect(registry.execute('list-extensions', {}, fake.ctx)).toEqual({
+      ok: false,
+      error: 'no target window'
+    })
+    expect(
+      await registry.execute('install-extension', { id: 'abcdef', profileId: 'default' }, fake.ctx)
+    ).toMatchObject({ ok: true })
+    expect(fake.extensionsFor('default')).toHaveLength(1)
+  })
+
+  it('rejects an unknown profileId instead of installing into a dead session', async () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    expect(
+      await registry.execute('install-extension', { id: 'abcdef', profileId: 'nope' }, fake.ctx)
+    ).toEqual({ ok: false, error: 'unknown profile: nope' })
+    expect(registry.execute('list-extensions', { profileId: 'nope' }, fake.ctx)).toEqual({
+      ok: false,
+      error: 'unknown profile: nope'
+    })
+  })
+
+  it('rejects a locked encrypted profile, and accepts it once unlocked', async () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    const created = registry.execute('create-profile', { label: 'Vault' }, fake.ctx) as {
+      ok: boolean
+      id: string
+    }
+    await registry.execute('encrypt-profile', { id: created.id, password: 'pw' }, fake.ctx)
+    await registry.execute('lock-profile', { id: created.id }, fake.ctx)
+    expect(
+      await registry.execute('install-extension', { id: 'abcdef', profileId: created.id }, fake.ctx)
+    ).toEqual({ ok: false, error: `locked profile: ${created.id}` })
+    await registry.execute('unlock-profile', { id: created.id, password: 'pw' }, fake.ctx)
+    expect(
+      await registry.execute('install-extension', { id: 'abcdef', profileId: created.id }, fake.ctx)
+    ).toMatchObject({ ok: true })
+  })
+
+  it('validates the profileId param itself', async () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('list-extensions', { profileId: '  ' }, fake.ctx)).toEqual({
+      ok: false,
+      error: '"profileId" must be a non-empty string'
+    })
+    expect(
+      await registry.execute('install-extension', { id: 'abcdef', profileId: 42 }, fake.ctx)
+    ).toEqual({ ok: false, error: '"profileId" must be a non-empty string' })
+  })
 })
 
 describe('service-worker console helpers (pure)', () => {

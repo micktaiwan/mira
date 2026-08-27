@@ -378,12 +378,28 @@ A field is keyed by its `name` (else its `id`, else its `aria-label`), a site by
 
 | Command                                                          | Params                                  | Effect / result                                                    |
 | ---------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------------------------ |
-| `list-extensions`                                                | —                                       | loaded extensions of the target profile                            |
-| `install-extension`                                              | `id`                                    | install from the Chrome Web Store id                               |
-| `load-extension`                                                 | `path`                                  | load an unpacked extension                                         |
-| `enable-extension` / `disable-extension` / `uninstall-extension` | `id`                                    | lifecycle                                                          |
-| `update-extensions`                                              | —                                       | update all                                                         |
+| `list-extensions`                                                | `profileId?`                            | loaded extensions of the target profile                            |
+| `install-extension`                                              | `id`, `profileId?`                      | install from the Chrome Web Store id                               |
+| `load-extension`                                                 | `path`, `profileId?`                    | load an unpacked extension                                         |
+| `enable-extension` / `disable-extension` / `uninstall-extension` | `id`, `profileId?`                      | lifecycle                                                          |
+| `update-extensions`                                              | `profileId?`                            | update all                                                         |
 | `extension-console`                                              | `id?`, `level?`, `limit?`, `profileId?` | tail an extension service-worker's captured console (`messages[]`) |
+
+**`profileId` on every command above.** Extension sets are per profile (D2), and a
+socket caller cannot steer focus — nothing over this socket foregrounds Mira, so a
+request binds to whichever window happens to be focused (§ Targeting). Naming the
+profile (id from `list-profiles`) is therefore the only deterministic way to act on
+one that is not the focused one, and it works with no window focused at all. Absent →
+the target window's profile, as before. Errors: `unknown profile: <id>`, and
+`locked profile: <id>` for an encrypted profile still locked (its data is not on disk,
+so its session is not the one that will hold the extensions).
+
+Example — the same extension into two profiles, without touching the screen:
+
+```bash
+mira call install-extension --params '{"id":"bcjindcccaagfpapjjmafapmmgkkhgoa","profileId":"default"}'
+mira call list-extensions   --params '{"profileId":"default"}'
+```
 
 `extension-console` reads a ring buffer of an MV3 service-worker's console output, captured since boot (Mira can't open devtools on a headless SW). All params optional: `id` filters to one extension, `level` is a minimum severity (`verbose` \| `info` \| `warning` \| `error`), `limit` caps to the most recent N (oldest-first), `profileId` picks which profile's session to read (default: the focused window's profile). The `profileId` matters because extensions are per profile: a passkey flow failing in the "pro" profile leaves nothing in the "perso" Bitwarden's worker. Each message is `{ extensionId, seq, level, message, sourceUrl, lineNumber }`; `seq` is monotonic so you can poll for what's new. Use it to see a background worker throw or never run (e.g. a passkey popout hitting an unimplemented `chrome.windows.create`).
 
