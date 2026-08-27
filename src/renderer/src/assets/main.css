@@ -490,6 +490,40 @@ body {
   text-overflow: ellipsis;
 }
 
+/* The × on a tab row: visible on hover only. It keeps its slot at all times
+   (opacity, never display/width), so every row's × sits on the same vertical
+   line and the title never reflows when the pointer enters a row. Last child of
+   the flex row, so the right edge is the shared anchor. */
+.tab-close {
+  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ev-c-text-2);
+  font-size: 15px;
+  line-height: 1;
+  cursor: default;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.tab-row:hover .tab-close {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tab-close:hover {
+  background: var(--ev-c-gray-1);
+  color: var(--color-text);
+}
+
 /* Speaker icon on a tab that is emitting sound: a monochrome SVG that inherits
    its color from `color` (currentColor). In a regular row it sits after the title
    (flex-shrink:0 so it is never clipped by a long title). Muted by default; the
