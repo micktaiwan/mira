@@ -553,6 +553,8 @@ app.whenReady().then(async () => {
       reload: () => runDetached('reload', {}, profiles.contextForFocused()),
       goRootDomain: () => runDetached('go-root-domain', {}, profiles.contextForFocused()),
       hardReload: () => runDetached('hard-reload', {}, profiles.contextForFocused()),
+      focusAddressBar: () =>
+        runDetached('focus-address-bar', {}, profiles.contextForFocused()),
       newTab: () => runDetached('new-tab', {}, profiles.contextForFocused()),
       duplicateTab: () => runDetached('duplicate-active-tab', {}, profiles.contextForFocused()),
       closeTab: () => runDetached('close-active-tab', {}, profiles.contextForFocused()),

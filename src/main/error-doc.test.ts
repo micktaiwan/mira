@@ -4,6 +4,8 @@ import {
   describeLoadError,
   errorPageUrl,
   isMiraErrorUrl,
+  isRetryUrl,
+  RETRY_URL,
   type LoadError
 } from './error-doc'
 
@@ -47,15 +49,25 @@ describe('buildErrorPage', () => {
     expect(html).toContain('(-105)')
   })
 
-  it('escapes a hostile URL in markup and in the retry script', () => {
+  it('escapes a hostile URL in markup, and never puts it in the retry script', () => {
     const html = buildErrorPage({
       ...dnsError,
       url: 'https://a/<script>alert(1)</script>"onload'
     })
     expect(html).not.toContain('<script>alert(1)')
-    // The retry target is a JSON string literal: quotes are escaped, so the
-    // hostile URL cannot terminate the string and inject code.
-    expect(html).toContain('location.href = "https://a/\\u003cscript')
+    // Retry navigates to the fixed private URL, never to the failed one: main
+    // holds the target, so a hostile URL never reaches the inline script at all.
+    expect(html).toContain(`location.href = "${RETRY_URL}"`)
+    expect(html).not.toContain('location.href = "https://a/')
+  })
+
+  it('retries through the private URL, not a direct navigation', () => {
+    // A plain location.href to the failed URL is blocked by Chromium whenever
+    // the target is file:// — the error page is a data: URL, and a data: origin
+    // may not load a local resource. That is why Retry goes through main.
+    const html = buildErrorPage({ ...dnsError, url: 'file:///Users/me/page.html' })
+    expect(html).not.toContain('location.href = "file://')
+    expect(html).toContain(RETRY_URL)
   })
 
   it('embeds the marker so the navigation is recognizable', () => {
@@ -68,5 +80,14 @@ describe('isMiraErrorUrl', () => {
     expect(isMiraErrorUrl('https://example.com')).toBe(false)
     expect(isMiraErrorUrl('data:text/html,hello')).toBe(false)
     expect(isMiraErrorUrl('')).toBe(false)
+  })
+})
+
+describe('isRetryUrl', () => {
+  it('matches only the exact retry action URL', () => {
+    expect(isRetryUrl(RETRY_URL)).toBe(true)
+    expect(isRetryUrl('https://example.com')).toBe(false)
+    expect(isRetryUrl('mira-retry:something')).toBe(false)
+    expect(isRetryUrl('')).toBe(false)
   })
 })

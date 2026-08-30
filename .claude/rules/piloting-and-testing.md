@@ -1,9 +1,9 @@
 ---
 paths:
-  - "src/main/**"
-  - "docs/socket.md"
-  - "scratchpad/**"
-  - "**/*.test.ts"
+  - 'src/main/**'
+  - 'docs/socket.md'
+  - 'scratchpad/**'
+  - '**/*.test.ts'
 ---
 
 # Piloter Mira par socket + tester dans un profil isolé
@@ -54,7 +54,7 @@ Dépannage rapide en shell si vraiment besoin de `nc` : garder stdin ouvert le t
 
 - **`exec-js` prend un `tabId`** (UUID via `list-tabs`) : toujours le passer pour viser un onglet précis. Un onglet endormi renvoie `{"ok":false,"error":"tab is asleep"}` (le réveiller via `select-tab`). Pour du code async, `exec-js` peut ne pas attendre la promesse dans certains builds — contourner par « lance l'async, stocke dans `window.__x`, relis en sync » sur un 2ᵉ appel.
 - **Aucune commande socket ne remonte Mira au premier plan.** Depuis le fix « foreground policy » (`src/main/foreground-policy.ts`), une commande qui arrive par le socket/MCP fait son travail sans jamais activer l'app : `new-tab`, `navigate`, `open-url`, `open-profile`, `activate-tab`, `press-key`, `detach-tab`. Seul `focus-app` remonte Mira, et c'est sa seule raison d'être. La même commande venue de l'UI (clic, Cmd+T) garde l'ancien comportement.
-- **`background:true` reste utile, mais pour autre chose** : il empêche la fenêtre de *basculer* sur le nouvel onglet, donc rien ne bouge à l'écran. `new-tab {background:true}`, `navigate {newTab:true,background:true}`, ou `mira open <url> -b`. Tu récupères le `tabId` dans la réponse et tu pilotes via `exec-js`.
+- **`background:true` reste utile, mais pour autre chose** : il empêche la fenêtre de _basculer_ sur le nouvel onglet, donc rien ne bouge à l'écran. `new-tab {background:true}`, `navigate {newTab:true,background:true}`, ou `mira open <url> -b`. Tu récupères le `tabId` dans la réponse et tu pilotes via `exec-js`.
 - **Profil de test isolé.** Un profil dédié (session/cookies à part) existe pour ne pas polluer les profils réels. Son id concret et son usage vivent dans `CLAUDE.local.md` (non versionné).
 
 ## Piloter au clavier (vraie frappe) et onglets cachés

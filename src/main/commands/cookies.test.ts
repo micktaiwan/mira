@@ -102,7 +102,10 @@ describe('count-active-cookies command', () => {
 
 describe('dump-cookies command', () => {
   it('returns the active site cookie string (name=value; …) and count', async () => {
-    mockedRows.mockReturnValue([row({ name: 'li_at', value: 'AAA' }), row({ name: 'JSESSIONID', value: 'ajax:1' })])
+    mockedRows.mockReturnValue([
+      row({ name: 'li_at', value: 'AAA' }),
+      row({ name: 'JSESSIONID', value: 'ajax:1' })
+    ])
     const fake = makeContext()
     const reg = createCommandRegistry()
     await reg.execute('import-cookies', { to: 'default', profileDir: 'Default' }, fake.ctx)

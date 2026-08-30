@@ -6,7 +6,7 @@ import type { LoginPromptRequest } from './login-prompt'
 import type { CardPromptAnswer } from './card-prompt'
 import type { CardVault } from './bitwarden'
 import type { FragmentSource } from './card-capture-service'
-import type { VaultLogin } from './bitwarden-login'
+import type { LoginMatch, VaultLogin } from './bitwarden-login'
 
 const PERSO: CardVault = { appDataDir: '/tmp/bw-perso', email: 'faivrem@gmail.com' }
 const NOW = new Date('2026-08-21T12:00:00Z')
@@ -49,9 +49,11 @@ function makeService(
     vaultState: string
     answer: CardPromptAnswer | null
     existing: VaultLogin | null
-    findExisting: () => Promise<VaultLogin | null>
+    sameCredential: VaultLogin | null
+    findMatch: () => Promise<LoginMatch>
     saveLogin: () => Promise<string | null>
     updateLogin: () => Promise<void>
+    linkLogin: () => Promise<void>
     unlock: (vault: CardVault, password: string) => Promise<void>
   }> = {}
 ): {
@@ -61,6 +63,7 @@ function makeService(
   toasts: string[]
   saveLogin: ReturnType<typeof vi.fn>
   updateLogin: ReturnType<typeof vi.fn>
+  linkLogin: ReturnType<typeof vi.fn>
   unlock: ReturnType<typeof vi.fn>
 } {
   const prompts: LoginPromptRequest[] = []
@@ -69,6 +72,7 @@ function makeService(
   const vaults = over.vaults ?? { perso: PERSO }
   const saveLogin = vi.fn(over.saveLogin ?? (async () => 'item-9'))
   const updateLogin = vi.fn(over.updateLogin ?? (async () => {}))
+  const linkLogin = vi.fn(over.linkLogin ?? (async () => {}))
   const unlock = vi.fn(over.unlock ?? (async () => {}))
   let hasSession = over.hasSession ?? true
   const service = new LoginCaptureService('/tmp/userdata', {
@@ -79,9 +83,15 @@ function makeService(
       await unlock(vault, password)
       hasSession = true
     },
-    findExisting: over.findExisting ?? (async () => over.existing ?? null),
+    findMatch:
+      over.findMatch ??
+      (async () => ({
+        account: over.existing ?? null,
+        sameCredential: over.existing ? null : (over.sameCredential ?? null)
+      })),
     saveLogin: saveLogin as never,
     updateLogin: updateLogin as never,
+    linkLogin: linkLogin as never,
     prompt: (_profileId, req) => {
       prompts.push(req)
       return {
@@ -93,7 +103,7 @@ function makeService(
     toast: (_profileId, message) => toasts.push(message),
     now: () => NOW
   })
-  return { service, prompts, busyLabels, toasts, saveLogin, updateLogin, unlock }
+  return { service, prompts, busyLabels, toasts, saveLogin, updateLogin, linkLogin, unlock }
 }
 
 describe('LoginCaptureService.handleFragment', () => {
@@ -191,14 +201,15 @@ describe('LoginCaptureService.handleFragment', () => {
   })
 
   it('checks for a duplicate AFTER an unlock, so it updates instead of duplicating', async () => {
-    const findExisting = vi
-      .fn<() => Promise<VaultLogin | null>>()
-      .mockResolvedValue(existingItem({ password: 'the-old-one' }))
+    const findMatch = vi.fn<() => Promise<LoginMatch>>().mockResolvedValue({
+      account: existingItem({ password: 'the-old-one' }),
+      sameCredential: null
+    })
     const { service, updateLogin, saveLogin } = makeService({
       hasSession: false,
       vaultState: 'locked',
       answer: { action: 'unlock', password: 'master' },
-      findExisting
+      findMatch
     })
     expect(await service.handleFragment(typed(), source())).toBe('updated')
     expect(updateLogin).toHaveBeenCalledOnce()
@@ -270,5 +281,45 @@ describe('LoginCaptureService.handleFragment', () => {
     ).toBe('saved')
     // The username is gone with the draft: what is saved is the password alone.
     expect(prompts[0].loginLabel).toBe('banco.mickaelfm.me')
+  })
+
+  it('links the address to the item holding the same credential, without asking', async () => {
+    const { service, prompts, linkLogin, saveLogin, toasts } = makeService({
+      sameCredential: existingItem({ hosts: ['mail.mickaelfm.me'] })
+    })
+    expect(await service.handleFragment(typed(), source())).toBe('linked')
+    // Nothing to decide: the very same password is already in the vault.
+    expect(prompts).toEqual([])
+    expect(saveLogin).not.toHaveBeenCalled()
+    expect(linkLogin).toHaveBeenCalledWith(
+      PERSO,
+      expect.objectContaining({ id: 'item-1' }),
+      'https://banco.mickaelfm.me/login'
+    )
+    expect(toasts).toEqual(['Login already in Bitwarden — added this address'])
+  })
+
+  it('links after an unlock too, instead of creating a second item for one account', async () => {
+    const { service, prompts, linkLogin, saveLogin } = makeService({
+      hasSession: false,
+      vaultState: 'locked',
+      answer: { action: 'unlock', password: 'master' },
+      sameCredential: existingItem({ hosts: ['mail.mickaelfm.me'] })
+    })
+    expect(await service.handleFragment(typed(), source())).toBe('linked')
+    expect(prompts[0].mode).toBe('unlock')
+    expect(saveLogin).not.toHaveBeenCalled()
+    expect(linkLogin).toHaveBeenCalledOnce()
+  })
+
+  it('stays silent when the link fails: the password is in the vault either way', async () => {
+    const { service, toasts } = makeService({
+      sameCredential: existingItem({ hosts: ['mail.mickaelfm.me'] }),
+      linkLogin: async () => {
+        throw new Error('bw said no')
+      }
+    })
+    expect(await service.handleFragment(typed(), source())).toBe('known')
+    expect(toasts).toEqual([])
   })
 })

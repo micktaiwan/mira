@@ -49,9 +49,7 @@ describe('parseDomMedia', () => {
   it('keeps a url-less video that carries a permalink (downloadable via yt-dlp)', () => {
     // A <video> with no src yet (X attaches the blob only on play) still yields a
     // downloadable item as long as its permalink was resolved.
-    const raw = JSON.stringify([
-      { kind: 'video', url: '', pageUrl: 'https://x.com/a/status/1' }
-    ])
+    const raw = JSON.stringify([{ kind: 'video', url: '', pageUrl: 'https://x.com/a/status/1' }])
     const out = parseDomMedia(raw)
     expect(out).toHaveLength(1)
     expect(out[0]).toMatchObject({ kind: 'video', url: '', pageUrl: 'https://x.com/a/status/1' })

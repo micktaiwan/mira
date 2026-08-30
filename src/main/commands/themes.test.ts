@@ -65,7 +65,10 @@ describe('update-theme / delete-theme', () => {
     const { ctx } = makeContext()
     const registry = createCommandRegistry()
     registry.execute('create-theme', { name: 'Ocean', background: '#0d1b2a', text: '#f0e6d2' }, ctx)
-    expect(registry.execute('delete-theme', { id: 'ocean' }, ctx)).toEqual({ ok: true, id: 'ocean' })
+    expect(registry.execute('delete-theme', { id: 'ocean' }, ctx)).toEqual({
+      ok: true,
+      id: 'ocean'
+    })
     expect(registry.execute('delete-theme', { id: 'paper' }, ctx)).toMatchObject({ ok: false })
   })
 })
@@ -74,11 +77,13 @@ describe('set-profile-theme', () => {
   it('assigns a theme to a profile', () => {
     const { ctx } = makeContext()
     const registry = createCommandRegistry()
-    expect(registry.execute('set-profile-theme', { id: 'default', themeId: 'paper' }, ctx)).toEqual({
-      ok: true,
-      id: 'default',
-      themeId: 'paper'
-    })
+    expect(registry.execute('set-profile-theme', { id: 'default', themeId: 'paper' }, ctx)).toEqual(
+      {
+        ok: true,
+        id: 'default',
+        themeId: 'paper'
+      }
+    )
   })
 
   it('clears the theme with null (back to default)', () => {

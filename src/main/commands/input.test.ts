@@ -53,9 +53,7 @@ describe('press-key', () => {
 
   it('rejects an unknown modifier', async () => {
     const { ctx } = makeContext()
-    expect(
-      await registry.execute('press-key', { key: 'e', modifiers: ['hyper'] }, ctx)
-    ).toEqual({
+    expect(await registry.execute('press-key', { key: 'e', modifiers: ['hyper'] }, ctx)).toEqual({
       ok: false,
       error: 'invalid "modifiers" (alt|ctrl|meta|shift)'
     })

@@ -168,7 +168,13 @@ describe('buildTabMemoryReport', () => {
   it('carries the keepAwake flag through to the entry', () => {
     const mem = new Map([[1, 10 * MB]])
     const report = buildTabMemoryReport(
-      [rawTab({ tabId: 'a', keepAwake: true, frames: [{ pid: 1, url: 'https://a.test/', main: true }] })],
+      [
+        rawTab({
+          tabId: 'a',
+          keepAwake: true,
+          frames: [{ pid: 1, url: 'https://a.test/', main: true }]
+        })
+      ],
       mem,
       [1]
     )

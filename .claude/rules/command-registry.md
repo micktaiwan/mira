@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/main/commands/**"
+  - 'src/main/commands/**'
 ---
 
 # Registre de commandes — découpage anti-collision

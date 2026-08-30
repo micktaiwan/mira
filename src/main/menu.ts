@@ -39,6 +39,10 @@ export interface AppMenuHandlers {
   /** Hard reload the active tab (Cmd+Shift+R): re-fetch bypassing the HTTP cache,
    * for a stale cached page. Wired to the hard-reload command. */
   hardReload: () => void
+  /** Focus the address bar and select its contents (Cmd+L). Wired to the
+   * focus-address-bar command. On Mira's error page the bar holds the URL that
+   * failed, so Cmd+L then Enter re-navigates to it. */
+  focusAddressBar: () => void
   /** Open a new tab (Cmd+T) / close the active tab (Cmd+W) in the focused window.
    * Wired to the new-tab / close-active-tab commands. Cmd+W closes a tab, never
    * the window — window closing moves to Cmd+Shift+W (see the File menu). */
@@ -173,6 +177,11 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
         click: () => handlers.togglePalette()
       },
       { type: 'separator' },
+      {
+        label: 'Open Location…',
+        accelerator: 'CmdOrCtrl+L',
+        click: () => handlers.focusAddressBar()
+      },
       { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => handlers.newTab() },
       {
         label: 'Duplicate Tab',

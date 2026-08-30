@@ -26,6 +26,13 @@ function setup(): {
       getZoomLevel: () => 0,
       setZoomLevel: () => {}
     }),
+    loadUrlInTab: (url: string) => {
+      loaded.push(url)
+    },
+    newTabNearTab: () => ({ id: 'tab-near' }),
+    reloadTab: () => {},
+    focusAddressBar: () => {},
+    retryFailedLoad: () => false,
     startTracing: async (params) => parseTraceParams(params),
     stopTracing: async () => '/fake/traces/trace.json',
     tracingActive: () => false,
@@ -258,7 +265,8 @@ function setup(): {
     saveLogin: async () => ({
       id: 'login-1',
       label: 'me@example.com on example.com',
-      updated: false
+      updated: false,
+      linked: false
     }),
     deleteLogin: async (_id: string) => ({ profileId: 'default', name: 'example.com' }),
     listFormMemory: () => [],

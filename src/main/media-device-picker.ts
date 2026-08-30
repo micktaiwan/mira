@@ -99,11 +99,7 @@ export function deviceDisplayName(device: MediaDevice, index: number): string {
  * gathers the checked deviceId per kind and reports {video,audio} as JSON;
  * Cancel / Escape report ''. Pure — same request always yields the same HTML. */
 export function renderDevicePickerHtml(req: MediaPickRequest): string {
-  const column = (
-    title: string,
-    name: 'video' | 'audio',
-    devices: MediaDevice[]
-  ): string => {
+  const column = (title: string, name: 'video' | 'audio', devices: MediaDevice[]): string => {
     if (!devices.length) return ''
     const rows = devices
       .map((d, i) => {

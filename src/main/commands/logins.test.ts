@@ -55,6 +55,39 @@ describe('save-login', () => {
     expect(list.logins).toHaveLength(1)
   })
 
+  it('adds the address to the item holding the same credential on another subdomain', async () => {
+    const ctx = await ready()
+    const account = { profileId: 'perso', username: 'me@example.com', password: 'hunter22' }
+    await run(ctx, 'save-login', { ...account, url: 'https://go.tiime.fr/creer-compte' })
+    const again = await run(ctx, 'save-login', { ...account, url: 'https://apps.tiime.fr/signin' })
+    expect(again).toMatchObject({ ok: true, linked: true, updated: false })
+    const list = (await run(ctx, 'list-logins', { profileId: 'perso' })) as unknown as {
+      logins: { hosts: string[] }[]
+    }
+    expect(list.logins).toHaveLength(1)
+    expect(list.logins[0].hosts).toEqual(['go.tiime.fr', 'apps.tiime.fr'])
+  })
+
+  it('keeps two items when the same site holds two accounts under one username', async () => {
+    const ctx = await ready()
+    const admin = { profileId: 'perso', username: 'admin' }
+    await run(ctx, 'save-login', {
+      ...admin,
+      url: 'https://nexus.lempire.com',
+      password: 'nexus-pass'
+    })
+    const other = await run(ctx, 'save-login', {
+      ...admin,
+      url: 'https://grafana.lempire.com',
+      password: 'grafana-pass'
+    })
+    expect(other).toMatchObject({ ok: true, linked: false, updated: false })
+    const list = (await run(ctx, 'list-logins', { profileId: 'perso' })) as unknown as {
+      logins: unknown[]
+    }
+    expect(list.logins).toHaveLength(2)
+  })
+
   it('refuses a page that is not http(s) and a password too short to be one', async () => {
     const ctx = await ready()
     expect(

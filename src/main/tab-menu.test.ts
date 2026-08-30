@@ -55,7 +55,10 @@ describe('buildTabMenu', () => {
   })
 
   it('offers Copy Tab ID targeting the clicked tab', () => {
-    const items = buildTabMenu({ id: 'tab-42', pinned: false, keepAwake: false, folderId: null }, [])
+    const items = buildTabMenu(
+      { id: 'tab-42', pinned: false, keepAwake: false, folderId: null },
+      []
+    )
     const copy = items.find((i) => i.type === 'command' && i.command === 'copy-tab-id')
     expect(copy).toMatchObject({ label: 'Copy Tab ID', params: { id: 'tab-42' } })
   })
@@ -99,7 +102,10 @@ describe('buildTabMenu', () => {
   })
 
   it('targets the clicked tab id in the id-taking commands', () => {
-    const items = buildTabMenu({ id: 'tab-42', pinned: false, keepAwake: false, folderId: null }, [])
+    const items = buildTabMenu(
+      { id: 'tab-42', pinned: false, keepAwake: false, folderId: null },
+      []
+    )
     for (const command of ['pin-tab', 'close-tab']) {
       const item = items.find((i) => i.type === 'command' && i.command === command)
       expect(item).toMatchObject({ params: { id: 'tab-42' } })

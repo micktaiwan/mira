@@ -250,8 +250,7 @@ export default function StatusBar(): React.JSX.Element {
       downloads?: Array<{ id: string; state: string; seen?: boolean }>
     }
     if (!res.ok || !res.downloads) return
-    const latest =
-      res.downloads.find((d) => d.state === 'completed' && !d.seen) ?? res.downloads[0]
+    const latest = res.downloads.find((d) => d.state === 'completed' && !d.seen) ?? res.downloads[0]
     if (!latest) return
     const command = latest.state === 'completed' ? 'open-download' : 'reveal-download'
     void window.mira.command(command, { id: latest.id })

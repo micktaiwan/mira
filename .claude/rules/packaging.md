@@ -1,9 +1,9 @@
 ---
 paths:
-  - "electron-builder.yml"
-  - "patches/**"
-  - "bin/**"
-  - "package.json"
+  - 'electron-builder.yml'
+  - 'patches/**'
+  - 'bin/**'
+  - 'package.json'
 ---
 
 # Packaging (build:mac) et build packagé
@@ -14,7 +14,7 @@ paths:
 
 **Build packagé.** `./bin/build.sh` typecheck, quitte Mira, fait `npm run build:mac`, puis **remplace `/Applications/Mira.app` par une vraie copie** (`ditto` depuis `dist/mac-arm64/Mira.app`) et rouvre l'app. Ce fut un symlink, et ça cassait l'identité de bundle macOS : les sous-systèmes de confidentialité ne retrouvaient plus l'app (`bundle_id: (null)`), d'où un `ERR_ADDRESS_UNREACHABLE` sur tout hôte du LAN malgré l'autorisation Réseau local. Le pourquoi complet est en tête de `bin/build.sh`. Le mode de dev par défaut reste `npm run dev` (HMR). La règle perso « ne pas builder / lancer de long-running sans mon accord » vit dans `CLAUDE.local.md` (non versionné).
 
-**Provisioning profile : à renouveler tous les 7 jours.** `build/embedded.provisionprofile` porte l'entitlement AMFI `keychain-access-groups` sans lequel Touch ID / WebAuthn ne marche pas (voir `src/main/webauthn.ts`). Il est émis par le *personal team* gratuit ZMKDR6H89Y et **expire au bout de 7 jours** ; passé ce délai il faut le refaire ET rebuilder, sinon l'entitlement cesse de valider au runtime.
+**Provisioning profile : à renouveler tous les 7 jours.** `build/embedded.provisionprofile` porte l'entitlement AMFI `keychain-access-groups` sans lequel Touch ID / WebAuthn ne marche pas (voir `src/main/webauthn.ts`). Il est émis par le _personal team_ gratuit ZMKDR6H89Y et **expire au bout de 7 jours** ; passé ce délai il faut le refaire ET rebuilder, sinon l'entitlement cesse de valider au runtime.
 
 Un profil ne s'obtient pas à la demande : Xcode ne l'émet **que** s'il signe une app qui réclame une capability l'exigeant. Un projet sans entitlements signe très bien et ne produit aucun profil (vérifié 2026-07-29). D'où la recette, avec `xcodegen` :
 

@@ -2,8 +2,8 @@
 // connection, timeout…) instead of Chromium's blank void. Like home-doc.ts, it is
 // a self-contained HTML document loaded into the tab's WebContentsView as a
 // data: URL. It shows a human-readable explanation of the failure, the URL that
-// failed, the raw Chromium error name, and a Retry button that re-navigates to
-// the original URL.
+// failed, the raw Chromium error name, and a Retry button that asks main to
+// re-navigate to the original URL.
 //
 // buildErrorPage / errorPageUrl are pure and tested; profiles.ts listens to
 // did-fail-load and calls in (see wireView).
@@ -32,6 +32,21 @@ const ERROR_MARKER = 'mira-error-page'
 /** True when `url` is the Mira error page. */
 export function isMiraErrorUrl(url: string): boolean {
   return url.includes(ERROR_MARKER)
+}
+
+/** The private URL the Retry button navigates to, intercepted by main in
+ * will-navigate (same trick as the download page's mira-dl: buttons).
+ *
+ * It carries no payload: main already knows which URL failed in this tab. What
+ * it replaces is a plain `location.href = <failed url>`, which was DEAD for
+ * every local page — the error page is a data: URL, and Chromium refuses a
+ * navigation from a data: origin to file:// ("Not allowed to load local
+ * resource"). Letting main do the load sidesteps the origin check entirely. */
+export const RETRY_URL = 'mira-retry:'
+
+/** True when `url` is the error page's Retry action (never a real navigation). */
+export function isRetryUrl(url: string): boolean {
+  return url === RETRY_URL
 }
 
 /** Human-readable headline + hint for the common Chromium net error codes.
@@ -96,14 +111,11 @@ function escapeHtml(s: string): string {
 }
 
 /** Build the full error-page HTML for a failed load. Self-contained: inline CSS
- * + one inline script (the Retry navigation). Safe to encode into a data: URL.
+ * + one inline script (the Retry navigation to RETRY_URL). Safe to encode into a
+ * data: URL.
  * Visual language mirrors home-doc.ts (Mira is dark-only). */
 export function buildErrorPage(err: LoadError): string {
   const { headline, hint } = describeLoadError(err)
-  // The retry target is embedded as a JS string, not markup: JSON.stringify
-  // escapes quotes/backslashes, and '<' is escaped on top because a literal
-  // '</script>' inside the string would close the inline script block.
-  const target = JSON.stringify(err.url).replace(/</g, '\\u003c')
   return `<!doctype html>
 <html lang="en">
 <!--${ERROR_MARKER}-->
@@ -196,7 +208,7 @@ export function buildErrorPage(err: LoadError): string {
   </div>
   <script>
     document.getElementById('retry').addEventListener('click', function () {
-      location.href = ${target};
+      location.href = ${JSON.stringify(RETRY_URL)};
     });
   </script>
 </body>

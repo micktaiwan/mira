@@ -1,6 +1,6 @@
 ---
 paths:
-  - "src/main/**"
+  - 'src/main/**'
 ---
 
 # Pièges natifs Electron (process main)

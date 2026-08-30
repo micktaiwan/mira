@@ -953,10 +953,10 @@ browser process ~1 s après le chargement de l'extension.
 **Cause racine PROUVÉE** (crash `Electron-2026-07-13-120303.ips` symbolisé avec les breakpad
 symbols officiels d'Electron 41.7.0 — UUID identique) : Electron 41 **compile chrome.offscreen**
 (`OffscreenDocumentManager` est dans le binaire, le document se crée vraiment), mais le document
-offscreen est un *extension host* dont le check de permission média passe par
+offscreen est un _extension host_ dont le check de permission média passe par
 `ElectronExtensionHostDelegate::CheckMediaAccessPermission` →
 `extensions::media_capture_util::VerifyMediaAccessPermission` — un **CHECK release** sur les
-permissions `audioCapture`/`videoCapture` (permissions de *platform app*, qu'aucune extension MV3
+permissions `audioCapture`/`videoCapture` (permissions de _platform app_, qu'aucune extension MV3
 ne peut détenir). Le doc offscreen de Claap sert à « list media devices » : son premier
 `enumerateDevices()` → CHECK → SIGTRAP du process entier. Même famille de piège que le crash DNR
 de Kondo (§8.2.3) : un chemin natif à moitié câblé, fatal à la simple utilisation.

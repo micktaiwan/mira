@@ -22,7 +22,8 @@ const documentElement = {
 ;(globalThis as unknown as { window: unknown }).window = { location: { search: '' } }
 
 const setSearch = (s: string): void => {
-  ;(globalThis as unknown as { window: { location: { search: string } } }).window.location.search = s
+  ;(globalThis as unknown as { window: { location: { search: string } } }).window.location.search =
+    s
 }
 
 const PAPER = {

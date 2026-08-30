@@ -8,6 +8,8 @@ import {
   buildReload,
   buildPress,
   buildCall,
+  buildNav,
+  buildFocus,
   buildConsole,
   buildScreenshot,
   absolutePath,
@@ -18,7 +20,8 @@ import {
   resolveCode,
   TAB_BOUND,
   resolveTimeoutMs,
-  background
+  background,
+  resolveNavTarget
   // @ts-expect-error — plain-ESM sibling module, no .d.ts (the CLI ships without a build),
 } from './mira-core.mjs'
 
@@ -121,15 +124,64 @@ describe('buildExec — a stale tabId is passed through, never swapped', () => {
   })
 })
 
+describe('buildNav — the pinned tab is the target, not the focused window', () => {
+  it('omits tabId when none is resolved (active tab of the focused window)', () => {
+    expect(buildNav('example.com', null)).toEqual({
+      command: 'navigate',
+      params: { url: 'example.com' }
+    })
+  })
+
+  // The regression this closes: `nav` was the one page-bound verb that dropped
+  // $MIRA_TAB, so a scripted navigation landed on the focused window's active
+  // tab and overwrote it.
+  it('carries the pinned tab so the navigation lands there', () => {
+    expect(buildNav('example.com', 't1')).toEqual({
+      command: 'navigate',
+      params: { url: 'example.com', tabId: 't1' }
+    })
+  })
+
+  it("keeps the tab as the new tab's neighbour under --new-tab", () => {
+    expect(buildNav('example.com', 't1', { newTab: true })).toEqual({
+      command: 'navigate',
+      params: { url: 'example.com', newTab: true, tabId: 't1' }
+    })
+  })
+
+  it('passes background only alongside newTab (it means nothing in place)', () => {
+    expect(buildNav('example.com', null, { newTab: true, background: true })).toEqual({
+      command: 'navigate',
+      params: { url: 'example.com', newTab: true, background: true }
+    })
+    expect(buildNav('example.com', null, { background: true })).toEqual({
+      command: 'navigate',
+      params: { url: 'example.com' }
+    })
+  })
+})
+
+describe('buildFocus', () => {
+  it("raises Mira's last-focused window when no id is given", () => {
+    expect(buildFocus(undefined)).toEqual({ command: 'focus-app' })
+    expect(buildFocus(true)).toEqual({ command: 'focus-app' })
+    expect(buildFocus('  ')).toEqual({ command: 'focus-app' })
+  })
+
+  it('names the window to raise', () => {
+    expect(buildFocus(' win-2 ')).toEqual({
+      command: 'focus-app',
+      params: { windowId: 'win-2' }
+    })
+  })
+})
+
 describe('buildReload', () => {
   it('reloads the active tab via the plain command when no tab is pinned', () => {
     expect(buildReload(null)).toEqual({ command: 'reload' })
   })
-  it('reloads a pinned tab through exec-js (reload has no tabId param)', () => {
-    expect(buildReload('t1')).toEqual({
-      command: 'exec-js',
-      params: { code: "location.reload(); 'ok'", tabId: 't1' }
-    })
+  it('reloads a pinned tab server-side, so the error page can retry its failed url', () => {
+    expect(buildReload('t1')).toEqual({ command: 'reload', params: { tabId: 't1' } })
   })
 })
 
@@ -431,5 +483,76 @@ describe('resolveTimeoutMs', () => {
     expect(resolveTimeoutMs({ timeout: '0' })).toBe(30000)
     expect(resolveTimeoutMs({ timeout: '-5' })).toBe(30000)
     expect(resolveTimeoutMs({ timeout: true })).toBe(30000)
+  })
+})
+
+describe('resolveNavTarget — nav/open never guess a window across profiles', () => {
+  const perso = { windowId: 'w-perso', profileId: 'p-perso', tabCount: 3, focused: false }
+  const pro = { windowId: 'w-pro', profileId: 'p-pro', tabCount: 9, focused: false }
+
+  it('lets a pinned tab decide, without consulting the windows', () => {
+    expect(resolveNavTarget([perso, pro], { tabId: 't1' })).toEqual({ windowId: null })
+  })
+
+  it('stays out of the way when a single profile is open', () => {
+    expect(resolveNavTarget([perso], {})).toEqual({ windowId: null })
+  })
+
+  it('refuses to pick when several profiles are open and nothing is named', () => {
+    const r = resolveNavTarget([pro, perso], {})
+    expect(r.error).toMatch(/refusing to guess a window/)
+    expect(r.error).toContain('w-pro')
+    expect(r.error).toContain('w-perso')
+  })
+
+  it('accepts an explicit --window', () => {
+    expect(resolveNavTarget([pro, perso], { windowFlag: 'w-perso' })).toEqual({
+      windowId: 'w-perso'
+    })
+  })
+
+  it('rejects an unknown --window instead of falling back', () => {
+    expect(resolveNavTarget([pro, perso], { windowFlag: 'nope' })).toEqual({
+      error: 'unknown window: nope'
+    })
+  })
+
+  it('resolves --profile by id prefix', () => {
+    expect(resolveNavTarget([pro, perso], { profileFlag: 'p-per' })).toEqual({
+      windowId: 'w-perso'
+    })
+  })
+
+  it('resolves --profile by label, so no one has to carry a UUID', () => {
+    const labels = { 'p-perso': 'perso: faivrem@gmail.com', 'p-pro': 'pro: lempire' }
+    expect(resolveNavTarget([pro, perso], { profileFlag: 'perso' }, labels)).toEqual({
+      windowId: 'w-perso'
+    })
+  })
+
+  it('names profiles by label in the refusal, not by UUID', () => {
+    const labels = { 'p-perso': 'perso: faivrem@gmail.com', 'p-pro': 'pro: lempire' }
+    const r = resolveNavTarget([pro, perso], {}, labels)
+    expect(r.error).toContain('pro: lempire')
+    expect(r.error).toContain('perso: faivrem@gmail.com')
+  })
+
+  it('reports an unknown profile', () => {
+    expect(resolveNavTarget([pro, perso], { profileFlag: 'zzz' })).toEqual({
+      error: 'no open window for profile: zzz'
+    })
+  })
+
+  it('asks for a window when one profile holds several', () => {
+    const perso2 = { windowId: 'w-perso-2', profileId: 'p-perso', tabCount: 1, focused: false }
+    const r = resolveNavTarget([perso, perso2, pro], { profileFlag: 'p-perso' })
+    expect(r.error).toMatch(/several windows/)
+    expect(r.error).toContain('w-perso-2')
+  })
+
+  it('refuses an ambiguous --profile that spans two profiles', () => {
+    const labels = { 'p-perso': 'perso: mail', 'p-pro': 'pro: lempire' }
+    const r = resolveNavTarget([pro, perso], { profileFlag: 'p-' }, labels)
+    expect(r.error).toMatch(/matches several profiles/)
   })
 })

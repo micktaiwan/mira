@@ -73,7 +73,7 @@ import {
   type DownloadState
 } from './downloads'
 import { homePageUrl, isMiraHomeUrl, type HomeStats } from './home-doc'
-import { errorPageUrl, isMiraErrorUrl } from './error-doc'
+import { errorPageUrl, isMiraErrorUrl, isRetryUrl } from './error-doc'
 import {
   downloadPageUrl,
   isMiraDownloadUrl,
@@ -641,6 +641,13 @@ export class ProfileManager {
    * resolved into a file download — see trackDownload). wireView's mirrorUrl
    * reads it so the address bar keeps the file's URL, not the data: URL. */
   private readonly downloadDocSource = new Map<string, string>()
+  /** URL whose load FAILED in a tab that is currently showing Mira's error page,
+   * keyed by tab id. The error page is a real navigation to a data: URL, so the
+   * tab's own history no longer knows what the user asked for: without this map
+   * a reload would reload the ERROR PAGE forever and never retry the page (the
+   * bug that left a restored local file unreachable). Set on did-fail-load,
+   * dropped as soon as the tab commits any non-error navigation. */
+  private readonly errorRetryUrl = new Map<string, string>()
   /** Pending debounced flush of sessions.json (one timer for the whole app, as
    * there is a single file). null when no write is pending. */
   private saveTimer: ReturnType<typeof setTimeout> | null = null
@@ -2421,6 +2428,19 @@ export class ProfileManager {
     // URL (an unprivileged page cannot call the command registry): intercept it,
     // run the action, and let everything else navigate normally.
     wc.on('will-navigate', (e, navUrl) => {
+      // The error page's Retry button goes through the same private-URL trick:
+      // main re-loads the failed URL itself, because the page (a data: URL)
+      // is not allowed to navigate to a file:// target on its own.
+      if (isRetryUrl(navUrl)) {
+        e.preventDefault()
+        const retry = this.errorRetryUrl.get(tabId)
+        if (retry !== undefined) {
+          wc.loadURL(retry).catch((error) => {
+            console.error('[mira] error page: retry failed', error)
+          })
+        }
+        return
+      }
       const action = parseDownloadActionUrl(navUrl)
       if (!action) return
       e.preventDefault()
@@ -2435,7 +2455,13 @@ export class ProfileManager {
       console.error(processGoneLine(`tab ${tabId}`, details))
     })
     wc.on('page-title-updated', (_e, title) => patch({ title }))
-    wc.on('did-navigate', (_e, navUrl) => patch({ url: mirrorUrl(navUrl) }))
+    wc.on('did-navigate', (_e, navUrl) => {
+      // A commit that is NOT the error page means the tab left the failure
+      // behind (the retry worked, or the user went elsewhere): forget it, so a
+      // later reload reloads the page that is actually on screen.
+      if (!isMiraErrorUrl(navUrl)) this.errorRetryUrl.delete(tabId)
+      patch({ url: mirrorUrl(navUrl) })
+    })
     // A failed main-frame load (DNS failure, refused connection, timeout…) would
     // leave a blank void: show Mira's error page instead. ERR_ABORTED (-3) is not
     // a failure — it fires when a load is superseded (stop, quick re-navigation).
@@ -2452,6 +2478,9 @@ export class ProfileManager {
         return
       }
       failedUrl = validatedURL
+      // Remembered per tab so reload / hard-reload / the Retry button can go back
+      // to the page the user asked for instead of re-rendering the error page.
+      this.errorRetryUrl.set(tabId, validatedURL)
       const errProfile = findById(this.profiles, owner().id)
       wc.loadURL(
         errorPageUrl({
@@ -2533,6 +2562,7 @@ export class ProfileManager {
       const pw = owner()
       if (pw.htmlFullScreen?.tabId === tabId) this.leaveHtmlFullScreenIn(pw)
       this.downloadDocSource.delete(tabId)
+      this.errorRetryUrl.delete(tabId)
       // Drop the dead view from the map. The close/discard paths already delete
       // it, but a view can die on its own (renderer crash, a view torn down
       // underneath us): leaving it behind marked the tab "loaded" while every
@@ -3536,6 +3566,82 @@ export class ProfileManager {
     const view = target.views.get(activeId)
     if (!view) throw new Error('no active tab')
     return view.webContents
+  }
+
+  /** Load `url` into ONE named tab, in whatever window it lives (see NavContext.
+   * loadUrlInTab). Ids are UUIDs, so the search spans every window — the caller
+   * is never tied to whichever window is focused.
+   *
+   * An ASLEEP tab is handled by patching its stored url and THEN giving it its
+   * view: materializeTab starts the load from that url, so the tab performs the
+   * one load that was asked for. Waking it first and navigating after would race
+   * two loads (the old page and the new one) with no defined winner.
+   *
+   * Deliberately does NOT activate the tab or raise its window: a scripted
+   * navigation of a background tab must change nothing on screen
+   * (foreground-policy.ts). Use activate-tab when the tab must become visible. */
+  private loadUrlInTab(url: string, tabId: string): void {
+    for (const pw of this.openById.values()) {
+      if (pw.window.isDestroyed()) continue
+      const view = pw.views.get(tabId)
+      if (view) {
+        // A load that aborts (a redirect, a cancelled navigation) rejects; log it
+        // rather than leaving an unhandled rejection behind.
+        view.webContents.loadURL(url).catch((error) => {
+          console.error('[mira] navigate: loadURL failed', error)
+        })
+        return
+      }
+      if (tabId === pw.settingsTabId) throw new Error('not a web page (Settings tab)')
+      if (!pw.state.tabs.some((t) => t.id === tabId)) continue
+      // Asleep: point it at the destination first, so its one load is ours. The
+      // old title/favicon belong to the page we are leaving — clear them so the
+      // strip does not label the tab with a page it no longer holds.
+      pw.state = updateTab(pw.state, tabId, { url, title: '', favicon: null })
+      const tab = pw.state.tabs.find((t) => t.id === tabId)
+      if (tab) this.materializeTab(pw, tab)
+      this.layout(pw)
+      this.pushTabs(pw)
+      this.saveSession(pw)
+      return
+    }
+    throw new Error(`unknown tab: ${tabId}`)
+  }
+
+  /** Reload ONE named tab, in whatever window it lives (see NavContext.reloadTab).
+   * Like loadUrlInTab, the search spans every window so an explicit target is
+   * never re-read as "the active tab of the focused window". An ASLEEP tab has
+   * no page to reload: materializing it already loads its stored url, which is
+   * exactly what a reload asks for. */
+  private reloadTab(tabId: string, ignoreCache: boolean): void {
+    for (const pw of this.openById.values()) {
+      if (pw.window.isDestroyed()) continue
+      const view = pw.views.get(tabId)
+      if (view) {
+        if (ignoreCache) view.webContents.reloadIgnoringCache()
+        else view.webContents.reload()
+        return
+      }
+      if (tabId === pw.settingsTabId) throw new Error('not a web page (Settings tab)')
+      const tab = pw.state.tabs.find((t) => t.id === tabId)
+      if (!tab) continue
+      this.materializeTab(pw, tab)
+      this.layout(pw)
+      this.pushTabs(pw)
+      return
+    }
+    throw new Error(`unknown tab: ${tabId}`)
+  }
+
+  /** Open a new tab on `url` in the window that OWNS `tabId`, slotted right after
+   * it (see NavContext.newTabNearTab). The window is chosen by the target tab,
+   * never by focus, which is what makes `mira open` land where a pinned session
+   * expects. Never raises the window; `background` also leaves the tab hidden. */
+  private newTabNearTab(url: string, tabId: string, background: boolean): { id: string } {
+    const pw = this.ownerOf(tabId)
+    if (!pw || pw.window.isDestroyed()) throw new Error(`unknown tab: ${tabId}`)
+    const tab = this.newTabIn(pw, url, false, tabId, background)
+    return { id: tab.id }
   }
 
   /** Save one media url to `dir`. A data: URL is decoded and written directly; an
@@ -4862,6 +4968,22 @@ export class ProfileManager {
           setZoomLevel: (level) => wc.setZoomLevel(level)
         }
       },
+      loadUrlInTab: (url, tabId) => this.loadUrlInTab(url, tabId),
+      newTabNearTab: (url, tabId, background) => this.newTabNearTab(url, tabId, background),
+      reloadTab: (tabId, ignoreCache) => this.reloadTab(tabId, ignoreCache),
+      focusAddressBar: () => {
+        if (!target || target.window.isDestroyed()) throw new Error('no target window')
+        this.focusAddressBar(target)
+      },
+      retryFailedLoad: (tabId) => {
+        const id =
+          tabId ?? (target && !target.window.isDestroyed() ? target.state.activeId : null)
+        if (id === null || id === undefined) return false
+        const url = this.errorRetryUrl.get(id)
+        if (url === undefined) return false
+        this.loadUrlInTab(url, id)
+        return true
+      },
       getTargetProfile: () => {
         if (!target) return null
         const profile = findById(this.profiles, target.id)
@@ -4893,17 +5015,24 @@ export class ProfileManager {
       },
       getMagnifierEnabled: () => this.appSettings.magnifierEnabled,
       setMagnifierEnabled: (enabled: boolean) => this.setMagnifierEnabled(enabled),
-      focusApp: () => {
+      focusApp: (windowId) => {
         // The user explicitly asked for Mira: drop any activation suppression tail
         // so the swizzle lets this app.focus through even right after a background
         // reload armed it.
         this.endActivationSuppression()
+        // An explicit windowId picks WHICH window comes up. Without it the target
+        // is the last-focused window, so with several windows open the app always
+        // came back on the same one whatever the caller meant.
+        const wanted = windowId === undefined ? target : this.openById.get(windowId)
+        if (windowId !== undefined && (!wanted || wanted.window.isDestroyed())) {
+          throw new Error(`unknown window: ${windowId}`)
+        }
         // Fired by the global shortcut while another app is frontmost, so the
         // target is usually the "any open window" fallback, not a focused one.
-        if (target && !target.window.isDestroyed()) {
-          if (target.window.isMinimized()) target.window.restore()
-          target.window.show()
-          target.window.focus()
+        if (wanted && !wanted.window.isDestroyed()) {
+          if (wanted.window.isMinimized()) wanted.window.restore()
+          wanted.window.show()
+          wanted.window.focus()
         } else {
           this.openProfile(DEFAULT_PROFILE_ID)
         }

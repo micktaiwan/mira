@@ -13,20 +13,26 @@ describe('nextZen (pure transition)', () => {
 
   it('exiting restores the snapshot taken on entry', () => {
     const snapshot = { tabsCollapsed: false, skillPaneOpen: true }
-    const { zen, apply } = nextZen({ hidden: true, snapshot }, {
-      tabsCollapsed: true,
-      skillPaneOpen: false
-    })
+    const { zen, apply } = nextZen(
+      { hidden: true, snapshot },
+      {
+        tabsCollapsed: true,
+        skillPaneOpen: false
+      }
+    )
     expect(zen).toEqual({ hidden: false, snapshot: null })
     expect(apply).toEqual({ tabsCollapsed: false, skillPaneOpen: true })
   })
 
   it('a sidebar closed before zen stays closed after exit', () => {
     const snapshot = { tabsCollapsed: true, skillPaneOpen: false }
-    const { apply } = nextZen({ hidden: true, snapshot }, {
-      tabsCollapsed: true,
-      skillPaneOpen: false
-    })
+    const { apply } = nextZen(
+      { hidden: true, snapshot },
+      {
+        tabsCollapsed: true,
+        skillPaneOpen: false
+      }
+    )
     expect(apply.tabsCollapsed).toBe(true)
   })
 

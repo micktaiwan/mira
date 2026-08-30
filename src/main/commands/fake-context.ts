@@ -16,6 +16,7 @@ import type {
 import { buildTabMemoryReport, selectServiceWorkerLogs } from '.'
 import { cardLabel, validateCapture } from '../card'
 import { loginItemName, loginLabel, validateLogin } from '../login-capture'
+import { findLoginMatch } from '../bitwarden-login'
 import {
   fieldKey,
   forgetEntries,
@@ -38,7 +39,9 @@ import {
   emptyTabState,
   addTab,
   addTabAfter,
+  addTabAfterInactive,
   addTabInactive,
+  updateTab,
   selectTab as selectTabPure,
   closeTab as closeTabPure,
   moveTab as moveTabPure,
@@ -107,6 +110,18 @@ export interface FakeContext {
    * the settings/paths of every start and stop so far. */
   tracing: () => { active: boolean; starts: TraceStart[]; stops: string[] }
   loaded: string[]
+  /** One entry per loadUrlInTab call (navigate {tabId} spy): which url landed in
+   * which tab. Kept apart from `loaded` (the active-tab path) precisely so a test
+   * can tell an explicitly-targeted navigation from a focus-driven one. */
+  tabLoads: Array<{ url: string; tabId: string }>
+  /** One entry per reloadTab call (reload {tabId} spy). */
+  tabReloads: Array<{ tabId: string; ignoreCache: boolean }>
+  /** How many times focus-address-bar (Cmd+L) reached the window. */
+  addressBarFocuses: () => number
+  /** Pretend `tabId` is sitting on the error page after `url` failed to load, so
+   * a test can check that reload retries the failed URL instead of re-rendering
+   * the error page (see NavContext.retryFailedLoad). */
+  failLoad: (tabId: string, url: string) => void
   nav: string[]
   opened: string[]
   /** One entry per openSettings call: the requested section, or null when none. */
@@ -192,8 +207,9 @@ export interface FakeContext {
   /** Seed a captured web-page console line into a tab's buffer, as
    * ProfileManager's PageConsoleStore would. */
   seedPageConsole: (tabId: string, draft: PageConsoleDraft) => void
-  /** One entry per focusApp call (focus-app spy). */
-  focusCalls: boolean[]
+  /** One entry per focusApp call (focus-app spy): the requested windowId, or
+   * undefined when the caller let the target window decide. */
+  focusCalls: Array<string | undefined>
   /** One entry per quitApp call (quit spy). */
   quitCalls: boolean[]
   /** URLs passed to openExternalUrl (open-url / open-file handoff spy). */
@@ -227,6 +243,10 @@ export function makeContext(
   opts: FakeOptions = {}
 ): FakeContext {
   const loaded: string[] = []
+  const tabLoads: Array<{ url: string; tabId: string }> = []
+  const tabReloads: Array<{ tabId: string; ignoreCache: boolean }> = []
+  /** tabId → the URL whose load failed there, mirroring ProfileManager's map. */
+  const failedLoads = new Map<string, string>()
   const nav: string[] = []
   const opened: string[] = []
   const settingsOpened: Array<string | null> = []
@@ -248,7 +268,7 @@ export function makeContext(
   const skillPaneStates: SkillPaneState[] = []
   const clipboardWrites: string[] = []
   const toasts: string[] = []
-  const focusCalls: boolean[] = []
+  const focusCalls: Array<string | undefined> = []
   const quitCalls: boolean[] = []
   const externalOpens: string[] = []
   const externalOpenTargets: (string | undefined)[] = []
@@ -301,6 +321,8 @@ export function makeContext(
     findText: '',
     paletteOpen: false,
     mediaGalleryOpen: false,
+    /** Count of focus-address-bar calls (Cmd+L). */
+    addressBarFocuses: 0,
     tabSeq: 1,
     // Bookmarks are a global (app-wide) tree, independent of tab/profile state.
     bookmarks: [] as BookmarkTree,
@@ -473,21 +495,28 @@ export function makeContext(
   const unlockedCardVaults = new Set<string>()
   const savedCards: Array<{ profileId: string; number: string; expiry: string }> = []
   // The fake login vault: same shape as a Bitwarden login item, keyed by the
-  // profile whose vault it belongs to. It enforces the ONE rule the real vault
-  // enforces — an account (host + username) exists once and is updated, never
-  // duplicated — so the command tests exercise that rule and not a stub.
+  // profile whose vault it belongs to. It runs the REAL matching rules
+  // (findLoginMatch) rather than a stub, so the command tests exercise what the
+  // vault will do: an account (host + username) exists once and is updated, and
+  // the same credential met on another subdomain only adds an address.
   const savedLogins: Array<{
     profileId: string
     id: string
     name: string
     username: string
     password: string
-    host: string
+    hosts: string[]
   }> = []
   let formMemory: FormMemory = {}
   const ctx: CommandContext = {
-    focusApp: () => {
-      focusCalls.push(true)
+    // The fake models one window ('fake-window', see listWindows): any other id
+    // is unknown, same as the manager. The requested id (or undefined) is
+    // recorded so a test can assert WHICH window was asked for.
+    focusApp: (windowId?: string) => {
+      if (windowId !== undefined && windowId !== 'fake-window') {
+        throw new Error(`unknown window: ${windowId}`)
+      }
+      focusCalls.push(windowId)
     },
     quitApp: () => {
       quitCalls.push(true)
@@ -543,6 +572,45 @@ export function makeContext(
         state.zoomLevel = level
       }
     }),
+    // Explicit-target navigation: unlike getTargetWebContents this never falls
+    // back to the active tab — an unknown id throws, as it must (the whole point
+    // of the param is that a bad target fails loudly instead of hitting whatever
+    // tab happens to be in front).
+    loadUrlInTab: (url: string, tabId: string) => {
+      if (!state.tabs.tabs.some((t) => t.id === tabId)) throw new Error(`unknown tab: ${tabId}`)
+      state.tabs = updateTab(state.tabs, tabId, { url, title: '', favicon: null })
+      tabLoads.push({ url, tabId })
+      recordVisit(url, '')
+    },
+    focusAddressBar: () => {
+      state.addressBarFocuses += 1
+    },
+    reloadTab: (tabId: string, ignoreCache: boolean) => {
+      if (!state.tabs.tabs.some((t) => t.id === tabId)) throw new Error(`unknown tab: ${tabId}`)
+      tabReloads.push({ tabId, ignoreCache })
+    },
+    retryFailedLoad: (tabId?: string) => {
+      const id = tabId ?? state.tabs.activeId
+      if (id === null || id === undefined) return false
+      const url = failedLoads.get(id)
+      if (url === undefined) return false
+      failedLoads.delete(id)
+      state.tabs = updateTab(state.tabs, id, { url, title: '', favicon: null })
+      tabLoads.push({ url, tabId: id })
+      return true
+    },
+    newTabNearTab: (url: string, tabId: string, background: boolean) => {
+      if (!state.tabs.tabs.some((t) => t.id === tabId)) throw new Error(`unknown tab: ${tabId}`)
+      const id = `tab-${++state.tabSeq}`
+      const tab = { id, title: '', url, favicon: null }
+      state.tabs = background
+        ? addTabAfterInactive(state.tabs, tab, tabId)
+        : addTabAfter(state.tabs, tab, tabId)
+      state.closeArmedId = null
+      recordVisit(url, '')
+      if (!background) recordMru(id)
+      return { id }
+    },
     getTargetProfile: () => {
       const p = state.profiles.find((x) => x.id === state.focused)
       return p ? { id: p.id, label: p.label, ...(p.color ? { color: p.color } : {}) } : null
@@ -1428,8 +1496,8 @@ export function makeContext(
         profileId: id,
         logins: savedLogins
           .filter((l) => l.profileId === id)
-          .filter((l) => !host || l.host === host || l.host.endsWith(`.${host}`))
-          .map((l) => ({ id: l.id, name: l.name, username: l.username, hosts: [l.host] }))
+          .filter((l) => !host || l.hosts.some((h) => h === host || h.endsWith(`.${host}`)))
+          .map((l) => ({ id: l.id, name: l.name, username: l.username, hosts: l.hosts }))
       }
     },
     saveLogin: async (params: {
@@ -1450,16 +1518,23 @@ export function makeContext(
         updatedAt: Date.now()
       })
       if (!login) throw new Error('not a valid login (needs an http(s) url and a real password)')
-      const existing = savedLogins.find(
-        (l) =>
-          l.profileId === profileId &&
-          l.host === login.host &&
-          l.username.toLowerCase() === login.username.toLowerCase()
+      const mine = savedLogins.filter((l) => l.profileId === profileId)
+      const { account, sameCredential } = findLoginMatch(
+        mine.map((l) => ({ ...l, raw: {} })),
+        login
       )
-      if (existing) {
+      const entry = (match: { id: string }): (typeof mine)[number] =>
+        mine.find((l) => l.id === match.id) as (typeof mine)[number]
+      if (account) {
+        const existing = entry(account)
         const updated = existing.password !== login.password
         existing.password = login.password
-        return { id: existing.id, label: loginLabel(login), updated }
+        return { id: existing.id, label: loginLabel(login), updated, linked: false }
+      }
+      if (sameCredential) {
+        const existing = entry(sameCredential)
+        if (!existing.hosts.includes(login.host)) existing.hosts.push(login.host)
+        return { id: existing.id, label: loginLabel(login), updated: false, linked: true }
       }
       const id = `login-${savedLogins.length + 1}`
       savedLogins.push({
@@ -1468,9 +1543,9 @@ export function makeContext(
         name: loginItemName(login.host),
         username: login.username,
         password: login.password,
-        host: login.host
+        hosts: [login.host]
       })
-      return { id, label: loginLabel(login), updated: false }
+      return { id, label: loginLabel(login), updated: false, linked: false }
     },
     deleteLogin: async (id: string, profileId?: string) => {
       const pid = profileId ?? state.focused ?? 'default'
@@ -1763,6 +1838,12 @@ export function makeContext(
     ctx,
     tracing: () => state.tracing,
     loaded,
+    tabLoads,
+    tabReloads,
+    addressBarFocuses: () => state.addressBarFocuses,
+    failLoad: (tabId: string, url: string) => {
+      failedLoads.set(tabId, url)
+    },
     nav,
     opened,
     settingsOpened,

@@ -110,8 +110,9 @@ Storage » au Keychain → fallback, non chiffré).
 **Fix (code fait) = lock-au-quit** : `before-quit` diffère le quit, ferme les
 fenêtres, re-chiffre tous les vaults ouverts, puis quitte (`lockAllVaults` /
 `performVaultLock` extrait, garde `lockingAll` pour ne pas doubler l'auto-lock) ;
-+ flush ajouté à `encrypt-profile` ; + commande pilotable `lock-all-vaults`
-(panic-lock). Tests unitaires + doc socket à jour.
+
+- flush ajouté à `encrypt-profile` ; + commande pilotable `lock-all-vaults`
+  (panic-lock). Tests unitaires + doc socket à jour.
 
 ### Résidus non corrigés (mineurs)
 
