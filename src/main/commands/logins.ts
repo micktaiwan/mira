@@ -34,13 +34,14 @@ export interface LoginsContext {
     logins: LoginInfo[]
   }>
   /** Write a login into a profile's vault. An account the vault already holds is
-   * updated in place, never duplicated. */
+   * updated in place, never duplicated; the same credential already saved on
+   * another subdomain of the site only gets this address added (`linked`). */
   saveLogin: (params: {
     profileId?: string
     url: string
     username?: string
     password: string
-  }) => Promise<{ id: string | null; label: string; updated: boolean }>
+  }) => Promise<{ id: string | null; label: string; updated: boolean; linked: boolean }>
   /** Remove one login from a profile's vault (soft delete). */
   deleteLogin: (id: string, profileId?: string) => Promise<{ profileId: string; name: string }>
 }
@@ -90,7 +91,9 @@ export const loginsCommands: CommandMap<CommandContext> = {
 
   // Write a login straight into the vault: { url, password, username?,
   // profileId? }. `updated:true` means the account was already there and its
-  // password was replaced rather than a second item created.
+  // password was replaced rather than a second item created; `linked:true` means
+  // this exact credential was already in the vault under another subdomain of
+  // the same site, and only its address list grew.
   'save-login': async (ctx, params) => {
     const p = (params ?? {}) as {
       profileId?: unknown

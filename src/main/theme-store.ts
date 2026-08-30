@@ -41,8 +41,22 @@ export const DEFAULT_THEME_ID = 'midnight'
  * (they live in code) and never editable/deletable. Midnight reproduces Mira's
  * original dark chrome; Paper is the white/black light theme. */
 export const BUILTIN_THEMES: readonly Theme[] = [
-  { id: 'midnight', name: 'Midnight', background: '#1b1b1f', text: '#ebebeb', accent: '#6988e6', builtin: true },
-  { id: 'slate', name: 'Slate', background: '#24272e', text: '#e6e8ec', accent: '#8aa0c8', builtin: true },
+  {
+    id: 'midnight',
+    name: 'Midnight',
+    background: '#1b1b1f',
+    text: '#ebebeb',
+    accent: '#6988e6',
+    builtin: true
+  },
+  {
+    id: 'slate',
+    name: 'Slate',
+    background: '#24272e',
+    text: '#e6e8ec',
+    accent: '#8aa0c8',
+    builtin: true
+  },
   {
     id: 'paper',
     name: 'Paper',
@@ -50,10 +64,18 @@ export const BUILTIN_THEMES: readonly Theme[] = [
     text: '#1a1a1a',
     accent: '#3b6fe0',
     // A subtle paper texture behind the chrome (Wikimedia Commons, CC BY 2.0).
-    wallpaper: 'https://upload.wikimedia.org/wikipedia/commons/8/82/Vintage_Paper_Texture_%289789792113%29.jpg',
+    wallpaper:
+      'https://upload.wikimedia.org/wikipedia/commons/8/82/Vintage_Paper_Texture_%289789792113%29.jpg',
     builtin: true
   },
-  { id: 'sepia', name: 'Sepia', background: '#f4ecd8', text: '#433422', accent: '#a9743b', builtin: true }
+  {
+    id: 'sepia',
+    name: 'Sepia',
+    background: '#f4ecd8',
+    text: '#433422',
+    accent: '#a9743b',
+    builtin: true
+  }
 ]
 
 const BUILTIN_IDS = new Set(BUILTIN_THEMES.map((t) => t.id))
@@ -174,7 +196,10 @@ function validateInput(input: ThemeInput): {
  * Throws on invalid input. The id is derived from the name, unique in the list. */
 export function createTheme(themes: Theme[], input: ThemeInput): [Theme[], Theme] {
   const fields = validateInput(input)
-  const id = nextThemeId(fields.name, themes.map((t) => t.id))
+  const id = nextThemeId(
+    fields.name,
+    themes.map((t) => t.id)
+  )
   const theme: Theme = { id, ...fields }
   return [[...themes, theme], theme]
 }

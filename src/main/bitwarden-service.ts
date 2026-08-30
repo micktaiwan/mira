@@ -37,6 +37,7 @@ import {
   encodeBwItem,
   loginItem,
   parseLoginItems,
+  withExtraUri,
   withNewPassword,
   type VaultLogin
 } from './bitwarden-login'
@@ -175,6 +176,24 @@ export class BitwardenService {
     const encoded = encodeBwItem(withNewPassword(existing, password))
     try {
       // The id is a UUID, not a secret, so argv is fine; the password is on stdin.
+      await this.run(['edit', 'item', existing.id], { vault, session, stdin: encoded })
+    } catch (error) {
+      if (error instanceof BitwardenError && error.reason === 'locked') this.forget(vault)
+      throw error
+    }
+  }
+
+  /** Record one more address on an existing login (`bw edit item`), used when the
+   * very same credential is typed on another subdomain of a site the vault
+   * already covers. Nothing else about the item changes — in particular NOT the
+   * password, which is why this call needs no confirmation: it cannot lose a
+   * secret, it can only make the item findable next time. */
+  async linkLoginUri(vault: CardVault, existing: VaultLogin, uri: string): Promise<void> {
+    const session = this.sessions.get(vault.appDataDir)
+    if (!session) throw new BitwardenError('locked', 'vault is locked')
+    if (!existing.id) throw new BitwardenError('failed', 'vault item has no id')
+    const encoded = encodeBwItem(withExtraUri(existing, uri))
+    try {
       await this.run(['edit', 'item', existing.id], { vault, session, stdin: encoded })
     } catch (error) {
       if (error instanceof BitwardenError && error.reason === 'locked') this.forget(vault)

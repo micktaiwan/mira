@@ -11,6 +11,8 @@ describe('selectWebauthnAccount', () => {
   })
 
   it('defaults to the first credential when several are available', () => {
-    expect(selectWebauthnAccount([{ credentialId: 'first' }, { credentialId: 'second' }])).toBe('first')
+    expect(selectWebauthnAccount([{ credentialId: 'first' }, { credentialId: 'second' }])).toBe(
+      'first'
+    )
   })
 })

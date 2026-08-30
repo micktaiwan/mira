@@ -1,10 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import {
-  resolveKey,
-  modifierMask,
-  keyToDispatchEvents,
-  type CdpModifier
-} from './input-keys'
+import { resolveKey, modifierMask, keyToDispatchEvents, type CdpModifier } from './input-keys'
 
 describe('resolveKey', () => {
   it('maps a lowercase letter to its KeyX code and uppercase virtual key code', () => {

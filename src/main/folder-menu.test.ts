@@ -42,7 +42,10 @@ describe('buildFolderMenu', () => {
 
   it('carries the folder id on every id-taking command', () => {
     const items = buildFolderMenu(base)
-    for (const cmd of [...findCommand(items, 'set-tab-folder-color'), ...findCommand(items, 'remove-tab-folder')]) {
+    for (const cmd of [
+      ...findCommand(items, 'set-tab-folder-color'),
+      ...findCommand(items, 'remove-tab-folder')
+    ]) {
       if (cmd.type === 'command') expect(cmd.params?.id).toBe('f1')
     }
   })

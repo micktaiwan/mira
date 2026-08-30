@@ -116,10 +116,7 @@ export function parseAnthropicResponse(json: unknown): string {
  *   - ~/.local/bin/claude: the current native-installer symlink.
  *   - ~/.claude/local/claude: the older local-install location.
  *   - /opt/homebrew, /usr/local: brew/npm-global fallbacks. */
-export function claudeBinCandidates(
-  env: NodeJS.ProcessEnv,
-  home: string
-): string[] {
+export function claudeBinCandidates(env: NodeJS.ProcessEnv, home: string): string[] {
   const list: string[] = []
   const override = env.MIRA_CLAUDE_BIN?.trim()
   if (override) list.push(override)

@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import {
   encodeBwItem,
+  findLoginMatch,
   loginItem,
   matchLogin,
+  registrableDomain,
+  withExtraUri,
   parseLoginItems,
   redactLogins,
   uriHost,
@@ -149,5 +152,98 @@ describe('withNewPassword', () => {
     expect(patchedLogin.password).toBe('brand-new')
     expect(patchedLogin.totp).toBe('otpauth://x')
     expect(patchedLogin.uris).toEqual([{ uri: 'https://banco.mickaelfm.me/login' }])
+  })
+})
+
+describe('registrableDomain', () => {
+  it('drops the subdomain and the port', () => {
+    expect(registrableDomain('apps.tiime.fr')).toBe('tiime.fr')
+    expect(registrableDomain('GO.tiime.fr')).toBe('tiime.fr')
+    expect(registrableDomain('clickhouse.cloud:8443')).toBe('clickhouse.cloud')
+    expect(registrableDomain('tiime.fr')).toBe('tiime.fr')
+  })
+
+  it('keeps three labels under a two-label public suffix', () => {
+    expect(registrableDomain('mail.lempire.co.uk')).toBe('lempire.co.uk')
+  })
+
+  it('leaves an IP literal whole, so two LAN hosts are not the same site', () => {
+    expect(registrableDomain('192.168.1.10')).toBe('192.168.1.10')
+    expect(registrableDomain('10.0.1.10:8080')).toBe('10.0.1.10')
+  })
+})
+
+describe('findLoginMatch', () => {
+  it('reports the account itself when the host matches exactly', () => {
+    const match = findLoginMatch([vaultItem()], login)
+    expect(match.account?.id).toBe('item-1')
+    expect(match.sameCredential).toBeNull()
+  })
+
+  it('recognizes the same credential saved on another subdomain of the site', () => {
+    // The real 2026-08-28 duplicate: saved on go.tiime.fr, typed on apps.tiime.fr.
+    const stored = vaultItem({ hosts: ['go.tiime.fr'], password: 'hunter22' })
+    const match = findLoginMatch([stored], {
+      host: 'apps.tiime.fr',
+      username: 'me@example.com',
+      password: 'hunter22'
+    })
+    expect(match.account).toBeNull()
+    expect(match.sameCredential?.id).toBe('item-1')
+  })
+
+  it('does NOT link two accounts of the same site that hold different passwords', () => {
+    // nexus.lempire.com/admin and grafana.lempire.com/admin are five real
+    // machines in the pro vault: linking them would overwrite a password.
+    const nexus = vaultItem({ hosts: ['nexus.lempire.com'], username: 'admin', password: 'one' })
+    const match = findLoginMatch([nexus], {
+      host: 'grafana.lempire.com',
+      username: 'admin',
+      password: 'two'
+    })
+    expect(match.account).toBeNull()
+    expect(match.sameCredential).toBeNull()
+  })
+
+  it('does not link across two different sites, same password or not', () => {
+    const other = vaultItem({ hosts: ['tiime.example'], password: 'hunter22' })
+    const match = findLoginMatch([other], {
+      host: 'apps.tiime.fr',
+      username: 'me@example.com',
+      password: 'hunter22'
+    })
+    expect(match.sameCredential).toBeNull()
+  })
+})
+
+describe('withExtraUri', () => {
+  it('appends the address and keeps every other field', () => {
+    const item = vaultItem({
+      raw: {
+        id: 'item-1',
+        folderId: 'folder-9',
+        login: {
+          username: 'me@example.com',
+          password: 'hunter22',
+          uris: [{ match: null, uri: 'https://go.tiime.fr/creer-compte' }]
+        }
+      }
+    })
+    const patched = withExtraUri(item, 'https://apps.tiime.fr/signin')
+    expect(patched.folderId).toBe('folder-9')
+    const patchedLogin = patched.login as Record<string, unknown>
+    expect(patchedLogin.password).toBe('hunter22')
+    expect(patchedLogin.uris).toEqual([
+      { match: null, uri: 'https://go.tiime.fr/creer-compte' },
+      { match: null, uri: 'https://apps.tiime.fr/signin' }
+    ])
+  })
+
+  it('does not add an address the item already lists', () => {
+    const item = vaultItem({
+      raw: { id: 'item-1', login: { uris: [{ match: null, uri: 'https://apps.tiime.fr/signin' }] } }
+    })
+    const patched = withExtraUri(item, 'https://apps.tiime.fr/signin')
+    expect((patched.login as Record<string, unknown>).uris).toHaveLength(1)
   })
 })

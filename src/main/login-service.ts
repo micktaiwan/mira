@@ -21,7 +21,13 @@ import { BrowserWindow, type Session } from 'electron'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { CardVault } from './bitwarden'
-import { matchLogin, redactLogins, type StoredLogin, type VaultLogin } from './bitwarden-login'
+import {
+  findLoginMatch,
+  redactLogins,
+  type LoginMatch,
+  type StoredLogin,
+  type VaultLogin
+} from './bitwarden-login'
 import { BitwardenError } from './bitwarden-service'
 import type { VaultAccess } from './card-service'
 import type { FragmentSource } from './card-capture-service'
@@ -52,9 +58,10 @@ export class LoginService {
       hasSession: (vault) => bw.hasSession(vault),
       vaultState: async (vault) => (await bw.status(vault)).state,
       unlock: (vault, password) => bw.unlock(vault, password),
-      findExisting: (vault, login) => this.findExisting(vault, login),
+      findMatch: (vault, login) => this.findMatch(vault, login),
       saveLogin: (vault, login, now) => bw.saveLogin(vault, login, now),
       updateLogin: (vault, existing, password) => bw.updateLogin(vault, existing, password),
+      linkLogin: (vault, existing, uri) => bw.linkLoginUri(vault, existing, uri),
       prompt: (profileId, req) => this.showPrompt(profileId, req),
       toast: deps.toast,
       now: () => new Date()
@@ -96,13 +103,15 @@ export class LoginService {
 
   /** Write a login straight into a profile's vault (the socket path). Same gate
    * as the capture pipeline, and the same "already there?" rule: an account the
-   * vault already holds is UPDATED, never duplicated. */
+   * vault already holds is UPDATED, never duplicated, and the same credential
+   * met on another subdomain of a site the vault covers only gets that address
+   * added (`linked`). */
   async saveLogin(params: {
     profileId: string
     url: string
     username?: string
     password: string
-  }): Promise<{ id: string | null; label: string; updated: boolean }> {
+  }): Promise<{ id: string | null; label: string; updated: boolean; linked: boolean }> {
     const { profileId } = params
     const vault = this.requireVault(profileId)
     const draft: LoginDraft = {
@@ -125,16 +134,20 @@ export class LoginService {
       }
       throw new Error('vault is locked — run unlock-card-vault first')
     }
-    const existing = await this.findExisting(vault, login)
-    if (existing) {
-      if (existing.password === login.password) {
-        return { id: existing.id, label: loginLabel(login), updated: false }
+    const { account, sameCredential } = await this.findMatch(vault, login)
+    if (account) {
+      if (account.password === login.password) {
+        return { id: account.id, label: loginLabel(login), updated: false, linked: false }
       }
-      await this.deps.access.bitwarden.updateLogin(vault, existing, login.password)
-      return { id: existing.id, label: loginLabel(login), updated: true }
+      await this.deps.access.bitwarden.updateLogin(vault, account, login.password)
+      return { id: account.id, label: loginLabel(login), updated: true, linked: false }
+    }
+    if (sameCredential) {
+      await this.deps.access.bitwarden.linkLoginUri(vault, sameCredential, login.url)
+      return { id: sameCredential.id, label: loginLabel(login), updated: false, linked: true }
     }
     const id = await this.deps.access.bitwarden.saveLogin(vault, login, new Date())
-    return { id, label: loginLabel(login), updated: false }
+    return { id, label: loginLabel(login), updated: false, linked: false }
   }
 
   /** Remove one login from a profile's vault (soft delete — it lands in
@@ -155,11 +168,13 @@ export class LoginService {
 
   // ── internals ────────────────────────────────────────────────────────────
 
-  /** The vault item that already holds this account, or null. Only ever called
-   * on an unlocked vault (the capture pipeline checks first). */
-  private async findExisting(vault: CardVault, login: ValidatedLogin): Promise<VaultLogin | null> {
+  /** What the vault already holds for this login: the account itself, or the
+   * same credential filed under another subdomain. One `bw list items` answers
+   * both questions. Only ever called on an unlocked vault (the capture pipeline
+   * checks first). */
+  private async findMatch(vault: CardVault, login: ValidatedLogin): Promise<LoginMatch> {
     const items = await this.deps.access.bitwarden.listLogins(vault)
-    return matchLogin(items, login)
+    return findLoginMatch(items, login)
   }
 
   /** Read the vault's logins, popping the master-password bubble when it is

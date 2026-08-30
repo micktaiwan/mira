@@ -158,15 +158,57 @@ export function buildExec(code, tabId) {
 }
 
 /**
- * Reload plan. The socket `reload` command is active-tab-only (no tabId param),
- * so to reload a *pinned* tab we go through exec-js — exactly the manual dance
- * this CLI exists to remove.
+ * Build the navigate request. The resolved tab travels as `tabId`, so a session
+ * pinned with `--tab` / `$MIRA_TAB` navigates THAT tab even while another window
+ * holds focus — before this, `nav` was the one page-bound verb that dropped its
+ * target and loaded into the focused window's active tab, silently overwriting
+ * whatever page was there.
+ *
+ * With `newTab`, the same id names the tab the new one opens next to (which is
+ * what picks the window); a stale id is passed through untouched so the registry
+ * answers `unknown tab: <id>` rather than us guessing a replacement.
+ *
+ * @param {string} url
+ * @param {string|null} tabId
+ * @param {{ newTab?: boolean, background?: boolean }} [opts]
+ * @returns {{ command: 'navigate', params: object }}
+ */
+export function buildNav(url, tabId, opts = {}) {
+  const params = { url }
+  if (opts.newTab) params.newTab = true
+  if (opts.newTab && opts.background) params.background = true
+  if (tabId) params.tabId = tabId
+  return { command: 'navigate', params }
+}
+
+/**
+ * Build the focus-app request. `windowId` (from `mira windows`) picks WHICH
+ * window comes to the front; without it Mira raises its last-focused one, which
+ * with several windows open is rarely the one the caller means.
+ *
+ * @param {string|boolean|undefined} windowId  raw value of --window
+ * @returns {{ command: 'focus-app', params?: { windowId: string } }}
+ */
+export function buildFocus(windowId) {
+  if (typeof windowId === 'string' && windowId.trim() !== '') {
+    return { command: 'focus-app', params: { windowId: windowId.trim() } }
+  }
+  return { command: 'focus-app' }
+}
+
+/**
+ * Reload plan. `reload` takes a tabId, so a pinned tab is reloaded server-side.
+ *
+ * It used to go through exec-js (`location.reload()`) for lack of that param,
+ * which was wrong on the error page: that page is a data: URL, so reloading it
+ * from inside re-rendered the error instead of retrying the URL that failed.
+ * The command handles that case (see NavContext.retryFailedLoad).
  *
  * @param {string|null} tabId
  * @returns {{ command: string, params?: object }}
  */
 export function buildReload(tabId) {
-  if (tabId) return buildExec("location.reload(); 'ok'", tabId)
+  if (tabId) return { command: 'reload', params: { tabId } }
   return { command: 'reload' }
 }
 
@@ -391,4 +433,81 @@ export function formatScreenshot(res) {
   const scope = res.fullPage ? 'full page' : 'viewport'
   const cut = res.clamped ? ' — CUT OFF: the page is taller than a capture can be' : ''
   return `${res.path}  ${res.width}×${res.height}  ${kb} KB  (${scope})${cut}`
+}
+
+/**
+ * Decide which window a `nav` / `open` may target, and REFUSE to guess.
+ *
+ * Why this exists. `navigate` without a `tabId` acts on the caller's window,
+ * which for a socket call means the FOCUSED one — and a CLI call from a
+ * terminal focuses nothing, so Mira falls back to the first window it holds.
+ * With one profile that is harmless. With several it is a privacy leak: on
+ * 2026-08-28 a bank page from the personal profile opened in the work profile,
+ * because the work window happened to be first. Nothing in the request was
+ * wrong; the fallback simply invented a target.
+ *
+ * So: when the open windows span more than one profile and the caller named no
+ * target, we fail loudly instead of picking. A single profile stays frictionless.
+ *
+ * `labels` maps profile id -> human label ("perso: …", "pro: lempire"). It is
+ * what makes both the matching and the error message usable: profile ids are
+ * opaque UUIDs, so `--profile perso` matches the label, and the refusal names
+ * the profiles the way Mickael names them rather than printing three UUIDs.
+ *
+ * @param {Array<{windowId:string,profileId:string,tabCount:number,focused:boolean}>} windows
+ * @param {{ tabId?: string|null, windowFlag?: string|boolean, profileFlag?: string|boolean }} opts
+ * @param {Record<string,string>} [labels]  profile id -> label
+ * @returns {{ windowId: string|null } | { error: string }}
+ */
+export function resolveNavTarget(windows, opts = {}, labels = {}) {
+  const list = windows ?? []
+  const nameOf = (id) => (labels[id] ? `${labels[id]} [${id}]` : id)
+  // A pinned tab already names its window; nothing to resolve.
+  if (opts.tabId) return { windowId: null }
+
+  if (typeof opts.windowFlag === 'string' && opts.windowFlag.trim() !== '') {
+    const id = opts.windowFlag.trim()
+    const hit = list.find((w) => w.windowId === id)
+    if (!hit) return { error: `unknown window: ${id}` }
+    return { windowId: hit.windowId }
+  }
+
+  if (typeof opts.profileFlag === 'string' && opts.profileFlag.trim() !== '') {
+    const needle = opts.profileFlag.trim().toLowerCase()
+    // Match on the id prefix OR anywhere in the label, so `--profile perso`
+    // works without anyone having to carry a UUID around.
+    const hits = list.filter((w) => {
+      const id = (w.profileId ?? '').toLowerCase()
+      const label = (labels[w.profileId] ?? '').toLowerCase()
+      return id.startsWith(needle) || label.includes(needle)
+    })
+    if (hits.length === 0) return { error: `no open window for profile: ${opts.profileFlag}` }
+    const distinct = [...new Set(hits.map((w) => w.profileId))]
+    if (distinct.length > 1) {
+      const lines = distinct.map((id) => `  ${nameOf(id)}`).join('\n')
+      return {
+        error: `"${opts.profileFlag}" matches several profiles; be more specific:\n${lines}`
+      }
+    }
+    if (hits.length > 1) {
+      const lines = hits.map((w) => `  ${w.windowId}  tabs=${w.tabCount}`).join('\n')
+      return {
+        error: `profile ${nameOf(distinct[0])} has several windows; pass --window <id>:\n${lines}`
+      }
+    }
+    return { windowId: hits[0].windowId }
+  }
+
+  const profiles = [...new Set(list.map((w) => w.profileId ?? ''))]
+  if (profiles.length <= 1) return { windowId: null }
+
+  const lines = list
+    .map((w) => `  ${w.windowId}  tabs=${w.tabCount}  ${nameOf(w.profileId)}`)
+    .join('\n')
+  return {
+    error:
+      `refusing to guess a window: ${profiles.length} profiles are open, and a CLI call focuses none.\n` +
+      `Name the target — --tab <id> (or $MIRA_TAB), --window <id>, or --profile <label|id>:\n` +
+      lines
+  }
 }

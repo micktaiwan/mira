@@ -207,7 +207,7 @@ describe('magnifierFrameJs', () => {
     expect(js).toContain('showPopover')
     expect(js).toContain('pointer-events:none')
     // Idempotent: only opens the popover if not already open.
-    expect(js).toContain(":popover-open")
+    expect(js).toContain(':popover-open')
   })
 
   it('hides and removes the frame when off', () => {

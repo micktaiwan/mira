@@ -145,7 +145,13 @@ describe('DownloadTracker', () => {
   it('stats reports no activity when nothing runs', () => {
     const t = new DownloadTracker()
     t.add(rec({ id: 'a', state: 'completed', seen: true }))
-    expect(t.stats()).toEqual({ active: 0, since: null, receivedBytes: 0, totalBytes: 0, unseen: 0 })
+    expect(t.stats()).toEqual({
+      active: 0,
+      since: null,
+      receivedBytes: 0,
+      totalBytes: 0,
+      unseen: 0
+    })
   })
 
   it('stats counts only completed-and-unseen downloads as unseen', () => {

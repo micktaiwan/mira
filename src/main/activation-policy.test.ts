@@ -23,6 +23,8 @@ describe('shouldSuppressActivation', () => {
   })
 
   it('stays false for a same-document nav even in a background window', () => {
-    expect(shouldSuppressActivation({ isMainFrame: false, isSameDocument: true }, false)).toBe(false)
+    expect(shouldSuppressActivation({ isMainFrame: false, isSameDocument: true }, false)).toBe(
+      false
+    )
   })
 })

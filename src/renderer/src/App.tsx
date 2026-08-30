@@ -157,8 +157,7 @@ function App(): React.JSX.Element {
     // document.activeElement stays the address input. Without the hasFocus() gate
     // that stale focus would wrongly suppress the URL sync, and the bar would keep
     // showing the old page after every same-tab (SPA) navigation.
-    const barFocused =
-      document.hasFocus() && document.activeElement === addressInputRef.current
+    const barFocused = document.hasFocus() && document.activeElement === addressInputRef.current
     if (shouldSyncAddressBar(tabChanged, barFocused)) setUrl(active)
   }
 

@@ -34,15 +34,15 @@ used to list seven commands and name a `commands.ts` that no longer exists. So i
 
 A representative handful, callable identically over IPC, socket, or (later) MCP:
 
-| Command         | Params                         | Effect                                                       |
-| --------------- | ------------------------------ | ------------------------------------------------------------ |
-| `navigate`      | `{ url, newTab? }`             | Normalize input and load it, in place or in a fresh tab       |
-| `list-tabs`     | `{ windowId? }`                | Every tab of a window: id, title, url, loaded, audible        |
-| `exec-js`       | `{ code, tabId? }`             | Run JS in a tab's page world, return its serializable value   |
-| `get-console`   | `{ tabId?, level?, limit? }`   | Read back a tab's captured page console, after the fact       |
-| `screenshot`    | `{ path?, tabId?, fullPage? }` | Capture a tab to a PNG file                                   |
+| Command         | Params                         | Effect                                                         |
+| --------------- | ------------------------------ | -------------------------------------------------------------- |
+| `navigate`      | `{ url, newTab? }`             | Normalize input and load it, in place or in a fresh tab        |
+| `list-tabs`     | `{ windowId? }`                | Every tab of a window: id, title, url, loaded, audible         |
+| `exec-js`       | `{ code, tabId? }`             | Run JS in a tab's page world, return its serializable value    |
+| `get-console`   | `{ tabId?, level?, limit? }`   | Read back a tab's captured page console, after the fact        |
+| `screenshot`    | `{ path?, tabId?, fullPage? }` | Capture a tab to a PNG file                                    |
 | `list-profiles` | —                              | Every known profile (`{ id, label, open }`) and the focused id |
-| `open-profile`  | `{ id }`                       | Open a profile's window, or focus it if already open          |
+| `open-profile`  | `{ id }`                       | Open a profile's window, or focus it if already open           |
 
 ## Project layout
 

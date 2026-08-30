@@ -68,7 +68,10 @@ describe('select-tab', () => {
   it('fails on a missing id', () => {
     const { ctx } = makeContext()
     const registry = createCommandRegistry()
-    expect(registry.execute('select-tab', {}, ctx)).toEqual({ ok: false, error: 'missing "id" (or "tabId")' })
+    expect(registry.execute('select-tab', {}, ctx)).toEqual({
+      ok: false,
+      error: 'missing "id" (or "tabId")'
+    })
   })
 })
 
@@ -84,7 +87,10 @@ describe('copy-tab-id', () => {
   it('fails on a missing id', () => {
     const { ctx, clipboardWrites } = makeContext()
     const registry = createCommandRegistry()
-    expect(registry.execute('copy-tab-id', {}, ctx)).toEqual({ ok: false, error: 'missing "id" (or "tabId")' })
+    expect(registry.execute('copy-tab-id', {}, ctx)).toEqual({
+      ok: false,
+      error: 'missing "id" (or "tabId")'
+    })
     expect(clipboardWrites).toEqual([])
   })
 })
@@ -147,7 +153,10 @@ describe('close-tab', () => {
     const { ctx, tabState } = makeContext()
     const registry = createCommandRegistry()
     registry.execute('new-tab', {}, ctx)
-    expect(registry.execute('close-tab', { tabId: 'tab-2' }, ctx)).toEqual({ ok: true, id: 'tab-2' })
+    expect(registry.execute('close-tab', { tabId: 'tab-2' }, ctx)).toEqual({
+      ok: true,
+      id: 'tab-2'
+    })
     expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-1'])
   })
 
@@ -264,9 +273,15 @@ describe('pin-tab / unpin-tab', () => {
     const { ctx } = makeContext()
     const registry = createCommandRegistry()
     expect(registry.execute('pin-tab', { id: 'nope' }, ctx).ok).toBe(false)
-    expect(registry.execute('pin-tab', {}, ctx)).toEqual({ ok: false, error: 'missing "id" (or "tabId")' })
+    expect(registry.execute('pin-tab', {}, ctx)).toEqual({
+      ok: false,
+      error: 'missing "id" (or "tabId")'
+    })
     expect(registry.execute('unpin-tab', { id: 'nope' }, ctx).ok).toBe(false)
-    expect(registry.execute('unpin-tab', {}, ctx)).toEqual({ ok: false, error: 'missing "id" (or "tabId")' })
+    expect(registry.execute('unpin-tab', {}, ctx)).toEqual({
+      ok: false,
+      error: 'missing "id" (or "tabId")'
+    })
   })
 })
 
@@ -495,7 +510,10 @@ describe('discard-tab', () => {
   it('fails on a missing id', () => {
     const { ctx } = makeContext()
     const registry = createCommandRegistry()
-    expect(registry.execute('discard-tab', {}, ctx)).toEqual({ ok: false, error: 'missing "id" (or "tabId")' })
+    expect(registry.execute('discard-tab', {}, ctx)).toEqual({
+      ok: false,
+      error: 'missing "id" (or "tabId")'
+    })
   })
 })
 

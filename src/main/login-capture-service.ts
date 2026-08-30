@@ -11,6 +11,8 @@
 //   -> already offered this exact login this run? -> silence
 //   -> already in the vault with the SAME password? -> silence
 //   -> already in the vault with another password? -> "Update this login?"
+//   -> the same credential, saved on another subdomain of this site? -> record
+//      the address on that item, silently: nothing to decide, nothing to ask
 //   -> otherwise -> "Save this login?" (or "Unlock and save" when locked)
 //   -> bw create item / bw edit item, on stdin.
 //
@@ -32,7 +34,7 @@ import {
 } from './login-capture'
 import { LOGIN_CAPTURE_PRELOAD_SOURCE, LOGIN_FRAGMENT_CHANNEL } from './login-capture-shim'
 import type { CardVault } from './bitwarden'
-import type { VaultLogin } from './bitwarden-login'
+import type { LoginMatch, VaultLogin } from './bitwarden-login'
 import { BitwardenError } from './bitwarden-service'
 import type { CardPromptHandle } from './card-prompt'
 import type { LoginPromptRequest } from './login-prompt'
@@ -49,13 +51,16 @@ export interface LoginCaptureDeps {
   vaultState: (vault: CardVault) => Promise<string>
   /** Unlock with the master password (throws BitwardenError on a bad one). */
   unlock: (vault: CardVault, password: string) => Promise<void>
-  /** The vault item that already holds this account, or null. Only ever called
-   * with an unlocked vault. */
-  findExisting: (vault: CardVault, login: ValidatedLogin) => Promise<VaultLogin | null>
+  /** What the vault already holds for this login: the account itself, and/or the
+   * same credential under another subdomain. Only ever called with an unlocked
+   * vault. */
+  findMatch: (vault: CardVault, login: ValidatedLogin) => Promise<LoginMatch>
   /** Write a new login, returning the created item id. */
   saveLogin: (vault: CardVault, login: ValidatedLogin, now: Date) => Promise<string | null>
   /** Replace an existing item's password, keeping everything else. */
   updateLogin: (vault: CardVault, existing: VaultLogin, password: string) => Promise<void>
+  /** Add one address to an existing item, changing nothing else. */
+  linkLogin: (vault: CardVault, existing: VaultLogin, uri: string) => Promise<void>
   /** Put the bubble up. The handle carries the eventual answer AND the way to
    * report progress in it, because unlocking + writing takes seconds of bw. */
   prompt: (profileId: string, req: LoginPromptRequest) => CardPromptHandle
@@ -68,7 +73,7 @@ export interface LoginCaptureDeps {
 /** What one report ended up doing. Returned so the tests (and the socket) can
  * assert on the whole pipeline. */
 export type LoginOutcome =
-  'ignored' | 'incomplete' | 'known' | 'saved' | 'updated' | 'declined' | 'failed'
+  'ignored' | 'incomplete' | 'known' | 'linked' | 'saved' | 'updated' | 'declined' | 'failed'
 
 export class LoginCaptureService {
   /** tabKey -> what has been typed so far. RAM only, never persisted. */
@@ -178,10 +183,10 @@ export class LoginCaptureService {
 
       // Only a vault we can read can be asked "do you already have this?". When
       // it is locked the question waits until just after the unlock, below.
-      let existing: VaultLogin | null = null
+      let match: LoginMatch = { account: null, sameCredential: null }
       if (unlocked) {
         try {
-          existing = await this.deps.findExisting(vault, login)
+          match = await this.deps.findMatch(vault, login)
         } catch (e) {
           const reason = e instanceof BitwardenError ? e.reason : 'failed'
           // A session key bw refuses is worse than none: fall through as if the
@@ -193,10 +198,16 @@ export class LoginCaptureService {
           unlocked = false
         }
         // Nothing to do, and nothing to say: this exact login is already saved.
-        if (existing && existing.password === login.password) return 'known'
+        if (match.account && match.account.password === login.password) return 'known'
+        // The same credential, already saved on another subdomain of this site:
+        // there is no second account here and no question to ask — record the
+        // address on the item that holds it and stay out of the way.
+        if (!match.account && match.sameCredential) {
+          return await this.link(vault, match.sameCredential, login, profileId)
+        }
       }
 
-      const mode = !unlocked ? 'unlock' : existing ? 'update' : 'save'
+      const mode = !unlocked ? 'unlock' : match.account ? 'update' : 'save'
       const bubble = this.deps.prompt(profileId, {
         mode,
         loginLabel: loginLabel(login),
@@ -214,10 +225,15 @@ export class LoginCaptureService {
         // Now the vault is readable for sure: ask the question that could not be
         // asked while it was locked, so an unlock-then-save never duplicates an
         // account that was already in there.
-        const target = existing ?? (await this.deps.findExisting(vault, login))
+        const found = match.account ? match : await this.deps.findMatch(vault, login)
+        const target = found.account
         if (target && target.password === login.password) {
           bubble.close()
           return 'known'
+        }
+        if (!target && found.sameCredential) {
+          bubble.close()
+          return await this.link(vault, found.sameCredential, login, profileId)
         }
         if (target) {
           bubble.busy('Updating the login…')
@@ -244,6 +260,24 @@ export class LoginCaptureService {
       }
     }
     return 'failed'
+  }
+
+  /** Record this address on the item that already holds the very same
+   * credential. A failure here is not worth a toast: the password IS in the
+   * vault, which is all the user cares about — only the next match is lost. */
+  private async link(
+    vault: CardVault,
+    item: VaultLogin,
+    login: ValidatedLogin,
+    profileId: string
+  ): Promise<LoginOutcome> {
+    try {
+      await this.deps.linkLogin(vault, item, login.url)
+    } catch {
+      return 'known'
+    }
+    this.deps.toast(profileId, 'Login already in Bitwarden — added this address')
+    return 'linked'
   }
 
   private messageFor(reason: string): string {

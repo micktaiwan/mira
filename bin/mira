@@ -25,10 +25,14 @@
 //   mira console [--level e][--limit n][--since seq]  captured page console, iframes included (console.* + 403/CORS/CSP/exceptions)
 //   mira shot [path] [--full]       screenshot the pinned/active tab to a PNG (default: userData/screenshots/)
 //                                   (--full: the whole document, not just the viewport)
-//   mira nav <url> [--new-tab|-n]   navigate the active tab in place (--new-tab: open a fresh tab instead)
+//   mira nav <url> [--new-tab|-n]   navigate the pinned/active tab in place (--new-tab: open a fresh tab instead)
 //   mira open <url> [--background|-b]  open <url> in a NEW tab, leaving the current tab untouched
+//                                   With SEVERAL profiles open and no --tab/$MIRA_TAB, both refuse
+//                                   to guess a window: pass --window <id> or --profile <id-prefix>.
 //                                   (--background: load it hidden — the window does not switch to it)
-// No command here ever brings Mira to the foreground; `mira call focus-app` is the explicit way.
+//                                   (both honour --tab / $MIRA_TAB: the pinned tab's WINDOW is the target)
+// No command here ever brings Mira to the foreground; `mira focus` is the explicit way.
+//   mira focus [--window <id>]      bring one window to the front (default: Mira's last-focused one)
 //   mira windows                    list open windows (id / profile / tabs), * = focused
 //   mira watch                      follow the focused tab live (profile / folder / title / url), until Ctrl-C
 //                                   (--json: one raw event per line, for a program)
@@ -53,6 +57,8 @@ import {
   buildReload,
   buildPress,
   buildCall,
+  buildNav,
+  buildFocus,
   buildConsole,
   buildScreenshot,
   formatScreenshot,
@@ -62,7 +68,8 @@ import {
   formatFocus,
   resolveCode,
   resolveTimeoutMs,
-  background
+  background,
+  resolveNavTarget
 } from '../src/cli/mira-core.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -198,6 +205,79 @@ async function main() {
       .then((res) => report(res, opts))
       .catch((e) => die(e.message, 2))
 
+  // `nav` / `open` must never fall back to "whatever window is first". A CLI
+  // call focuses no window, so that fallback silently crosses profiles — a
+  // personal page landing in the work profile. With several profiles open and
+  // no named target we refuse; with one we stay out of the way. Returns the tab
+  // id to aim at (the chosen window's active tab), or the caller's own pin.
+  const navTargetTab = async () => {
+    if (tabId) return tabId
+    const wins = await call({ command: 'list-windows' }, socketPath, timeoutMs).catch((e) =>
+      die(e.message, 2)
+    )
+    if (!wins.ok) return die(JSON.stringify(wins), 1)
+    // Profile ids are UUIDs; the labels are what a human (and `--profile perso`)
+    // can actually match on. A failure here is not fatal: we degrade to ids.
+    const profs = await call({ command: 'list-profiles' }, socketPath, timeoutMs).catch(() => null)
+    const labels = Object.fromEntries((profs?.profiles ?? []).map((p) => [p.id, p.label ?? '']))
+    const pick = resolveNavTarget(
+      wins.windows,
+      { tabId, windowFlag: flags.window, profileFlag: flags.profile },
+      labels
+    )
+    if ('error' in pick) return die(pick.error, 2)
+    if (!pick.windowId) return null
+    const tabs = await call(
+      { command: 'list-tabs', params: { windowId: pick.windowId } },
+      socketPath,
+      timeoutMs
+    ).catch((e) => die(e.message, 2))
+    if (!tabs.ok) return die(JSON.stringify(tabs), 1)
+    if (!tabs.activeId) return die(`window ${pick.windowId} has no active tab`, 1)
+    await assertTabTargeting(tabs.activeId, pick.windowId)
+    return tabs.activeId
+  }
+
+  // Resolving the right window is worthless if the running Mira then ignores the
+  // target. A build older than the tab-targeted `navigate` opens the new tab in
+  // its own focused window instead — which means the page LOADS under another
+  // profile's session, cookies and history included. That is the leak, and it is
+  // silent: the response looks like a success.
+  //
+  // So before sending the real url we open `about:blank` at the target and check
+  // where it landed. about:blank carries nothing, and the probe is closed right
+  // after. A build that fails it gets a refusal naming the fix, never a page.
+  const assertTabTargeting = async (targetTab, expectedWindow) => {
+    const probe = await call(
+      {
+        command: 'navigate',
+        params: { url: 'about:blank', newTab: true, background: true, tabId: targetTab }
+      },
+      socketPath,
+      timeoutMs
+    ).catch((e) => die(e.message, 2))
+    if (!probe.ok || !probe.id)
+      return die(`could not probe tab targeting: ${JSON.stringify(probe)}`, 2)
+    const where = await call(
+      { command: 'list-tabs', params: { windowId: expectedWindow } },
+      socketPath,
+      timeoutMs
+    ).catch((e) => die(e.message, 2))
+    const landed = (where.tabs ?? []).some((t) => t.id === probe.id)
+    await call({ command: 'close-tab', params: { tabId: probe.id } }, socketPath, timeoutMs).catch(
+      () => null
+    )
+    if (!landed) {
+      return die(
+        'the running Mira ignores the target window: a probe tab opened somewhere else.\n' +
+          'Opening the page would load it under ANOTHER profile (its cookies, its history).\n' +
+          'Refusing. The fix is in the working tree but not in the running build — rebuild and\n' +
+          'restart Mira, then retry.',
+        2
+      )
+    }
+  }
+
   switch (command) {
     case 'tabs': {
       const req = { command: 'list-tabs' }
@@ -274,22 +354,37 @@ async function main() {
       if (!url) return die('nav needs a url', 2)
       // In place by default (URL-bar semantics); --new-tab / -n spawns a fresh
       // tab instead, leaving the active tab untouched. --background / -b loads
-      // that new tab hidden (no visible change in the window).
-      const params =
-        flags['new-tab'] === true
-          ? { url, newTab: true, ...(background(flags) ? { background: true } : {}) }
-          : { url }
-      return send({ command: 'navigate', params }, { json })
+      // that new tab hidden (no visible change in the window). The pinned/--tab
+      // target rides along, so this navigates the tab it was aimed at rather
+      // than whatever the focused window happens to be showing.
+      return send(
+        buildNav(url, await navTargetTab(), {
+          newTab: flags['new-tab'] === true,
+          background: background(flags)
+        }),
+        { json }
+      )
     }
 
     case 'open': {
       // "open" == navigate into a NEW tab: the non-destructive verb. The current
-      // tab keeps its page. The registry dedups to an existing tab on same URL.
+      // tab keeps its page. The registry dedups to an existing tab on same URL —
+      // except with a pinned target, where the new tab opens beside it (that is
+      // also what picks the window).
       const url = positionals[0]
       if (!url) return die('open needs a url', 2)
-      const params = { url, newTab: true, ...(background(flags) ? { background: true } : {}) }
-      return send({ command: 'navigate', params }, { json })
+      return send(
+        buildNav(url, await navTargetTab(), { newTab: true, background: background(flags) }),
+        {
+          json
+        }
+      )
     }
+
+    case 'focus':
+      // Bring ONE window to the front: --window <id> (from `mira windows`), else
+      // Mira's last-focused window. The only command that foregrounds the app.
+      return send(buildFocus(flags.window), { json })
 
     case 'use': {
       // Prints `export MIRA_TAB=<id>` to stdout (for `eval "$(mira use ...)"`).

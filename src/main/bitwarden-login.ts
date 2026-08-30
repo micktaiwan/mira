@@ -99,6 +99,50 @@ export function uriHost(uri: string): string {
   }
 }
 
+/** Two-label public suffixes: under one of these, a real domain needs THREE
+ * labels (`lempire.co.uk` is a site, `co.uk` is not). Not the full public suffix
+ * list — the ones a French/anglo browsing history actually hits. Getting one
+ * wrong only ever costs a MISSED link (a duplicate item, the status quo), never
+ * a wrong one, because linking also demands the same username AND the same
+ * password. */
+const TWO_LABEL_SUFFIXES = new Set([
+  'co.uk',
+  'org.uk',
+  'ac.uk',
+  'gov.uk',
+  'me.uk',
+  'co.jp',
+  'co.kr',
+  'co.nz',
+  'co.za',
+  'co.in',
+  'co.il',
+  'com.au',
+  'net.au',
+  'org.au',
+  'com.br',
+  'com.mx',
+  'com.tr',
+  'com.cn',
+  'com.sg',
+  'com.hk',
+  'com.ar',
+  'com.es'
+])
+
+/** The site a host belongs to: no subdomain, no port. 'apps.tiime.fr' and
+ * 'go.tiime.fr' both give 'tiime.fr'. An IP literal is returned whole — its dots
+ * are not a domain hierarchy, and cutting it would make 192.168.1.10 and
+ * 10.0.1.10 look like the same site. Pure. */
+export function registrableDomain(host: string): string {
+  const bare = host.toLowerCase().replace(/:\d+$/, '')
+  if (bare === '' || /^\[/.test(bare) || /^\d+(\.\d+)*$/.test(bare)) return bare
+  const parts = bare.split('.').filter((p) => p !== '')
+  if (parts.length <= 2) return parts.join('.')
+  const lastTwo = parts.slice(-2).join('.')
+  return TWO_LABEL_SUFFIXES.has(lastTwo) ? parts.slice(-3).join('.') : lastTwo
+}
+
 /** Read `bw list items` output and keep the LOGINS (type 1). bw has no
  * server-side type filter, so the whole vault comes back and the filtering
  * happens here. Malformed rows are skipped rather than throwing — one odd item
@@ -167,4 +211,65 @@ export function matchLogin(
 export function withNewPassword(item: VaultLogin, password: string): Record<string, unknown> {
   const login = (item.raw.login ?? {}) as Record<string, unknown>
   return { ...item.raw, login: { ...login, password } }
+}
+
+/** What the vault already knows about the login being saved.
+ *
+ * Two very different things, deliberately not merged into one "existing item":
+ * `account` decides whether a PASSWORD gets overwritten, so it stays strict;
+ * `sameCredential` only ever adds an address to an item, so it can afford to
+ * look wider. */
+export interface LoginMatch {
+  /** Same host, same username: this account is already in the vault, and this is
+   * the item to update when the password differs. */
+  account: VaultLogin | null
+  /** Same site and same username and the SAME password, on another subdomain:
+   * not a second account, just an address the item does not list yet. Null
+   * whenever `account` is set — an exact match is always the better answer. */
+  sameCredential: VaultLogin | null
+}
+
+/** Everything the vault has to say about this login. Pure.
+ *
+ * WHY sameCredential EXISTS: matching on the exact host means a password saved
+ * on go.tiime.fr is not found again on apps.tiime.fr, and a second item is
+ * created for the same account (that happened, 2026-08-28). Widening `account`
+ * to the site would fix that and break something worse: `lempire.com` + username
+ * `admin` covers five different machines with five different passwords in the
+ * pro vault, and matching them would OVERWRITE one password with another.
+ *
+ * So the widening only applies when the password is identical too. Then it is
+ * the same credential by proof, not by guess, and the only thing left to do is
+ * to record the new address. */
+export function findLoginMatch(
+  items: VaultLogin[],
+  target: { host: string; username: string; password: string }
+): LoginMatch {
+  const account = matchLogin(items, target)
+  if (account) return { account, sameCredential: null }
+  const host = target.host.toLowerCase()
+  const site = registrableDomain(host)
+  const username = target.username.trim().toLowerCase()
+  const sameCredential =
+    site === ''
+      ? null
+      : (items.find(
+          (item) =>
+            item.password === target.password &&
+            item.username.trim().toLowerCase() === username &&
+            item.hosts.some((h) => registrableDomain(h) === site)
+        ) ?? null)
+  return { account, sameCredential }
+}
+
+/** The same vault item with one more uri, ready for `bw edit item`. Everything
+ * else is carried through untouched, for the same reason as withNewPassword: bw
+ * replaces the WHOLE item. A uri already listed is not added twice. Pure. */
+export function withExtraUri(item: VaultLogin, uri: string): Record<string, unknown> {
+  const login = (item.raw.login ?? {}) as Record<string, unknown>
+  const uris = Array.isArray(login.uris) ? [...login.uris] : []
+  const already = uris.some((u) => (u as { uri?: unknown } | null)?.uri === uri)
+  if (already) return { ...item.raw }
+  uris.push({ match: null, uri })
+  return { ...item.raw, login: { ...login, uris } }
 }

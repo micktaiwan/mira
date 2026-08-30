@@ -30,7 +30,9 @@ export const WEBAUTHN_KEYCHAIN_GROUP = 'ZMKDR6H89Y.com.mickaelfm.mira.webauthn'
 // first (a real account picker can come later); none → null, which cancels the request with
 // NotAllowedError. Kept separate from the native wiring so it is unit-testable (CLAUDE.md
 // "tout testable").
-export function selectWebauthnAccount(accounts: Pick<WebAuthnAccount, 'credentialId'>[]): string | null {
+export function selectWebauthnAccount(
+  accounts: Pick<WebAuthnAccount, 'credentialId'>[]
+): string | null {
   if (accounts.length === 0) return null
   return accounts[0].credentialId
 }

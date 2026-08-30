@@ -11,7 +11,9 @@ describe('normalizePickRequest', () => {
       audioDevices: [{ deviceId: 'mic1', label: 'Built-in', kind: 'audioinput' }]
     })
     expect(req.origin).toBe('https://example.com')
-    expect(req.videoDevices).toEqual([{ deviceId: 'cam1', label: 'FaceTime HD', kind: 'videoinput' }])
+    expect(req.videoDevices).toEqual([
+      { deviceId: 'cam1', label: 'FaceTime HD', kind: 'videoinput' }
+    ])
     expect(req.audioDevices).toEqual([{ deviceId: 'mic1', label: 'Built-in', kind: 'audioinput' }])
   })
 

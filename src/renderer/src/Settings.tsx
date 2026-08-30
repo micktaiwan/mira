@@ -1125,9 +1125,8 @@ function TabsMemorySection(): React.JSX.Element {
           {loading ? 'Reading…' : 'Refresh'}
         </button>
         <span className="settings-hint tab-mem-total">
-          {entries.length} loaded {entries.length === 1 ? 'tab' : 'tabs'} ·{' '}
-          {formatBytes(tabsBytes)} + {formatBytes(otherBytes)} other ={' '}
-          <strong>{formatBytes(totalBytes)}</strong>
+          {entries.length} loaded {entries.length === 1 ? 'tab' : 'tabs'} · {formatBytes(tabsBytes)}{' '}
+          + {formatBytes(otherBytes)} other = <strong>{formatBytes(totalBytes)}</strong>
         </span>
       </div>
       {error && <p className="settings-error">{error}</p>}
@@ -1168,10 +1167,7 @@ function TabsMemorySection(): React.JSX.Element {
                           <span className="tab-mem-proc-label">
                             {p.main ? '▸ main frame' : `↳ ${p.label}`}
                             {p.shared > 1 && (
-                              <span
-                                className="tab-mem-shared"
-                                title={`Shared by ${p.shared} tabs`}
-                              >
+                              <span className="tab-mem-shared" title={`Shared by ${p.shared} tabs`}>
                                 shared ×{p.shared}
                               </span>
                             )}

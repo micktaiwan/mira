@@ -97,7 +97,9 @@ describe('createTheme', () => {
   it('rejects invalid colors and empty names', () => {
     const base = normalizeThemes([])
     expect(() => createTheme(base, { name: '', background: '#000', text: '#fff' })).toThrow(/name/)
-    expect(() => createTheme(base, { name: 'X', background: 'blue', text: '#fff' })).toThrow(/background/)
+    expect(() => createTheme(base, { name: 'X', background: 'blue', text: '#fff' })).toThrow(
+      /background/
+    )
     expect(() => createTheme(base, { name: 'X', background: '#000', text: 'k' })).toThrow(/text/)
     expect(() =>
       createTheme(base, { name: 'X', background: '#000', text: '#fff', wallpaper: 'ftp://x' })

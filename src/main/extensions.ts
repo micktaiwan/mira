@@ -38,6 +38,11 @@ import {
 } from 'electron-chrome-web-store'
 import { DEFAULT_SESSION_ALIAS } from './chrome-session'
 import {
+  containsPermissions,
+  type GrantedPermissions,
+  type PermissionsRequest
+} from './extension-permissions'
+import {
   toExtensionInfo,
   serviceWorkerLogLevel,
   extensionIdFromUrl,
@@ -225,6 +230,7 @@ export class ExtensionsService {
       // `discarded` would be constant.
     })
     this.bySession.set(ses, instance)
+    fixPermissionsContains(instance)
     // AFTER the lib, unlike every shim above: its service-worker preload
     // rebuilds chrome.runtime from scratch and then freezes `chrome`, so an
     // onMessageExternal installed earlier would be thrown away with the
@@ -531,7 +537,10 @@ export class ExtensionsService {
       this.swConsoleSeq = Math.max(this.swConsoleSeq, entry.seq)
     }
     try {
-      writeFileSync(path, buffer.map((e) => JSON.stringify(e)).join('\n') + (buffer.length ? '\n' : ''))
+      writeFileSync(
+        path,
+        buffer.map((e) => JSON.stringify(e)).join('\n') + (buffer.length ? '\n' : '')
+      )
     } catch {
       // can't rewrite — harmless, the in-memory ring still works
     }
@@ -1202,6 +1211,37 @@ export class ExtensionsService {
  * boot's worth of an extension's chatter plus a reproduced action, small enough
  * to stay cheap in memory. */
 const SW_CONSOLE_BUFFER_LIMIT = 2000
+
+/** The shape of the lib's internal API router we reach into below. Narrow on
+ * purpose: if the lib ever renames any of it, the cast yields undefined and the
+ * fix skips itself with a warning rather than throwing at session setup. */
+interface RouterHandlerEntry {
+  callback: (event: unknown, ...args: unknown[]) => unknown
+}
+interface LibInternals {
+  ctx?: { router?: { handlers?: Map<string, RouterHandlerEntry> } }
+}
+
+/** Swap the lib's `chrome.permissions.contains` for one that matches origins
+ * as Chrome does (extension-permissions.ts explains what breaks otherwise —
+ * Bitwarden's passkey prompt, among others). The granted set still comes from
+ * the lib's own `permissions.getAll` handler, so permissions granted at runtime
+ * through `permissions.request` keep counting. */
+function fixPermissionsContains(instance: ElectronChromeExtensions): void {
+  const handlers = (instance as unknown as LibInternals).ctx?.router?.handlers
+  const contains = handlers?.get('permissions.contains')
+  const getAll = handlers?.get('permissions.getAll')
+  if (!contains || typeof getAll?.callback !== 'function') {
+    console.warn('[mira] permissions.contains fix skipped: the lib router changed shape')
+    return
+  }
+  const readGranted = getAll.callback
+  contains.callback = (event, request) =>
+    containsPermissions(
+      readGranted(event) as GrantedPermissions | null,
+      (request ?? {}) as PermissionsRequest
+    )
+}
 
 /** Short extension id from a service-worker scope (chrome-extension://<id>/),
  * for readable [mira-sw] lifecycle logs. */

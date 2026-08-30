@@ -3,6 +3,99 @@ import { createCommandRegistry } from '.'
 import { makeContext } from './fake-context'
 import { nextZoomLevel, ZOOM_STEP, ZOOM_MIN, ZOOM_MAX } from './navigation'
 
+// An explicit tabId is the fix for the targeting bug: `mira nav` used to drop the
+// pinned tab and load into the focused window's active tab, silently overwriting
+// a page nobody aimed at (three real tabs lost that way on 2026-08-28).
+describe('navigate with an explicit tabId', () => {
+  it('loads into the named tab, not the active one', () => {
+    const { ctx, loaded, tabLoads, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    const other = registry.execute('new-tab', { url: 'https://a.test' }, ctx) as unknown as {
+      id: string
+    }
+    // Make the FIRST tab active again, so the named target is not the active tab.
+    registry.execute('select-tab', { id: 'tab-1' }, ctx)
+    expect(tabState().activeId).toBe('tab-1')
+
+    const result = registry.execute('navigate', { url: 'example.com', tabId: other.id }, ctx)
+
+    expect(result).toEqual({ ok: true, url: 'https://example.com', id: other.id })
+    expect(tabLoads).toEqual([{ url: 'https://example.com', tabId: other.id }])
+    // The active-tab path was never taken, and the active tab still holds its page.
+    expect(loaded).toEqual([])
+    expect(tabState().activeId).toBe('tab-1')
+    expect(tabState().tabs.find((t) => t.id === other.id)?.url).toBe('https://example.com')
+  })
+
+  it('fails loudly on an unknown tab instead of falling back to the active one', () => {
+    const { ctx, loaded, tabLoads } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('navigate', { url: 'example.com', tabId: 'gone' }, ctx)).toEqual({
+      ok: false,
+      error: 'unknown tab: gone'
+    })
+    expect(tabLoads).toEqual([])
+    expect(loaded).toEqual([])
+  })
+
+  it('rejects a tabId that is not a non-empty string', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('navigate', { url: 'example.com', tabId: '  ' }, ctx)).toEqual({
+      ok: false,
+      error: '"tabId" must be a non-empty string'
+    })
+  })
+
+  it('opens a new tab NEXT TO the named one when newTab is set', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    const opened = registry.execute(
+      'navigate',
+      { url: 'example.com', tabId: 'tab-1', newTab: true },
+      ctx
+    ) as unknown as { ok: boolean; id: string; url: string }
+
+    expect(opened.ok).toBe(true)
+    expect(opened.url).toBe('https://example.com')
+    const ids = tabState().tabs.map((t) => t.id)
+    expect(ids[ids.indexOf('tab-1') + 1]).toBe(opened.id)
+    expect(tabState().activeId).toBe(opened.id)
+  })
+
+  it('keeps a background new tab hidden beside the named one', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    const opened = registry.execute(
+      'navigate',
+      { url: 'example.com', tabId: 'tab-1', newTab: true, background: true },
+      ctx
+    ) as unknown as { id: string }
+    expect(tabState().activeId).toBe('tab-1')
+    expect(tabState().tabs.some((t) => t.id === opened.id)).toBe(true)
+  })
+
+  it('skips the dedup: a named target is loaded, never swapped for a twin', () => {
+    const { ctx, tabLoads, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    // A tab already shows the destination; without a tabId, navigate would focus it.
+    registry.execute('new-tab', { url: 'https://example.com' }, ctx)
+    const result = registry.execute('navigate', { url: 'example.com', tabId: 'tab-1' }, ctx)
+    expect(result).toEqual({ ok: true, url: 'https://example.com', id: 'tab-1' })
+    expect(tabLoads).toEqual([{ url: 'https://example.com', tabId: 'tab-1' }])
+    expect(tabState().tabs.find((t) => t.id === 'tab-1')?.url).toBe('https://example.com')
+  })
+
+  it('refuses an internal page rather than ignoring the target', () => {
+    const { ctx, settingsOpened } = makeContext()
+    const registry = createCommandRegistry()
+    expect(
+      registry.execute('navigate', { url: 'chrome://extensions', tabId: 'tab-1' }, ctx)
+    ).toEqual({ ok: false, error: 'an internal page cannot be loaded into a specific tab' })
+    expect(settingsOpened).toEqual([])
+  })
+})
+
 describe('navigate', () => {
   it('normalizes the input and loads it in the target window', () => {
     const { ctx, loaded } = makeContext()
@@ -222,23 +315,114 @@ describe('back / forward', () => {
   })
 })
 
+describe('focus-address-bar', () => {
+  // Cmd+L had no binding at all until now: the plumbing existed (main pushes
+  // mira:focus-address-bar, the chrome focuses and selects the field) but only
+  // "new tab" ever called it, so the browser reflex did nothing.
+  it('hands focus to the target window address bar', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('focus-address-bar', {}, fake.ctx)).toEqual({ ok: true })
+    registry.execute('focus-address-bar', undefined, fake.ctx)
+    expect(fake.addressBarFocuses()).toBe(2)
+  })
+})
+
 describe('reload', () => {
-  it('reloads the target window and ignores params', () => {
+  it('reloads the target window when no tab is named', () => {
     const { ctx, nav } = makeContext()
     const registry = createCommandRegistry()
     expect(registry.execute('reload', {}, ctx)).toEqual({ ok: true })
     registry.execute('reload', undefined, ctx)
     expect(nav).toEqual(['reload', 'reload'])
   })
+
+  it('reloads a named tab instead of whatever holds focus', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    const target = fake.tabState().tabs[0].id
+    expect(registry.execute('reload', { tabId: target }, fake.ctx)).toEqual({ ok: true })
+    expect(fake.tabReloads).toEqual([{ tabId: target, ignoreCache: false }])
+    // The focus-driven path must NOT have run as well.
+    expect(fake.nav).toEqual([])
+  })
+
+  it('rejects a blank tabId rather than falling back to the active tab', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('reload', { tabId: '  ' }, ctx)).toEqual({
+      ok: false,
+      error: '"tabId" must be a non-empty string'
+    })
+  })
+
+  it('fails loudly on an unknown tab', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    const res = registry.execute('reload', { tabId: 'nope' }, ctx) as { ok: boolean }
+    expect(res.ok).toBe(false)
+  })
+
+  // The bug this closes: the error page is a real navigation to a data: URL, so
+  // a plain reload re-rendered the error forever and never retried the page.
+  it('retries the failed URL when the tab sits on the error page', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    const target = fake.tabState().activeId as string
+    fake.failLoad(target, 'file:///Users/me/page.html')
+    expect(registry.execute('reload', {}, fake.ctx)).toEqual({ ok: true, retried: true })
+    expect(fake.tabLoads).toEqual([{ url: 'file:///Users/me/page.html', tabId: target }])
+    expect(fake.nav).toEqual([])
+  })
+
+  it('retries the failed URL of a NAMED tab too', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    const target = fake.tabState().tabs[0].id
+    fake.failLoad(target, 'https://example.com/')
+    expect(registry.execute('reload', { tabId: target }, fake.ctx)).toEqual({
+      ok: true,
+      retried: true
+    })
+    expect(fake.tabLoads).toEqual([{ url: 'https://example.com/', tabId: target }])
+    expect(fake.tabReloads).toEqual([])
+  })
+
+  it('goes back to a plain reload once the retry has succeeded', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    const target = fake.tabState().activeId as string
+    fake.failLoad(target, 'file:///Users/me/page.html')
+    registry.execute('reload', {}, fake.ctx)
+    expect(registry.execute('reload', {}, fake.ctx)).toEqual({ ok: true })
+    expect(fake.nav).toEqual(['reload'])
+  })
 })
 
 describe('hard-reload', () => {
-  it('reloads bypassing the cache and ignores params', () => {
+  it('reloads bypassing the cache when no tab is named', () => {
     const { ctx, nav } = makeContext()
     const registry = createCommandRegistry()
     expect(registry.execute('hard-reload', {}, ctx)).toEqual({ ok: true })
     registry.execute('hard-reload', undefined, ctx)
     expect(nav).toEqual(['hard-reload', 'hard-reload'])
+  })
+
+  it('bypasses the cache on a named tab', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    const target = fake.tabState().tabs[0].id
+    expect(registry.execute('hard-reload', { tabId: target }, fake.ctx)).toEqual({ ok: true })
+    expect(fake.tabReloads).toEqual([{ tabId: target, ignoreCache: true }])
+  })
+
+  it('retries the failed URL from the error page as well', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    const target = fake.tabState().activeId as string
+    fake.failLoad(target, 'https://example.com/')
+    expect(registry.execute('hard-reload', {}, fake.ctx)).toEqual({ ok: true, retried: true })
+    expect(fake.tabLoads).toEqual([{ url: 'https://example.com/', tabId: target }])
   })
 })
 
