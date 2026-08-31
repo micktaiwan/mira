@@ -93,8 +93,17 @@ npm run build      # typecheck + build
 npm run typecheck  # tsc, sans build
 npm test           # Vitest
 npm run lint / format
-./bin/build.sh     # build packagé + réinstalle l'app (quit Mira → build:mac → open)
+./bin/build.sh     # build packagé + réinstalle l'app (quit par le socket → build:mac → relance en arrière-plan)
 ```
+
+**`npm run format` réécrit TOUT le repo, pas les fichiers que tu viens de toucher.** Le repo n'est
+pas prettier-clean (≈5800 warnings `prettier/prettier` au lint), donc un `format` lancé pour
+vérifier deux fichiers en reformate des dizaines d'autres — 54 fichiers, +7486/−6130, le 30/08/2026
+après un fix de trois fichiers. Aucun changement sémantique, mais le working tree devient
+illisible, ça écrase le travail en cours des autres sessions, et **je n'ai pas le droit de
+l'annuler** (`git checkout`/`restore` interdits par le CLAUDE.md global) : la réparation retombe sur
+Mickael. Donc formater un fichier précis (`npx prettier --write <fichier>`), et vérifier avec
+`npx eslint <fichier>`, jamais les scripts qui balaient le repo.
 
 Détails packaging / build packagé : rule `.claude/rules/packaging.md`.
 

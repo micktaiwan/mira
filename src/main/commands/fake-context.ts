@@ -16,7 +16,14 @@ import type {
 import { buildTabMemoryReport, selectServiceWorkerLogs } from '.'
 import { cardLabel, validateCapture } from '../card'
 import { loginItemName, loginLabel, validateLogin } from '../login-capture'
-import { findLoginMatch } from '../bitwarden-login'
+import { findLoginMatch, type VaultLogin } from '../bitwarden-login'
+import {
+  candidatesForHost,
+  chooseLogin,
+  fillHost,
+  fillSite,
+  redactCandidates
+} from '../login-fill'
 import {
   fieldKey,
   forgetEntries,
@@ -118,6 +125,14 @@ export interface FakeContext {
   tabReloads: Array<{ tabId: string; ignoreCache: boolean }>
   /** How many times focus-address-bar (Cmd+L) reached the window. */
   addressBarFocuses: () => number
+  /** One entry per close-window call: the window id that was closed. */
+  windowsClosed: string[]
+  /** What a fill-login WOULD have typed into the page, in order. */
+  filledLogins: Array<{ profileId: string; id: string; username: string; url: string }>
+  /** The native account picker, faked: seed `answer` with the id a test wants
+   * chosen (null = dismissed / no window to ask in), read `asked` to check
+   * whether it was opened at all. */
+  loginPick: { answer: string | null; asked: number }
   /** Pretend `tabId` is sitting on the error page after `url` failed to load, so
    * a test can check that reload retries the failed URL instead of re-rendering
    * the error page (see NavContext.retryFailedLoad). */
@@ -245,6 +260,7 @@ export function makeContext(
   const loaded: string[] = []
   const tabLoads: Array<{ url: string; tabId: string }> = []
   const tabReloads: Array<{ tabId: string; ignoreCache: boolean }> = []
+  const windowsClosed: string[] = []
   /** tabId → the URL whose load failed there, mirroring ProfileManager's map. */
   const failedLoads = new Map<string, string>()
   const nav: string[] = []
@@ -507,6 +523,33 @@ export function makeContext(
     password: string
     hosts: string[]
   }> = []
+  // Login FILL: what a fill WOULD have typed (nothing is really typed here), and
+  // the account chosen last time per profile+site — the store login-fill.json
+  // holds for real.
+  const filledLogins: Array<{ profileId: string; id: string; username: string; url: string }> = []
+  const fillChoices = new Map<string, string>()
+  // What the native picker would answer. null = dismissed (or no window to ask
+  // in), which is also the default: a test that wants the picked path seeds it.
+  const loginPick = { answer: null as string | null, asked: 0 }
+  /** The fake vault's logins in VaultLogin shape, for the real pure matching. */
+  const fakeVaultLogins = (profileId: string): VaultLogin[] =>
+    savedLogins
+      .filter((l) => l.profileId === profileId)
+      .map(({ id, name, username, password, hosts }) => ({
+        id,
+        name,
+        username,
+        password,
+        hosts,
+        raw: {}
+      }))
+  /** The url of the tab a fill targets: the named one, else the active one. */
+  const fakeTabUrl = (tabId?: string): string => {
+    const tabs = state.tabs.tabs
+    const tab = tabId ? tabs.find((t) => t.id === tabId) : tabs.find((t) => t.id === state.tabs.activeId)
+    if (tabId && !tab) throw new Error(`unknown tab: ${tabId}`)
+    return tab?.url ?? ''
+  }
   let formMemory: FormMemory = {}
   const ctx: CommandContext = {
     // The fake models one window ('fake-window', see listWindows): any other id
@@ -1279,6 +1322,12 @@ export function makeContext(
       state.tabs = selectTabPure(state.tabs, id)
       return { windowId: 'fake-window', id }
     },
+    closeWindow: (windowId?: string) => {
+      const id = windowId ?? 'fake-window'
+      if (id !== 'fake-window') throw new Error(`unknown window: ${id}`)
+      windowsClosed.push(id)
+      return { windowId: id, closed: true }
+    },
     listWindows: () => [
       {
         windowId: 'fake-window',
@@ -1555,6 +1604,74 @@ export function makeContext(
       if (index === -1) throw new Error(`no login with id ${id} in this vault`)
       const [removed] = savedLogins.splice(index, 1)
       return { profileId: pid, name: removed.name }
+    },
+    // Login FILL: the real pure rules (login-fill.ts) over the same fake login
+    // store, with the page url taken from the target tab. Nothing is typed
+    // anywhere — the fake records what WOULD have been filled, so a test can
+    // assert that an ambiguous page fills nothing.
+    loginCandidates: async (params: { profileId?: string; tabId?: string }) => {
+      const id = params.profileId ?? state.focused ?? 'default'
+      if (!cardVaults.has(id)) throw new Error(`no card vault for profile: ${id}`)
+      const url = fakeTabUrl(params.tabId)
+      const host = fillHost(url)
+      if (host === '') throw new Error('not a web page — nothing to fill here')
+      const items = fakeVaultLogins(id)
+      return { profileId: id, url, host, candidates: redactCandidates(candidatesForHost(items, host), host) }
+    },
+    fillLogin: async (params: {
+      profileId?: string
+      tabId?: string
+      id?: string
+      username?: string
+      ask?: boolean
+    }) => {
+      const pid = params.profileId ?? state.focused ?? 'default'
+      if (!cardVaults.has(pid)) throw new Error(`no card vault for profile: ${pid}`)
+      const url = fakeTabUrl(params.tabId)
+      const host = fillHost(url)
+      if (host === '') throw new Error('not a web page — nothing to fill here')
+      const items = fakeVaultLogins(pid)
+      const candidates = candidatesForHost(items, host)
+      const choice = chooseLogin(candidates, {
+        ...(params.id ? { id: params.id } : {}),
+        ...(params.username ? { username: params.username } : {}),
+        lastUsedId: fillChoices.get(`${pid}|${fillSite(host)}`) ?? null
+      })
+      let picked = choice.pick
+      if (!picked && choice.reason === 'ambiguous') {
+        if (params.ask !== false) {
+          loginPick.asked += 1
+          picked = candidates.find((c) => c.id === loginPick.answer) ?? null
+        }
+        if (!picked) {
+          return { profileId: pid, url, host, candidates: redactCandidates(candidates, host) }
+        }
+      }
+      if (!picked) {
+        throw new Error(
+          choice.reason === 'unknown-id'
+            ? `no login with id ${params.id} matches ${host}`
+            : choice.reason === 'unknown-username'
+              ? `no login for ${params.username} on ${host}`
+              : `no login saved for ${host}`
+        )
+      }
+      filledLogins.push({ profileId: pid, id: picked.id, username: picked.username, url })
+      fillChoices.set(`${pid}|${fillSite(host)}`, picked.id)
+      return {
+        profileId: pid,
+        url,
+        host,
+        filled: {
+          id: picked.id,
+          name: picked.name,
+          username: picked.username,
+          username_filled: picked.username !== '',
+          password_filled: true,
+          frames: 1,
+          passwordFields: 1
+        }
+      }
     },
     // Form memory: the real pure store (form-memory.ts), held in a local object.
     // No Electron, no disk — the rules under test are the same ones the page
@@ -1836,11 +1953,17 @@ export function makeContext(
   }
   return {
     ctx,
+    /** What a fill WOULD have typed into the page, in order. */
+    filledLogins,
+    /** The native account picker: seed `answer` with the id a test wants chosen
+     * (null = dismissed), read `asked` to check whether it was opened at all. */
+    loginPick,
     tracing: () => state.tracing,
     loaded,
     tabLoads,
     tabReloads,
     addressBarFocuses: () => state.addressBarFocuses,
+    windowsClosed,
     failLoad: (tabId: string, url: string) => {
       failedLoads.set(tabId, url)
     },

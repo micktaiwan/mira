@@ -23,6 +23,7 @@ import type { FormMemoryContext } from './form-memory'
 import type { HistoryContext } from './history'
 import type { InputContext } from './input'
 import type { LoginsContext } from './logins'
+import type { LoginFillContext } from './login-fill'
 import type { MagnifierContext } from './magnifier'
 import type { MediaContext } from './media'
 import type { NavContext } from './navigation'
@@ -65,6 +66,7 @@ export type CommandContext = AppContext &
   HistoryContext &
   InputContext &
   LoginsContext &
+  LoginFillContext &
   MagnifierContext &
   MediaContext &
   NavContext &

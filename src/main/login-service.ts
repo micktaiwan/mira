@@ -10,6 +10,15 @@
 //   login-prompt.ts         the native bubble
 //   bitwarden-login.ts      the vault item, and "is this already saved?" (pure)
 //   bitwarden-service.ts    the `bw` process, session keys in RAM
+//   login-fill.ts           which stored account fits this page (pure)
+//   login-fill-shim.ts      the page agent that WRITES the form
+//   login-fill-service.ts   the fill flow, and what it remembers
+//   login-pick-prompt.ts    the "which account?" bubble
+//
+// The fill half rides on the same three things as the capture half — the same
+// profile → account map, the same unlocked session, the same master-password
+// bubble — so a vault opened at a checkout is the vault that fills the next
+// login, and a profile mapped to nothing gets neither agent.
 //
 // It does NOT own the profile → Bitwarden account map, and that is deliberate: it
 // borrows card-service's (VaultAccess), so a profile is mapped once and the wall
@@ -17,7 +26,7 @@
 // BitwardenService too, so the master password typed at a checkout also covers
 // the next login saved.
 
-import { BrowserWindow, type Session } from 'electron'
+import { BrowserWindow, type Session, type WebContents } from 'electron'
 import { existsSync, mkdirSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import type { CardVault } from './bitwarden'
@@ -35,6 +44,9 @@ import { CARD_PROMPT_PRELOAD_SOURCE, showCardPrompt, type CardPromptHandle } fro
 import { LoginCaptureService } from './login-capture-service'
 import { loginLabel, validateLogin, type LoginDraft, type ValidatedLogin } from './login-capture'
 import { showLoginPrompt, type LoginPromptRequest } from './login-prompt'
+import { LoginFillService, type FillOutcome } from './login-fill-service'
+import { showLoginPick } from './login-pick-prompt'
+import type { FillCandidate } from './login-fill'
 
 export interface LoginServiceDeps {
   userDataDir: string
@@ -49,10 +61,25 @@ export interface LoginServiceDeps {
 
 export class LoginService {
   private readonly capture: LoginCaptureService
+  private readonly fillService: LoginFillService
   private promptPreloadPath: string | null = null
 
   constructor(private readonly deps: LoginServiceDeps) {
     const bw = deps.access.bitwarden
+    this.fillService = new LoginFillService(deps.userDataDir, {
+      vaultFor: deps.access.vaultFor,
+      // The SAME read as listLogins: it opens a locked vault through the native
+      // bubble, so a fill asked for from the socket never dead-ends on "locked".
+      readLogins: (profileId, vault) => this.readLogins(profileId, vault),
+      // Every frame, because a login form is very often an iframe (SSO widgets):
+      // the frames with no form simply answer that they filled nothing.
+      framesOf: (contents) => {
+        const main = contents.mainFrame
+        return main ? main.framesInSubtree : []
+      },
+      urlOf: (contents) => contents.getURL(),
+      pick: (params) => this.askWhichLogin(params)
+    })
     this.capture = new LoginCaptureService(deps.userDataDir, {
       vaultFor: deps.access.vaultFor,
       hasSession: (vault) => bw.hasSession(vault),
@@ -74,6 +101,9 @@ export class LoginService {
   attach(profileId: string, ses: Session, resolve: (id: number) => FragmentSource | null): void {
     if (!this.deps.access.vaultFor(profileId)) return
     this.capture.attach(ses, resolve)
+    // Same gate, same reason: the fill agent is the only code that can put a
+    // vault password into a page, so an unmapped profile never receives it.
+    this.fillService.attach(ses)
   }
 
   /** A tab went away: drop its half-typed login. */
@@ -150,6 +180,36 @@ export class LoginService {
     return { id, label: loginLabel(login), updated: false, linked: false }
   }
 
+  /** The accounts that could log in on a tab's page, no passwords. The "show me
+   * the list" half of filling. */
+  async loginCandidates(params: { profileId: string; contents: WebContents }): Promise<{
+    profileId: string
+    url: string
+    host: string
+    candidates: FillCandidate[]
+  }> {
+    return this.fillService.candidates(params)
+  }
+
+  /** Put a credential the vault holds into the tab's login form. Fills only when
+   * the account is not a guess; otherwise it answers with the list and types
+   * nothing. Never returns the password, never submits the form. */
+  async fillLogin(params: {
+    profileId: string
+    contents: WebContents
+    id?: string
+    username?: string
+    ask?: boolean
+  }): Promise<FillOutcome> {
+    return this.fillService.fill(params)
+  }
+
+  /** Forget which account was chosen on which site for a profile (profile
+   * deleted, its data cleared). */
+  forgetFills(profileId: string): void {
+    this.fillService.forgetProfile(profileId)
+  }
+
   /** Remove one login from a profile's vault (soft delete — it lands in
    * Bitwarden's trash, recoverable).
    *
@@ -212,6 +272,46 @@ export class LoginService {
     bubble.busy('Unlocking the vault…')
     try {
       await this.deps.access.bitwarden.unlock(vault, answer.password)
+    } finally {
+      bubble.close()
+    }
+  }
+
+  /** Ask which of several accounts to fill with, in the native picker. Resolves
+   * with the chosen vault item id, or null when the bubble is dismissed — or
+   * when the profile has no window, in which case nobody can be asked and the
+   * fill answers with the list instead.
+   *
+   * The bubble is closed here whatever the answer: unlike the save bubble, what
+   * follows a pick is instant (the pair goes to the page agent), so there is no
+   * progress to show. */
+  private async askWhichLogin(params: {
+    profileId: string
+    host: string
+    candidates: FillCandidate[]
+  }): Promise<string | null> {
+    const parent = this.deps.windowFor(params.profileId)
+    if (!parent || parent.isDestroyed()) return null
+    const vault = this.deps.access.vaultFor(params.profileId)
+    const bubble = showLoginPick(
+      {
+        host: params.host,
+        account: vault?.email ?? vault?.appDataDir ?? '',
+        options: params.candidates.map((candidate) => ({
+          id: candidate.id,
+          username: candidate.username,
+          name: candidate.name,
+          exact: candidate.exact,
+          // The address that makes a non-exact entry tellable from the others:
+          // its first host, which is where it was actually saved.
+          host: candidate.hosts[0] ?? ''
+        }))
+      },
+      { parent, preloadPath: this.ensurePromptPreload() }
+    )
+    try {
+      const answer = await bubble.answer
+      return answer && answer.action === 'pick' ? answer.id : null
     } finally {
       bubble.close()
     }

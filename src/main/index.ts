@@ -553,8 +553,42 @@ app.whenReady().then(async () => {
       reload: () => runDetached('reload', {}, profiles.contextForFocused()),
       goRootDomain: () => runDetached('go-root-domain', {}, profiles.contextForFocused()),
       hardReload: () => runDetached('hard-reload', {}, profiles.contextForFocused()),
-      focusAddressBar: () =>
-        runDetached('focus-address-bar', {}, profiles.contextForFocused()),
+      focusAddressBar: () => runDetached('focus-address-bar', {}, profiles.contextForFocused()),
+      // Cmd+Shift+L: fill the active tab's login form from the vault. NOT
+      // runDetached: fill-login answers rather than throws — "no login saved for
+      // <host>" comes back as ok:false, and a page with no login field comes
+      // back as a fill that landed nowhere. Both are things the user has to be
+      // told, so this one reads the answer and flashes a toast; console.error
+      // would tell nobody.
+      fillLogin: () => {
+        const ctx = profiles.contextForFocused()
+        void Promise.resolve()
+          .then(() => registry.execute('fill-login', {}, ctx))
+          .then((raw) => {
+            const res = raw as {
+              ok?: boolean
+              error?: unknown
+              host?: string
+              candidates?: unknown[]
+              filled?: { username_filled?: boolean; password_filled?: boolean }
+            }
+            if (res.ok === false) {
+              runDetached('show-toast', { message: String(res.error ?? 'Could not fill') }, ctx)
+              return
+            }
+            // The picker was opened and dismissed: the user just said no, and a
+            // toast on top of that would be noise.
+            if (res.candidates) return
+            if (res.filled && !res.filled.username_filled && !res.filled.password_filled) {
+              runDetached('show-toast', { message: 'No login field on this page' }, ctx)
+            }
+          })
+          .catch((error) => console.error('[mira] command fill-login failed', error))
+      },
+      // contextForMenu, not contextForFocused: a close from the menu is a USER
+      // close, so closing the last window quits Mira through the confirmation
+      // gate — a socket close never does (see TabDetachContext.closeWindow).
+      closeWindow: () => runDetached('close-window', {}, profiles.contextForMenu()),
       newTab: () => runDetached('new-tab', {}, profiles.contextForFocused()),
       duplicateTab: () => runDetached('duplicate-active-tab', {}, profiles.contextForFocused()),
       closeTab: () => runDetached('close-active-tab', {}, profiles.contextForFocused()),

@@ -39,6 +39,15 @@ export interface AppMenuHandlers {
   /** Hard reload the active tab (Cmd+Shift+R): re-fetch bypassing the HTTP cache,
    * for a stale cached page. Wired to the hard-reload command. */
   hardReload: () => void
+  /** Close the current window (Cmd+Shift+W). Wired to the close-window command.
+   * It used to be Electron's `role: 'close'`, which silently did nothing whenever
+   * Electron reported no focused window — the only menu action not on our bus. */
+  closeWindow: () => void
+  /** Fill the active tab's login form from the Bitwarden vault (Cmd+Shift+L —
+   * the shortcut Bitwarden and 1Password use in Chrome, so the muscle memory
+   * carries over). Wired to the fill-login command, which opens Mira's own
+   * account picker when the site has more than one saved login. */
+  fillLogin: () => void
   /** Focus the address bar and select its contents (Cmd+L). Wired to the
    * focus-address-bar command. On Mira's error page the bar holds the URL that
    * failed, so Cmd+L then Enter re-navigates to it. */
@@ -127,7 +136,11 @@ function bookmarkMenuItems(
   )
 }
 
-export function buildAppMenu(handlers: AppMenuHandlers): void {
+/** Build the menu TEMPLATE. Split from buildAppMenu so the shape — and above all
+ * the accelerators, which silently shadow each other when two items claim the
+ * same one — is unit-tested without Electron. Pure apart from reading
+ * `handlers.listProfiles()`. */
+export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorOptions[] {
   const { profiles, focused } = handlers.listProfiles()
   const isMac = process.platform === 'darwin'
 
@@ -246,7 +259,11 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
         click: () => handlers.recentTabForward()
       },
       { type: 'separator' },
-      { role: 'close', label: 'Close Window', accelerator: 'CmdOrCtrl+Shift+W' }
+      {
+        label: 'Close Window',
+        accelerator: 'CmdOrCtrl+Shift+W',
+        click: () => handlers.closeWindow()
+      }
     ]
   }
 
@@ -280,6 +297,14 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
           label: 'Find Previous',
           accelerator: 'CmdOrCtrl+Shift+G',
           click: () => handlers.findPrevious()
+        },
+        { type: 'separator' },
+        {
+          // In Edit because that is what it does: it types into the page's
+          // fields. Cmd+Shift+L is what Bitwarden binds in Chrome.
+          label: 'Fill Login from Vault',
+          accelerator: 'CmdOrCtrl+Shift+L',
+          click: () => handlers.fillLogin()
         }
       ]
     },
@@ -393,5 +418,10 @@ export function buildAppMenu(handlers: AppMenuHandlers): void {
     { role: 'windowMenu' }
   ]
 
-  Menu.setApplicationMenu(Menu.buildFromTemplate(template))
+  return template
+}
+
+/** Install the template as the application menu. The only Electron edge here. */
+export function buildAppMenu(handlers: AppMenuHandlers): void {
+  Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(handlers)))
 }

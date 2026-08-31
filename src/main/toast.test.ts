@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { toastBounds, type ToastRect } from './toast'
+import { toastBounds, mayShowToast, type ToastRect } from './toast'
 
 const OPTS = { bottomGap: 44, margin: 8 }
 
@@ -37,5 +37,17 @@ describe('toastBounds', () => {
     // (1001 - 100) / 2 = 450.5 → rounded.
     expect(Number.isInteger(bounds.x)).toBe(true)
     expect(Number.isInteger(bounds.y)).toBe(true)
+  })
+})
+
+describe('mayShowToast', () => {
+  it('shows a toast on the window the user is looking at', () => {
+    expect(mayShowToast(true)).toBe(true)
+  })
+
+  it('stays silent on an unfocused window — the pill would drag it to the front', () => {
+    // The toast is a child window: ordering it in raises its parent, so a download
+    // finishing in the background used to pull Mira over the user's editor.
+    expect(mayShowToast(false)).toBe(false)
   })
 })

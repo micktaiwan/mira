@@ -75,6 +75,7 @@ import { ExtensionCommandsService } from './extension-commands'
 import { formatExtTabLog } from './extensions-tab-log'
 import { OffscreenHostService } from './extension-offscreen'
 import { WebRequestBridgeService } from './extension-web-request-service'
+import { StorageEventBridgeService } from './extension-storage-events-service'
 import { guardedVerdict } from './web-request-guard'
 import {
   type DisabledExtensions,
@@ -169,6 +170,9 @@ export class ExtensionsService {
   /** chrome.webRequest delivery to service workers: Electron ships the
    * namespace but never fires it (extension-web-request.ts). Lazy — userData. */
   private webRequestBridge: WebRequestBridgeService | null = null
+  /** chrome.storage.onChanged delivery to service workers: Electron dispatches
+   * it to renderers only (extension-storage-events.ts). Lazy — userData. */
+  private storageEvents: StorageEventBridgeService | null = null
   /** Extension keyboard shortcuts (manifest `commands`). */
   private readonly commandsService = new ExtensionCommandsService()
   /** WebContents whose navigations we already hooked for the [mira-ext-tab]
@@ -242,6 +246,11 @@ export class ExtensionsService {
     // have to be installed on top of that object, not before it.
     this.webRequestBridge ??= new WebRequestBridgeService(app.getPath('userData'))
     this.webRequestBridge.attach(ses)
+    // Same story a third time: Electron dispatches chrome.storage.onChanged to
+    // renderers only, never to a service worker, so the worker's onChanged has
+    // to be replaced on top of the lib's rebuilt chrome.storage.
+    this.storageEvents ??= new StorageEventBridgeService(app.getPath('userData'))
+    this.storageEvents.attach(ses)
     this.hookWorkerKeepalive(ses)
   }
 

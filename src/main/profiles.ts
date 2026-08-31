@@ -115,6 +115,7 @@ import { LoginService } from './login-service'
 import { FormMemoryService } from './form-memory-service'
 import { vaultPlan, needsUnlock, noncePartitionDir } from './vault'
 import { computeDiskUsage } from './disk-usage'
+import { windowTitle } from './window-title'
 import * as vaultService from './vault-service'
 import {
   type TabState,
@@ -654,6 +655,11 @@ export class ProfileManager {
   /** Profile id currently checked in the app menu's Profiles submenu. Used to
    * skip a full menu rebuild when a window is merely re-focused (same profile). */
   private menuFocusId: string | null = null
+  /** windowId of the last Mira window that held focus. Kept because Electron's
+   * `BrowserWindow.getFocusedWindow()` is null the moment Mira is not frontmost
+   * (or an overlay is key), and a "close this window" that resolves to null must
+   * still know which window the user meant. Cleared when that window closes. */
+  private lastFocusedWindowId: string | null = null
   /** True once the app has begun quitting (app 'before-quit'). At quit every open
    * window closes and fires 'closed' just like a user close would — this flag lets
    * the close path tell the two apart: a user close marks the profile not-open
@@ -1050,6 +1056,31 @@ export class ProfileManager {
     return { id, closed: true }
   }
 
+  /** Close ONE window (see TabDetachContext.closeWindow). Without `windowId` it
+   * resolves the window the user means — the focused one, else the last one that
+   * held focus — and refuses rather than guess: closing a window the caller did
+   * not mean is not recoverable.
+   *
+   * `scripted` tags the close so it never quits Mira when it is the last window
+   * (same guard as closeProfile); a user close keeps the normal behaviour, quit
+   * confirmation included. */
+  private closeWindowById(
+    windowId: string | undefined,
+    scripted: boolean
+  ): { windowId: string; closed: boolean } {
+    const pw =
+      windowId !== undefined
+        ? this.openById.get(windowId)
+        : (this.findByWindow(BrowserWindow.getFocusedWindow()) ??
+          (this.lastFocusedWindowId ? this.openById.get(this.lastFocusedWindowId) : undefined))
+    if (windowId !== undefined && !pw) throw new Error(`unknown window: ${windowId}`)
+    if (!pw) throw new Error('no target window')
+    if (pw.window.isDestroyed()) return { windowId: pw.windowId, closed: false }
+    if (scripted) this.scriptClosingWindows.add(pw.window)
+    pw.window.close()
+    return { windowId: pw.windowId, closed: true }
+  }
+
   /** Open an external URL (a link/file handed to Mira as the system default
    * browser) in a new tab. Targets the focused window, else the LAST focused
    * profile window, else any open one; if Mira was launched by the click and has
@@ -1119,6 +1150,9 @@ export class ProfileManager {
     // Live-update the badge of every open window of this profile: the chrome read
     // its label once from the URL at load, so it needs a push to refresh.
     this.broadcastToProfile(id, 'mira:profile-renamed', updated.label)
+    // The OS-facing name is derived from the label too, so it has to follow the
+    // rename — otherwise Mission Control and any script keep the stale one.
+    for (const pw of this.windowsForProfile(id)) pw.window.setTitle(windowTitle(updated.label))
     this.deps.onChange?.()
     return { id: updated.id, label: updated.label }
   }
@@ -1287,6 +1321,14 @@ export class ProfileManager {
         partition: CHROME_PARTITION
       }
     })
+    // Name the window after its profile. Mira is frameless so nothing draws this
+    // title, but macOS uses it everywhere the app does not: Mission Control, the
+    // Window menu, and the accessibility API a script drives. Chromium otherwise
+    // pushes the chrome page's own <title> onto the window, which left every
+    // window called "Electron" and indistinguishable from outside — so block that
+    // push and keep our own name (see window-title.ts).
+    window.webContents.on('page-title-updated', (event) => event.preventDefault())
+    window.setTitle(windowTitle(profile.label))
     // Position via setBounds AFTER creation (show:false means it lands before the
     // window is ever revealed) so an external-display placement is honored on
     // macOS. Maximized / fullscreen can't be constructor bounds either — apply the
@@ -1425,6 +1467,9 @@ export class ProfileManager {
       // Space), so the Space capture would otherwise wait until close. Focusing
       // the window on its new desktop is the earliest reliable signal.
       this.saveSession(profileWindow)
+      // Before the same-profile early return below: two windows of ONE profile
+      // still have to be told apart when the user closes "this" one.
+      this.lastFocusedWindowId = profileWindow.windowId
       if (this.menuFocusId === profileWindow.id) return
       this.menuFocusId = profileWindow.id
       this.deps.onChange?.()
@@ -1476,6 +1521,7 @@ export class ProfileManager {
       // Drop this window from the open map FIRST, so the "does the profile still
       // have other windows?" check below excludes the one that just closed.
       this.openById.delete(windowId)
+      if (this.lastFocusedWindowId === windowId) this.lastFocusedWindowId = null
       const othersRemain = this.windowsForProfile(profile.id).length > 0
       if (this.quitting) {
         // App quit: leave the open flag alone (the 'close' snapshot recorded it
@@ -2159,7 +2205,10 @@ export class ProfileManager {
       )
       this.downloadItems.delete(id)
       this.broadcastToProfile(profileId, 'mira:downloads-changed')
-      // The point of the whole feature: tell Mickael the download finished.
+      // The point of the whole feature: tell Mickael the download finished. Only
+      // when he is IN Mira, though — a toast fired on a background window drags
+      // that window in front of what he is doing (mayShowToast in toast.ts). A
+      // completion he was not there to see is carried by the status-bar badge.
       if (record) {
         const host = this.aWindowForProfile(profileId)
         if (host) void showToast(host, completionMessage(record))
@@ -3568,6 +3617,22 @@ export class ProfileManager {
     return view.webContents
   }
 
+  /** The profile that OWNS a tab — deliberately NOT the focused window's.
+   * Filling a login reads one specific vault, so answering with the focused
+   * profile would open the perso account on a pro page (CLAUDE.md, the account
+   * wall). Without a tabId, the target window's profile, like everything else.
+   * Same errors as webContentsForTab, so the two always agree. */
+  private profileIdForTab(target: ProfileWindow | null, tabId?: string): string {
+    if (tabId) {
+      for (const pw of this.openById.values()) {
+        if (pw.window.isDestroyed()) continue
+        if (pw.views.has(tabId) || pw.state.tabs.some((t) => t.id === tabId)) return pw.id
+      }
+      throw new Error(`unknown tab: ${tabId}`)
+    }
+    return this.contextProfileId(target)
+  }
+
   /** Load `url` into ONE named tab, in whatever window it lives (see NavContext.
    * loadUrlInTab). Ids are UUIDs, so the search spans every window — the caller
    * is never tied to whichever window is focused.
@@ -4600,6 +4665,18 @@ export class ProfileManager {
    * owns it (tab ids are UUIDs, so at most one window matches). Backs the
    * `discard-tab` command; the Tabs settings panel spans profiles, so the owning
    * window is not necessarily the focused one. Runs the normal discard on it. */
+  /** Close a tab by its globally-unique id, in WHICHEVER window holds it. An
+   * external caller (socket/MCP) binds to the focused window, and Mira is by
+   * definition not focused while a script drives it — so `close-tab` on a tab of
+   * any other window failed with `unknown tab` even though the id names exactly one
+   * tab in the whole app. Same resolution as discardTabAnywhere / exec-js. */
+  private closeTabAnywhere(tabId: string): { closed: boolean } {
+    for (const pw of this.openById.values()) {
+      if (pw.state.tabs.some((t) => t.id === tabId)) return this.closeTabIn(pw, tabId)
+    }
+    throw new Error(`unknown tab: ${tabId}`)
+  }
+
   private discardTabAnywhere(tabId: string): { discarded: boolean; id: string } {
     for (const pw of this.openById.values()) {
       if (pw.state.tabs.some((t) => t.id === tabId)) return this.discardTabIn(pw, tabId)
@@ -4810,6 +4887,20 @@ export class ProfileManager {
     return this.makeContext(target, 'external')
   }
 
+  /** Context for a MENU accelerator. Origin 'ui': the user is inside Mira, in its
+   * menu — so an action whose outcome depends on the origin behaves as a user
+   * action (a `close-window` on the last window quits, with the confirmation).
+   * The target resolves like closeWindowById: focused window, else the last one
+   * that held focus, and no arbitrary fallback. The other menu handlers still go
+   * through contextForFocused; this is for the ones where the origin decides. */
+  contextForMenu(): CommandContext {
+    const target =
+      this.findByWindow(BrowserWindow.getFocusedWindow()) ??
+      (this.lastFocusedWindowId ? this.openById.get(this.lastFocusedWindowId) : undefined) ??
+      null
+    return this.makeContext(target, 'ui')
+  }
+
   /** The app-wide tracing session, created on first use so `this.deps` is set.
    * Traces land in `userData/traces/`, next to `logs/`. */
   private get tracingSession(): TracingSession {
@@ -4976,8 +5067,7 @@ export class ProfileManager {
         this.focusAddressBar(target)
       },
       retryFailedLoad: (tabId) => {
-        const id =
-          tabId ?? (target && !target.window.isDestroyed() ? target.state.activeId : null)
+        const id = tabId ?? (target && !target.window.isDestroyed() ? target.state.activeId : null)
         if (id === null || id === undefined) return false
         const url = this.errorRetryUrl.get(id)
         if (url === undefined) return false
@@ -5588,10 +5678,9 @@ export class ProfileManager {
           loading: false
         }
       },
-      closeTab: (id) => {
-        if (!target) throw new Error('no target window')
-        return this.closeTabIn(target, id)
-      },
+      // Resolved across every open window (like discardTab): the id is globally
+      // unique, and an external caller is never bound to the right window.
+      closeTab: (id) => this.closeTabAnywhere(id),
       closeActiveTab: () => {
         if (!target) throw new Error('no target window')
         return this.closeActiveTabIn(target)
@@ -5629,6 +5718,10 @@ export class ProfileManager {
       // selects the tab in place (foreground-policy.ts).
       activateTab: (id) => this.activateTabById(id, raiseAllowed),
       listWindows: () => this.listOpenWindows(),
+      // A menu/UI close is a user close (the last window quits Mira, through the
+      // confirmation gate); a socket/MCP close never quits (foreground-policy's
+      // origin, same rule as close-profile — agents use `quit` for that).
+      closeWindow: (windowId) => this.closeWindowById(windowId, origin === 'external'),
       pinTab: (id) => {
         if (!target) throw new Error('no target window')
         return this.setTabPinnedIn(target, id, true)
@@ -5778,6 +5871,22 @@ export class ProfileManager {
         }),
       deleteLogin: (id, profileId) =>
         this.logins.deleteLogin(id, profileId ?? this.contextProfileId(target)),
+      // Filling a login FROM the vault. The profile is the one that OWNS the
+      // tab, never the focused window's: a socket caller steers no focus, and
+      // the wrong answer would open the wrong Bitwarden account.
+      loginCandidates: (params) =>
+        this.logins.loginCandidates({
+          profileId: params.profileId ?? this.profileIdForTab(target, params.tabId),
+          contents: this.webContentsForTab(target, params.tabId)
+        }),
+      fillLogin: (params) =>
+        this.logins.fillLogin({
+          profileId: params.profileId ?? this.profileIdForTab(target, params.tabId),
+          contents: this.webContentsForTab(target, params.tabId),
+          ...(params.id ? { id: params.id } : {}),
+          ...(params.username ? { username: params.username } : {}),
+          ...(params.ask === false ? { ask: false } : {})
+        }),
       // Form memory: what was typed into ordinary text fields, per profile and
       // per site. Cards never land here — see commands/form-memory.ts.
       listFormMemory: (filter) => this.formMemory.list(filter),

@@ -55,3 +55,23 @@ export function toastBounds(content: ToastRect, size: Size, opts: ToastBoundsOpt
     height: size.height
   }
 }
+
+/** Whether a toast may actually be shown, given whether its host window has OS
+ * focus.
+ *
+ * A toast is a CHILD window, and on macOS ordering a child window in raises its
+ * PARENT with it: a pill flashed while Mira sits behind the editor drags the whole
+ * browser window in front of what the user is doing (reproduced 2026-08-31 —
+ * `show-toast` alone, Mira behind the terminal, Mira's window jumped above it and
+ * stayed there after the pill faded). A download finishing in the background was
+ * the everyday way to hit it.
+ *
+ * So a toast is only shown when its window is focused — i.e. when the user is
+ * actually looking at it, which is the only case where a 4-second pill is worth
+ * anything. Nothing is lost in the background: a completed download still leaves
+ * the persistent "unseen" badge in the status bar (see downloads.ts), and the same
+ * foreground rule already governs every command (foreground-policy.ts).
+ */
+export function mayShowToast(windowFocused: boolean): boolean {
+  return windowFocused
+}

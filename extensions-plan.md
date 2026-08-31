@@ -1042,3 +1042,114 @@ et plus d'erreur « Failed to start service worker » Claap ; (3) popup Claap fo
 par tabCapture (permission macOS « Screen Recording » requise pour l'app Electron, sinon
 `getSources` rend des sources vides — le log `[mira-capture]` le signale). Points ouverts connus :
 pas de picker de source (écran entier d'office), `commands` (Cmd+Shift+S de Claap) toujours inerte.
+
+## 10. E9 — `chrome.storage.onChanged` jamais délivré aux service workers (2026-08-30)
+
+**Symptôme visible.** Coffre Bitwarden déverrouillé, mais le clic droit sur une page offre
+« Unlock your vault » sous chacun de ses sous-menus (Autofill login, Copy username…).
+
+**Chaîne de causes, vérifiée bout en bout.**
+
+1. Ce titre n'a **qu'un seul producteur** dans le bundle Bitwarden : `noAccess()`, atteint quand
+   `authService.getAuthStatus() !== Unlocked`. Confirmé par l'arithmétique des
+   `contextMenus.create` lus dans le SW (`mira call extension-console`) : cycles réguliers
+   11 puis 17 sur le profil pro (premium), 10 puis 15 sur le perso — soit `init()` puis
+   `init()` + un enfant NOOP par parent, la signature exacte de `noAccess()`. Aucun autre
+   chemin (`noLogins`/`noCards`/`noIdentities`) ne donne ces comptes.
+2. Le coffre EST déverrouillé côté stockage : `chrome.storage.session` contient
+   `user_<id>_crypto_userKey` (lu depuis une page d'extension ouverte en onglet), et le compte
+   actif est bien celui-là (`global_account_activeAccountId`).
+3. **Le trou.** Extension sonde chargée dans le profil de test (permissions `["storage"]`, un SW
+   qui écoute les trois `onChanged`) : une **page** d'extension reçoit tous les événements, y
+   compris ceux provoqués par le `set` du SW ; le **service worker n'en reçoit aucun**, pas même
+   les siens. Lecture/écriture, elles, sont bien partagées (le SW relit ce que la page a écrit).
+   Electron ne dispatche les changements de stockage qu'aux renderers.
+4. Bitwarden construit son `updates$` cross-contexte directement sur `<area>.onChanged`
+   (classe `ZR` de son `background.js`). Le déverrouillage se fait dans le POPUP, qui écrit la
+   clé ; le SW n'est jamais prévenu, sa vue cachée reste `null`, et il se croit verrouillé pour
+   toujours — jusqu'au prochain démarrage du worker.
+
+**Fix (codé 2026-08-30).** Même forme que le pont `chrome.webRequest` : moitié pure +
+moitié Electron.
+
+- `src/main/extension-storage-events.ts` — canaux, `changesFrom` / `readStorageReport`, et les
+  deux sources injectées. La moitié **worker** remplace `chrome.storage.onChanged` et
+  `<area>.onChanged` (inertes) par de vrais événements ; la moitié **frame** ne fait que
+  rapporter les écritures (les renderers ont déjà les événements natifs — dispatcher là aussi
+  ferait double feu).
+- `src/main/extension-storage-events-service.ts` — les deux preloads, l'ipc worker, le routage.
+  L'id d'extension vient toujours de l'émetteur (frame url ou scope du worker), jamais du
+  payload.
+- Câblé dans `extensions.ts` **après** `new ElectronChromeExtensions(...)`, comme les deux autres
+  ponts : la lib reconstruit `chrome.storage` puis fait `Object.freeze(chrome)`, gel superficiel
+  — mesuré dans un worker : `chrome.storage` extensible, `set` own/writable/configurable.
+
+**Deux choix explicites.** (1) La lecture des anciennes valeurs est lancée dans le MÊME tick que
+l'écriture, sans l'attendre : une écriture n'est jamais retardée, donc deux écritures rapprochées
+gardent leur ordre ; une course coûte un `oldValue` faux, jamais une écriture perdue. (2) Aucune
+déduplication par valeur : un `set` de la même valeur refait un événement. Un événement en trop
+coûte un recalcul, un manquant est précisément le bug.
+
+**Portée.** `local` et `session` seulement — la lib alias `sync` et `managed` sur l'OBJET
+`local` lui-même (`chrome.storage.local === chrome.storage.sync`, vérifié), donc une écriture
+par l'un est une écriture locale, rapportée comme telle. Un content script écrit dans un monde
+isolé que le preload frame n'atteint pas : ses écritures ne réveillent pas le SW.
+
+**Premier jet inopérant, et pourquoi — deux défauts, tous deux corrigés le 2026-08-31.**
+
+**(1) Les événements posés par affectation.** `onChanged` d'une **area** est un **accesseur**
+(`get: true`, pas de setter — mesuré dans un vrai worker), donc
+`chrome.storage.session.onChanged = …` est **silencieusement ignoré** en mode sloppy et
+l'événement natif inerte reste en place. Bitwarden écoute sur l'area (`ZR` reçoit
+`chrome.storage.local` / `.session`), donc le pont ne changeait rien pour lui : il tournait, ne
+levait rien, ne faisait rien. `chrome.storage.onChanged`, au sommet, est une propriété de
+données : celui-là était bien remplacé, et c'est ce qui a permis de vérifier en direct que le
+reste de la route marchait (une écriture faite dans une page atteint bien le worker, avec le bon
+nom d'area). Corrigé par `Object.defineProperty` aux deux niveaux (`defineWorked: true` dans le
+worker).
+
+**(2) Les valeurs qui traversaient l'IPC — le défaut coûteux.** Le pont lisait l'ancienne valeur
+avant chaque écriture et envoyait ancienne+nouvelle à main, qui renvoyait le change set au worker.
+Mesuré sur le profil pro : Bitwarden garde son coffre déchiffré dans **UNE** clé
+`chrome.storage.local` de **1,45 Mo** (`session_<user>_ciphersMemory_decryptedCiphers`, à côté
+d'un `_ciphers_ciphers` de 1,66 Mo) et la réécrit à chaque sync, déverrouillage et modification
+de cipher. Chaque écriture devenait donc une lecture de 1,45 Mo + ~3 Mo de traversée de process
+
+- 1,45 Mo de retour, sur le chemin chaud du worker, au moment du déverrouillage. Symptôme
+  observé : **plus aucun sous-menu Bitwarden du tout**, sur le profil pro seulement. Sa trace est
+  sans ambiguïté — un `contextMenus.removeAll` puis un `tabs.query`, zéro `create`, à chaque cycle :
+  `init()` renvoie vrai sans rien créer, ce qui n'arrive que par `if (this.initRunning) return true`,
+  donc un `await` resté en suspens à l'intérieur.
+
+**Le pont ne fait plus traverser aucune valeur.** Un contexte rapporte `{area, saved, removed}` —
+des **noms de clés** — et le worker fabrique la forme de Chrome : `{newValue: undefined}` pour une
+sauvegarde, `{}` pour une suppression. `'newValue' in change` — le test sur lequel un framework
+d'état bascule, et celui qu'utilise Bitwarden — reste donc exact ; `oldValue` et la vraie
+`newValue` ne sont plus fournis, un écouteur qui a besoin de la valeur la relit avec
+`chrome.storage.get` (ce qu'un service worker doit faire de toute façon à chaque redémarrage).
+Remettre les valeurs demanderait un budget de taille, et un budget de taille ne se calcule pas
+sans sérialiser la valeur d'abord. Corollaires : plus aucune lecture avant écriture (donc plus de
+risque d'inversion d'ordre non plus), et `clear()` est le seul cas qui lit encore — les **noms**
+des clés, via `getKeys()` si Electron l'a.
+
+**Une porte en plus** : le worker annonce à main s'il a au moins un écouteur de stockage, une fois
+au démarrage puis à chaque bascule. Main ne lui envoie rien quand il a dit non. L'état est
+**tri-state** exprès — un worker dont main n'a jamais rien entendu est traité comme écoutant :
+une annonce perdue coûte quelques messages minuscules, jamais un pont muet, panne déjà payée une
+fois ici.
+
+**Le faux `chrome` des tests modélise l'accesseur** : sans ça, quatre tests passaient sur un shim
+qui ne s'installait pas. Repasser à l'affectation les fait tomber.
+
+**Deux pièges d'outillage rencontrés au passage.** (1) Les preloads service-worker de Mira ne
+s'installent PAS dans une extension chargée à chaud dans le **profil de test** (ni le shim
+`alarms`, ni le pont webRequest, ni celui-ci) alors qu'ils s'installent dans le profil `default` —
+donc une sonde chargée dans le profil de test ne dit rien sur les shims, cause non cherchée.
+(2) `extension-console` n'a rien renvoyé pour cette sonde alors que le log Chromium contenait ses
+lignes : pour lire une sonde, `~/Library/Application Support/mira/logs/chromium-*.log` est la
+source fiable. (3) `chrome.storage.session` est **vidé par un disable/enable** de l'extension
+(vérifié avec une sonde) : redémarrer le service worker de Bitwarden par ce chemin reverrouille
+son coffre, ce n'est pas un outil de debug gratuit.
+
+**Reste à valider en vrai** : clic droit sur une page, coffre déverrouillé → les identifiants du
+site, plus « Unlock your vault ».
