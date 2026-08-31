@@ -21,7 +21,7 @@
 //   mira use <id>                   pin an explicit id
 //   mira exec <code|-|@file>        run JS in the pinned/active tab
 //   mira press <key> [--mod a,b]    send a real keypress (e.g. e, Enter, ArrowDown)
-//   mira reload                     reload the pinned (via exec-js) or active tab
+//   mira reload                     reload the pinned or active tab (on the error page: retries the url that failed)
 //   mira console [--level e][--limit n][--since seq]  captured page console, iframes included (console.* + 403/CORS/CSP/exceptions)
 //   mira shot [path] [--full]       screenshot the pinned/active tab to a PNG (default: userData/screenshots/)
 //                                   (--full: the whole document, not just the viewport)

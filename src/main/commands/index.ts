@@ -30,6 +30,7 @@ import { forgetCommands } from './forget'
 import { formMemoryCommands } from './form-memory'
 import { historyCommands } from './history'
 import { loginsCommands } from './logins'
+import { loginFillCommands } from './login-fill'
 import { inputCommands } from './input'
 import { magnifierCommands } from './magnifier'
 import { mediaCommands } from './media'
@@ -104,6 +105,7 @@ export type { FindContext, FindStopAction } from './find'
 export type { FolderMenuContext } from './folder-menu'
 export type { HistoryContext } from './history'
 export type { LoginsContext, LoginInfo } from './logins'
+export type { LoginFillContext, FillCandidateInfo, FillResult } from './login-fill'
 export type { HistoryEntry } from '../history-store'
 export type { InputContext, PressKeyParams } from './input'
 export type { MagnifierContext } from './magnifier'
@@ -192,6 +194,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...forgetCommands,
     ...historyCommands,
     ...loginsCommands,
+    ...loginFillCommands,
     ...inputCommands,
     ...magnifierCommands,
     ...mediaCommands,

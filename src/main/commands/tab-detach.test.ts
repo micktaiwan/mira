@@ -129,3 +129,50 @@ describe('list-windows', () => {
     expect(result.windows[0].windowId).toBe('fake-window')
   })
 })
+
+describe('close-window', () => {
+  // Why this is a command at all: Cmd+Shift+W used to be Electron's
+  // `role: 'close'`, which runs on BaseWindow.getFocusedWindow() and does
+  // NOTHING when that is null — a dead key, no error, and no way to close a
+  // window from a script either.
+  it('closes the window the user means when no id is given', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('close-window', {}, fake.ctx)).toEqual({
+      ok: true,
+      windowId: 'fake-window',
+      closed: true
+    })
+    expect(fake.windowsClosed).toEqual(['fake-window'])
+  })
+
+  it('closes a window named explicitly', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('close-window', { windowId: 'fake-window' }, fake.ctx)).toEqual({
+      ok: true,
+      windowId: 'fake-window',
+      closed: true
+    })
+  })
+
+  it('fails loudly on an unknown window rather than closing another one', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('close-window', { windowId: 'nope' }, fake.ctx)).toEqual({
+      ok: false,
+      error: 'unknown window: nope'
+    })
+    expect(fake.windowsClosed).toEqual([])
+  })
+
+  it('rejects a blank windowId instead of falling back to the focused window', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('close-window', { windowId: '  ' }, fake.ctx)).toEqual({
+      ok: false,
+      error: '"windowId" must be a non-empty string'
+    })
+    expect(fake.windowsClosed).toEqual([])
+  })
+})

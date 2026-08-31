@@ -30,6 +30,21 @@ export interface TabDetachContext {
     id: string,
     point?: { x: number; y: number }
   ) => Promise<{ windowId: string; created: boolean }>
+  /** Close ONE window. Without `windowId`, the window the user means: the focused
+   * one, else the last Mira window that held focus — never an arbitrary one, a
+   * close being destructive. Returns the window it closed.
+   *
+   * This exists because "Close Window" (Cmd+Shift+W) used to be Electron's
+   * `role: 'close'`, the only action in Mira's menu not wired to a command. That
+   * role runs `w.close()` on `BaseWindow.getFocusedWindow()` and, when Electron
+   * reports no focused window, does nothing at all — no error, no sound, the key
+   * simply dead. It also left no way to close a window from the socket.
+   *
+   * A close from the UI is a USER close: closing the last window quits Mira,
+   * through the confirmation gate, exactly as the red button does. A close from
+   * the socket is tagged script-closing, so it never quits the app (agents have
+   * the explicit `quit` command for that) — same rule as `close-profile`. */
+  closeWindow: (windowId?: string) => { windowId: string; closed: boolean }
   /** Move a tab into a specific existing window (same profile). Deterministic
    * counterpart to detachTab, for the socket/MCP. Throws on an unknown tab/window
    * or a cross-profile move. */
@@ -109,5 +124,19 @@ export const tabDetachCommands: CommandMap<CommandContext> = {
 
   'list-windows': (ctx) => {
     return { ok: true, windows: ctx.listWindows() }
+  },
+
+  // Cmd+Shift+W, and the only way to close a window from a script. See
+  // TabDetachContext.closeWindow for why this is a command and not a menu role.
+  'close-window': (ctx, params) => {
+    const { windowId } = (params ?? {}) as { windowId?: string }
+    if (windowId !== undefined && (typeof windowId !== 'string' || windowId.trim() === '')) {
+      return { ok: false, error: '"windowId" must be a non-empty string' }
+    }
+    try {
+      return { ok: true, ...ctx.closeWindow(windowId?.trim()) }
+    } catch (error) {
+      return fail(error)
+    }
   }
 }

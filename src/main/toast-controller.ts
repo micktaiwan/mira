@@ -11,7 +11,7 @@
 // without a circular import.
 
 import { BrowserWindow } from 'electron'
-import { toastBounds, type Size } from './toast'
+import { toastBounds, mayShowToast, type Size } from './toast'
 import { TOAST_URL, renderScript, TOAST_DURATION_MS } from './toast-doc'
 
 /** The per-window toast state the controller reads and mutates. ProfileWindow
@@ -64,6 +64,10 @@ export function ensureToast(host: ToastHost): void {
 export async function showToast(host: ToastHost, message: string): Promise<void> {
   const toast = host.toast
   if (!toast || toast.isDestroyed()) return
+  // A pill shown on an UNFOCUSED window drags that window in front of whatever the
+  // user is doing (child-window ordering raises the parent) — see mayShowToast.
+  // Bail before touching the seq/timer so an already-showing toast is left alone.
+  if (host.window.isDestroyed() || !mayShowToast(host.window.isFocused())) return
   const seq = ++host.toastSeq
   if (host.toastTimer) {
     clearTimeout(host.toastTimer)
@@ -73,6 +77,9 @@ export async function showToast(host: ToastHost, message: string): Promise<void>
   if (seq !== host.toastSeq || toast.isDestroyed() || host.window.isDestroyed()) return
   const size = (await toast.webContents.executeJavaScript(renderScript(message))) as Size
   if (seq !== host.toastSeq || toast.isDestroyed() || host.window.isDestroyed()) return
+  // Re-check: the user may have switched away during the measure round-trip, and
+  // showing the pill now would pull the window back in front of them.
+  if (!mayShowToast(host.window.isFocused())) return
   toast.setBounds(toastBounds(host.window.getContentBounds(), size, { bottomGap: 44, margin: 8 }))
   toast.showInactive()
   host.toastTimer = setTimeout(() => {

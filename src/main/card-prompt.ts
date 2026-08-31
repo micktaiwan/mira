@@ -41,15 +41,18 @@ export interface CardPromptRequest {
   error?: string
 }
 
-/** The user's answer: save now, unlock-then-save with this password, or null for
- * "not now" / closed. */
-export type CardPromptAnswer = { action: 'save' } | { action: 'unlock'; password: string }
+/** The user's answer: save now, unlock-then-save with this password, pick this
+ * vault item (the login picker, login-pick-prompt.ts), or null for "not now" /
+ * closed. */
+export type CardPromptAnswer =
+  { action: 'save' } | { action: 'unlock'; password: string } | { action: 'pick'; id: string }
 
 /** Parse what the bubble reports. Anything unexpected is a dismissal — the safe
- * default, since a misread must never save a card by accident. Pure. */
+ * default, since a misread must never save a card, or hand a password to a page,
+ * by accident. Pure. */
 export function parsePromptAnswer(raw: unknown): CardPromptAnswer | null {
   if (typeof raw !== 'string' || raw === '') return null
-  let obj: { action?: unknown; password?: unknown }
+  let obj: { action?: unknown; password?: unknown; id?: unknown }
   try {
     obj = JSON.parse(raw)
   } catch {
@@ -59,6 +62,9 @@ export function parsePromptAnswer(raw: unknown): CardPromptAnswer | null {
   if (obj.action === 'save') return { action: 'save' }
   if (obj.action === 'unlock' && typeof obj.password === 'string' && obj.password !== '') {
     return { action: 'unlock', password: obj.password }
+  }
+  if (obj.action === 'pick' && typeof obj.id === 'string' && obj.id !== '') {
+    return { action: 'pick', id: obj.id }
   }
   return null
 }

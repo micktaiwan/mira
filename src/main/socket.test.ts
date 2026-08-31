@@ -170,6 +170,7 @@ function setup(): {
     moveTabToWindow: (_id: string, windowId: string) => ({ windowId }),
     activateTab: (id: string) => ({ windowId: 'w', id }),
     listWindows: () => [],
+    closeWindow: () => ({ windowId: 'w1', closed: true }),
     pinTab: (id: string) => ({ id, pinned: true }),
     unpinTab: (id: string) => ({ id, pinned: false }),
     setTabKeepAwake: (id: string, keepAwake: boolean) => ({ id, keepAwake }),
@@ -262,6 +263,18 @@ function setup(): {
     deleteCard: async (_id: string) => ({ profileId: 'default', name: 'Visa 4242' }),
     saveCard: async () => ({ id: 'item-1', label: 'Visa 4242' }),
     listLogins: async () => ({ profileId: 'default', logins: [] }),
+    loginCandidates: async () => ({
+      profileId: 'default',
+      url: 'https://example.com/login',
+      host: 'example.com',
+      candidates: []
+    }),
+    fillLogin: async () => ({
+      profileId: 'default',
+      url: 'https://example.com/login',
+      host: 'example.com',
+      candidates: []
+    }),
     saveLogin: async () => ({
       id: 'login-1',
       label: 'me@example.com on example.com',
