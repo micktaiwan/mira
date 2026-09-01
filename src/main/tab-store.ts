@@ -64,13 +64,19 @@ export function addTabAtHead(state: TabState, tab: TabMeta): TabState {
   return { tabs, activeId: tab.id }
 }
 
-/** Append a tab WITHOUT focusing it: it joins the end of the strip and the active
- * tab is left untouched. This is the "open in background" path (new-tab with
- * background:true) — useful for a socket/MCP caller that spins up a tab to drive
- * with CDP / exec-js without pulling Mira to the foreground. On an empty strip
- * the tab still becomes active (activeId was null and something must be shown). */
+/** Insert a tab at the head of the regular zone WITHOUT focusing it: same slot as
+ * addTabAtHead (right under the pinned block), but the active tab is left
+ * untouched. This is the "open in background" path (new-tab with background:true)
+ * — useful for a socket/MCP caller that spins up a tab to drive with CDP / exec-js
+ * without pulling Mira to the foreground. It lands at the top like every other new
+ * tab: a background tab appended at the end of the strip is a tab you have to go
+ * hunting for. On an empty strip the tab still becomes active (activeId was null
+ * and something must be shown). */
 export function addTabInactive(state: TabState, tab: TabMeta): TabState {
-  return { tabs: [...state.tabs, tab], activeId: state.activeId ?? tab.id }
+  const boundary = state.tabs.filter((t) => t.pinned === true).length
+  const tabs = [...state.tabs]
+  tabs.splice(boundary, 0, tab)
+  return { tabs, activeId: state.activeId ?? tab.id }
 }
 
 /** Insert a tab directly after the tab `afterId` and focus it — the behavior for
@@ -95,8 +101,8 @@ export function addTabAfter(state: TabState, tab: TabMeta, afterId: string): Tab
  * clamped out of the pinned block), but the active tab is left alone so the user
  * keeps reading the page they clicked from. A background tab appended at the end
  * of the strip would be the worst of both worlds: it does not steal focus, yet it
- * is nowhere near the link it came from. Falls back to a plain inactive append
- * when `afterId` is unknown. */
+ * is nowhere near the link it came from. Falls back to addTabInactive (head of the
+ * regular zone, no focus change) when `afterId` is unknown. */
 export function addTabAfterInactive(state: TabState, tab: TabMeta, afterId: string): TabState {
   const from = state.tabs.findIndex((t) => t.id === afterId)
   if (from === -1) return addTabInactive(state, tab)
