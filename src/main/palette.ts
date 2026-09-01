@@ -76,6 +76,14 @@ const STATIC_COMMANDS: ReadonlyArray<Omit<PaletteEntry, 'group'>> = [
     shortcut: '⌘W'
   },
   {
+    id: 'cmd:close-tab-recent',
+    title: 'Close Tab & Go Back',
+    command: 'close-active-tab',
+    params: { focus: 'recent' },
+    keywords: 'quit previous last viewed',
+    shortcut: '⌥⇧⌘W'
+  },
+  {
     id: 'cmd:reload',
     title: 'Reload Page',
     command: 'reload',

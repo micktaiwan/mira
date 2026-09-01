@@ -7,6 +7,7 @@
 import { type CommandMap, fail } from './registry'
 import { normalizeInput } from '../url'
 import type { CommandContext } from './context'
+import type { CloseFocus } from '../tab-mru'
 
 /** What a tab holds. `'web'` is a normal site (a WebContentsView); `'settings'`
  * is the internal Settings surface, rendered by the chrome with no web view (see
@@ -69,8 +70,10 @@ export interface TabsContext {
   /** Close the currently active tab (the Cmd+W target). A pinned tab must be
    * asked twice: the first press only arms it (closed:false, armed:true) and a
    * second consecutive press closes it — switching tabs in between disarms.
+   * `focus` says which tab inherits focus: 'neighbor' (default, the strip pick)
+   * or 'recent' (the last tab viewed, the Cmd+Alt+Shift+W target).
    * Returns the id closed (or armed), or null if there was no active tab. */
-  closeActiveTab: () => { closed: boolean; id: string | null; armed?: boolean }
+  closeActiveTab: (focus?: CloseFocus) => { closed: boolean; id: string | null; armed?: boolean }
   /** Discard a tab's page (tear down its WebContentsView to reclaim RAM) while
    * keeping the tab in the strip, asleep. Discarding the active tab moves focus
    * like closeActiveTab's neighbor pick. Throws on an unknown id. */
@@ -231,9 +234,15 @@ export const tabsCommands: CommandMap<CommandContext> = {
 
   // The Cmd+W target: close whatever tab is active, no id needed. On a pinned
   // tab the first press only arms it (armed:true); pressing again closes.
-  'close-active-tab': (ctx) => {
+  // `focus` picks who inherits: 'neighbor' (default — Cmd+W, walk the strip) or
+  // 'recent' (Cmd+Alt+Shift+W — back to the last tab viewed).
+  'close-active-tab': (ctx, params) => {
+    const focus = (params as { focus?: unknown } | undefined)?.focus
+    if (focus !== undefined && focus !== 'neighbor' && focus !== 'recent') {
+      return { ok: false, error: '"focus" must be "neighbor" or "recent"' }
+    }
     try {
-      const result = ctx.closeActiveTab()
+      const result = ctx.closeActiveTab(focus)
       return { ok: true, ...result }
     } catch (error) {
       return fail(error)

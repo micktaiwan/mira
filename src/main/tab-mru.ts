@@ -90,3 +90,9 @@ export function mruPrune(mru: MruHistory, id: string): MruHistory {
   if (cursor > ids.length - 1) cursor = ids.length - 1
   return { ids, cursor }
 }
+
+/** Which tab inherits focus when the ACTIVE tab is closed. 'neighbor' = the tab
+ * next to it in the strip (closeTab's own pick), so closing a run of tabs one by
+ * one keeps walking the strip. 'recent' = the last tab actually viewed, via
+ * mruFocusAfterClose. Cmd+W uses 'neighbor', Cmd+Alt+Shift+W uses 'recent'. */
+export type CloseFocus = 'neighbor' | 'recent'

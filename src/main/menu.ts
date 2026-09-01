@@ -57,6 +57,9 @@ export interface AppMenuHandlers {
    * the window — window closing moves to Cmd+Shift+W (see the File menu). */
   newTab: () => void
   closeTab: () => void
+  /** Close the active tab and land on the last tab viewed, not the strip
+   * neighbor (Cmd+Alt+Shift+W). Same command as closeTab, focus:'recent'. */
+  closeTabToRecent: () => void
   /** Close the active tab AND wipe every trace of its site (Cmd+Alt+W): cookies,
    * storage and history for the tab's registrable domain and all its subdomains.
    * Wired to the forget-site command; flashes a confirming toast. */
@@ -202,6 +205,13 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         click: () => handlers.duplicateTab()
       },
       { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => handlers.closeTab() },
+      {
+        // Same close, other landing: back to the last tab I actually looked at
+        // instead of the strip neighbor. Cmd+Shift+W is Close Window and stays.
+        label: 'Close Tab & Go Back',
+        accelerator: 'CmdOrCtrl+Alt+Shift+W',
+        click: () => handlers.closeTabToRecent()
+      },
       {
         label: 'Close Tab & Forget Site',
         accelerator: 'CmdOrCtrl+Alt+W',

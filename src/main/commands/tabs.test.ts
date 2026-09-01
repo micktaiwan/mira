@@ -749,15 +749,16 @@ describe('recent-tab-back / recent-tab-forward (MRU focus history)', () => {
     expect(registry.execute('recent-tab-back', {}, ctx)).toEqual({ ok: true, id: 'tab-2' })
   })
 
-  it('closing the active tab returns to the last tab viewed, not the strip neighbor', () => {
+  it('closing the active tab lands on the strip neighbor by default', () => {
     const { ctx, tabState, registry } = makeContextWithRegistry()
     registry.execute('new-tab', {}, ctx) // tab-2
     registry.execute('new-tab', {}, ctx) // tab-3
     registry.execute('select-tab', { id: 'tab-1' }, ctx) // back on tab-1 (the "pinned" one)
     registry.execute('new-tab', {}, ctx) // tab-4, opened from tab-1
-    // Strip is [1,2,3,4]: the neighbor rule would land on tab-3.
+    // Strip is [1,2,3,4]: closing tab-4 walks the strip to tab-3, so closing a
+    // run of tabs one by one keeps going instead of bouncing back to tab-1.
     registry.execute('close-tab', { id: 'tab-4' }, ctx)
-    expect(tabState().activeId).toBe('tab-1')
+    expect(tabState().activeId).toBe('tab-3')
   })
 
   it('closing a non-active tab leaves focus where it is', () => {
@@ -766,14 +767,34 @@ describe('recent-tab-back / recent-tab-forward (MRU focus history)', () => {
     expect(tabState().activeId).toBe('tab-4')
   })
 
-  it('close-active-tab (Cmd+W) also returns to the last tab viewed', () => {
+  it('close-active-tab (Cmd+W) walks the strip too', () => {
     const { ctx, tabState, registry } = makeContextWithRegistry()
     registry.execute('new-tab', {}, ctx) // tab-2
     registry.execute('new-tab', {}, ctx) // tab-3
     registry.execute('select-tab', { id: 'tab-1' }, ctx)
     registry.execute('new-tab', {}, ctx) // tab-4
     expect(registry.execute('close-active-tab', {}, ctx)).toMatchObject({ closed: true })
+    expect(tabState().activeId).toBe('tab-3')
+  })
+
+  it("close-active-tab focus:'recent' (Cmd+Alt+Shift+W) returns to the last tab viewed", () => {
+    const { ctx, tabState, registry } = makeContextWithRegistry()
+    registry.execute('new-tab', {}, ctx) // tab-2
+    registry.execute('new-tab', {}, ctx) // tab-3
+    registry.execute('select-tab', { id: 'tab-1' }, ctx) // the "pinned" one
+    registry.execute('new-tab', {}, ctx) // tab-4, opened from tab-1
+    expect(registry.execute('close-active-tab', { focus: 'recent' }, ctx)).toMatchObject({
+      closed: true
+    })
     expect(tabState().activeId).toBe('tab-1')
+  })
+
+  it('close-active-tab rejects an unknown focus mode', () => {
+    const { ctx, registry } = makeContextWithRegistry()
+    expect(registry.execute('close-active-tab', { focus: 'nope' }, ctx)).toEqual({
+      ok: false,
+      error: '"focus" must be "neighbor" or "recent"'
+    })
   })
 })
 
