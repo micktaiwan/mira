@@ -34,9 +34,10 @@ describe('new-tab', () => {
     const registry = createCommandRegistry()
     const result = registry.execute('new-tab', { url: 'example.com', background: true }, ctx)
     expect(result).toMatchObject({ ok: true, id: 'tab-2' })
-    // The tab is appended, but tab-1 stays active — Mira is not pulled forward.
+    // The tab lands at the head like any new tab, but tab-1 stays active — Mira
+    // is not pulled forward.
     expect(tabState().activeId).toBe('tab-1')
-    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-1', 'tab-2'])
+    expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-2', 'tab-1'])
   })
 
   it('rejects a non-boolean background', () => {

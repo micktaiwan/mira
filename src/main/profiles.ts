@@ -1865,7 +1865,8 @@ export class ProfileManager {
     // background:true adds the tab WITHOUT switching the active tab — the page
     // loads hidden (layout only shows the active view) and the window stays where
     // it is. It still slots under its opener when there is one (Cmd+click on a
-    // link); only an opener-less background tab (socket new-tab) lands at the end.
+    // link); an opener-less background tab lands at the head like any other new
+    // tab, just without stealing focus.
     pw.state = background
       ? afterId
         ? addTabAfterInactive(pw.state, tab, afterId)

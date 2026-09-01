@@ -181,7 +181,7 @@ describe('navigate', () => {
     expect(result).toEqual({ ok: true, url: 'https://example.com', id: 'tab-2' })
     expect(loaded).toEqual([])
     // The tab exists but the window never switched onto it — nothing moved on screen.
-    expect(tabState().tabs.map((t) => t.url)).toEqual(['home', 'https://example.com'])
+    expect(tabState().tabs.map((t) => t.url)).toEqual(['https://example.com', 'home'])
     expect(tabState().activeId).toBe('tab-1')
   })
 

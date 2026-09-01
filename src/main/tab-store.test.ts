@@ -59,11 +59,23 @@ describe('addTabAtHead', () => {
 })
 
 describe('addTabInactive', () => {
-  it('appends without changing the active tab', () => {
+  const pinned = (id: string): TabMeta => ({ ...tab(id), pinned: true })
+
+  it('inserts at the head without changing the active tab', () => {
     let s = addTab(addTab(emptyTabState(), tab('a')), tab('b'))
     s = addTabInactive(s, tab('c'))
-    expect(s.tabs.map((t) => t.id)).toEqual(['a', 'b', 'c'])
+    expect(s.tabs.map((t) => t.id)).toEqual(['c', 'a', 'b'])
     expect(s.activeId).toBe('b')
+  })
+
+  it('lands under the pinned block, never inside it', () => {
+    let s = emptyTabState()
+    s = addTab(s, pinned('p1'))
+    s = addTab(s, pinned('p2'))
+    s = addTab(s, tab('a'))
+    s = addTabInactive(s, tab('x'))
+    expect(s.tabs.map((t) => t.id)).toEqual(['p1', 'p2', 'x', 'a'])
+    expect(s.activeId).toBe('a')
   })
 
   it('activates the tab when the strip was empty', () => {
@@ -122,11 +134,11 @@ describe('addTabAfterInactive', () => {
     expect(s.activeId).toBe('p1')
   })
 
-  it('appends without focusing when the opener id is unknown', () => {
+  it('falls back to the head, unfocused, when the opener id is unknown', () => {
     let s = addTab(addTab(emptyTabState(), tab('a')), tab('b'))
     s = selectTab(s, 'a')
     s = addTabAfterInactive(s, tab('x'), 'nope')
-    expect(s.tabs.map((t) => t.id)).toEqual(['a', 'b', 'x'])
+    expect(s.tabs.map((t) => t.id)).toEqual(['x', 'a', 'b'])
     expect(s.activeId).toBe('a')
   })
 
