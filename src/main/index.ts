@@ -592,6 +592,8 @@ app.whenReady().then(async () => {
       newTab: () => runDetached('new-tab', {}, profiles.contextForFocused()),
       duplicateTab: () => runDetached('duplicate-active-tab', {}, profiles.contextForFocused()),
       closeTab: () => runDetached('close-active-tab', {}, profiles.contextForFocused()),
+      closeTabToRecent: () =>
+        runDetached('close-active-tab', { focus: 'recent' }, profiles.contextForFocused()),
       forgetSite: () => runDetached('forget-site', {}, profiles.contextForFocused()),
       reopenTab: () => runDetached('reopen-closed-tab', {}, profiles.contextForFocused()),
       discardTab: () => runDetached('discard-active-tab', {}, profiles.contextForFocused()),

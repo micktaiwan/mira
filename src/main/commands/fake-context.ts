@@ -62,6 +62,7 @@ import {
 } from '../tab-store'
 import {
   type MruHistory,
+  type CloseFocus,
   emptyMru,
   mruRecord,
   mruStep,
@@ -422,19 +423,20 @@ export function makeContext(
   const recordMru = (id: string | null): void => {
     if (id) state.mru = mruRecord(state.mru, id)
   }
-  // Remove a tab from the strip like the manager's closeTabIn: when it was active,
-  // focus goes back to the last tab actually viewed (focus history) instead of the
-  // strip neighbor, the closed id leaves the history, and the tab that inherits
-  // focus is recorded as the current entry.
-  const closeAndFocus = (id: string): void => {
+  // Remove a tab from the strip like the manager's closeTabIn: focus goes to the
+  // strip neighbor by default, or back to the last tab actually viewed (focus
+  // history) when the caller asks for 'recent'. Either way the closed id leaves
+  // the history and the tab that inherits focus becomes the current entry.
+  const closeAndFocus = (id: string, focus: CloseFocus = 'neighbor'): void => {
     const wasActive = state.tabs.activeId === id
-    const back = wasActive
-      ? mruFocusAfterClose(
-          state.mru,
-          id,
-          new Set(state.tabs.tabs.filter((t) => t.id !== id).map((t) => t.id))
-        )
-      : null
+    const back =
+      wasActive && focus === 'recent'
+        ? mruFocusAfterClose(
+            state.mru,
+            id,
+            new Set(state.tabs.tabs.filter((t) => t.id !== id).map((t) => t.id))
+          )
+        : null
     state.tabs = closeTabPure(state.tabs, id)
     if (back) state.tabs = selectTabPure(state.tabs, back)
     state.mru = mruPrune(state.mru, id)
@@ -1181,7 +1183,7 @@ export function makeContext(
       if (state.closeArmedId === id) state.closeArmedId = null
       return { closed: true }
     },
-    closeActiveTab: () => {
+    closeActiveTab: (focus?: CloseFocus) => {
       // Pinned tabs need two consecutive Cmd+W: arm first, close on the second.
       const decision = closeActiveDecision(state.tabs, state.closeArmedId)
       if (decision.action === 'none') return { closed: false, id: null }
@@ -1191,7 +1193,7 @@ export function makeContext(
       }
       state.closeArmedId = null
       rememberClosed(decision.id)
-      closeAndFocus(decision.id)
+      closeAndFocus(decision.id, focus)
       return { closed: true, id: decision.id }
     },
     duplicateActiveTab: () => {

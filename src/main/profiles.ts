@@ -12,6 +12,7 @@
 
 import { randomUUID } from 'crypto'
 import type { FocusFeed, TabFocus } from './focus-feed'
+import { shouldRestorePageFocus, type FocusTarget } from './focus-restore'
 import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
@@ -144,6 +145,7 @@ import {
   mruPrune,
   mruFocusAfterClose
 } from './tab-mru'
+import type { CloseFocus } from './tab-mru'
 import {
   type PersistedSessions,
   type PersistedWindow,
@@ -358,6 +360,12 @@ interface ProfileWindow {
    * a second consecutive Cmd+W on the same tab closes it. Reset whenever the
    * active tab changes, so only truly back-to-back presses close. */
   closeArmedId: string | null
+  /** Which surface of this window last held the keyboard: its chrome (address
+   * bar, palette, settings) or the active tab's page. Fed by the 'focus' event of
+   * each webContents, and re-applied when the window itself is focused — Electron
+   * hands a re-focused window's keyboard to the chrome regardless of what the user
+   * was typing in before switching apps (see focus-restore.ts). */
+  focusTarget: FocusTarget
   /** Most-recently-closed tabs of THIS window, newest last (a stack). Cmd+Shift+T
    * (reopen-closed-tab) pops the top. In-memory only — cleared when the window
    * closes, like a browser session's reopen history. */
@@ -1399,6 +1407,7 @@ export class ProfileManager {
       zenSnapshot: null,
       settingsTabId: null,
       closeArmedId: null,
+      focusTarget: 'page',
       closedTabs: [],
       mru: emptyMru(),
       restoredLoadedIds: new Set(),
@@ -1456,12 +1465,31 @@ export class ProfileManager {
     // Deferred by a tick: moving between two Mira windows fires blur BEFORE the
     // next window's focus, so publishing straight away would emit a phantom "not
     // in the browser" between them.
+    // Focus moving between the chrome and a tab page INSIDE this window (clicking
+    // the address bar, then the page). On macOS these events do not fire when
+    // merely switching windows or apps (Electron docs: the first responder of each
+    // window is unchanged), so what they record is exactly the intra-window intent
+    // the window-focus handler above replays.
+    window.webContents.on('focus', () => (profileWindow.focusTarget = 'chrome'))
     window.on('blur', () => setImmediate(() => this.publishFocus()))
     window.on('focus', () => {
       // A genuine focus means Mira is now foreground: drop any activation
       // suppression tail so it never eats a real user-driven activation.
       this.endActivationSuppression()
       this.publishFocus()
+      // Give the keyboard back to the PAGE when that is what the user left
+      // focused. Coming back from another app, the keyboard otherwise lands on the
+      // chrome and the first keystroke is lost to the window instead of the site.
+      // Deferred a tick so it settles after whatever the OS activation does; the
+      // chrome case (address bar, palette) is left untouched — see focus-restore.ts.
+      const focusTarget = profileWindow.focusTarget
+      setImmediate(() => {
+        if (window.isDestroyed() || !window.isFocused()) return
+        const activeId = profileWindow.state.activeId
+        const page = activeId ? this.liveContents(profileWindow, activeId) : null
+        if (!shouldRestorePageFocus({ target: focusTarget, hasActivePage: !!page })) return
+        page?.focus()
+      })
       // Also re-snapshot geometry: dragging a window to another virtual desktop
       // in Mission Control fires no move/resize event (same coordinates on every
       // Space), so the Space capture would otherwise wait until close. Focusing
@@ -2443,6 +2471,9 @@ export class ProfileManager {
     // detach-tab / ownerOf). Falls back to the birth window while the strip is
     // momentarily inconsistent (mid-attach).
     const owner = (): ProfileWindow => this.ownerOf(tabId) ?? initialPw
+    // Remember that the keyboard is on the PAGE, so a later app switch back to
+    // Mira gives it to the page again instead of the chrome (focus-restore.ts).
+    wc.on('focus', () => (owner().focusTarget = 'page'))
     const patch = (p: Partial<Omit<TabMeta, 'id'>>): void => {
       const pw = owner()
       pw.state = updateTab(pw.state, tabId, p)
@@ -2959,7 +2990,11 @@ export class ProfileManager {
     return { cookiesRemoved: domainCookies.length, historyRemoved }
   }
 
-  private closeTabIn(pw: ProfileWindow, id: string): { closed: boolean } {
+  private closeTabIn(
+    pw: ProfileWindow,
+    id: string,
+    focus: CloseFocus = 'neighbor'
+  ): { closed: boolean } {
     const index = pw.state.tabs.findIndex((t) => t.id === id)
     if (index === -1) throw new Error(`unknown tab: ${id}`)
     // Remember the tab so Cmd+Shift+T can reopen it, unless it is the transient
@@ -2977,17 +3012,20 @@ export class ProfileManager {
       if (pw.closedTabs.length > CLOSED_TAB_STACK_LIMIT) pw.closedTabs.shift()
     }
     const wasActive = pw.state.activeId === id
-    // Closing the active tab hands focus back to the last tab I actually looked at
-    // (the focus history), not to the strip neighbor: a link opened from a pinned
-    // tab must return to that pinned tab when closed. Computed before the id is
-    // pruned; falls back to closeTabPure's neighbor when the history has nothing.
-    const back = wasActive
-      ? mruFocusAfterClose(
-          pw.mru,
-          id,
-          new Set(pw.state.tabs.filter((t) => t.id !== id).map((t) => t.id))
-        )
-      : null
+    // Two ways to hand focus on, picked by the caller (Cmd+W vs Cmd+Alt+Shift+W):
+    // 'neighbor' keeps closeTabPure's strip pick, so closing a run of tabs one by
+    // one walks the strip; 'recent' goes back to the last tab actually looked at
+    // (the focus history), so a link opened from a pinned tab returns to it.
+    // Computed before the id is pruned; 'recent' falls back to the neighbor when
+    // the history has nothing left alive.
+    const back =
+      wasActive && focus === 'recent'
+        ? mruFocusAfterClose(
+            pw.mru,
+            id,
+            new Set(pw.state.tabs.filter((t) => t.id !== id).map((t) => t.id))
+          )
+        : null
     pw.state = closeTabPure(pw.state, id)
     if (back) pw.state = selectTabPure(pw.state, back)
     // The closed tab must never be a back/forward target again. The tab that
@@ -3090,7 +3128,10 @@ export class ProfileManager {
    * has no close button, this guards against a reflex Cmd+W), the second
    * consecutive one closes it. Switching tabs in between disarms. Returns the
    * id closed (or armed), or null if the window is empty. */
-  private closeActiveTabIn(pw: ProfileWindow): {
+  private closeActiveTabIn(
+    pw: ProfileWindow,
+    focus: CloseFocus = 'neighbor'
+  ): {
     closed: boolean
     id: string | null
     armed?: boolean
@@ -3102,7 +3143,7 @@ export class ProfileManager {
       return { closed: false, id: decision.id, armed: true }
     }
     // closeTabIn clears closeArmedId when it closes the armed tab.
-    this.closeTabIn(pw, decision.id)
+    this.closeTabIn(pw, decision.id, focus)
     return { closed: true, id: decision.id }
   }
 
@@ -5682,9 +5723,9 @@ export class ProfileManager {
       // Resolved across every open window (like discardTab): the id is globally
       // unique, and an external caller is never bound to the right window.
       closeTab: (id) => this.closeTabAnywhere(id),
-      closeActiveTab: () => {
+      closeActiveTab: (focus) => {
         if (!target) throw new Error('no target window')
-        return this.closeActiveTabIn(target)
+        return this.closeActiveTabIn(target, focus)
       },
       duplicateActiveTab: () => {
         if (!target) throw new Error('no target window')
