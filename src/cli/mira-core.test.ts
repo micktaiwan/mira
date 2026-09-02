@@ -15,6 +15,7 @@ import {
   absolutePath,
   formatScreenshot,
   formatTabs,
+  formatAge,
   formatConsole,
   formatWindows,
   resolveCode,
@@ -266,7 +267,47 @@ describe('buildCall — generic passthrough', () => {
   })
 })
 
+describe('formatAge', () => {
+  it('picks one compact unit', () => {
+    const now = 1_000_000_000_000
+    expect(formatAge(now - 5_000, now)).toBe('5s')
+    expect(formatAge(now - 5 * 60_000, now)).toBe('5m')
+    expect(formatAge(now - 5 * 3_600_000, now)).toBe('5h')
+    expect(formatAge(now - 5 * 86_400_000, now)).toBe('5d')
+  })
+
+  // A missing stamp must never read as "just touched", or a stale tab hides.
+  it('prints a dash for a missing, invalid or future stamp', () => {
+    const now = 1_000_000_000_000
+    expect(formatAge(null, now)).toBe('-')
+    expect(formatAge(undefined, now)).toBe('-')
+    expect(formatAge(Number.NaN, now)).toBe('-')
+    expect(formatAge(now + 60_000, now)).toBe('-')
+  })
+})
+
 describe('formatTabs', () => {
+  it('shows the opened / focused / changed ages, dashes when unknown', () => {
+    const now = 1_000_000_000_000
+    const out = formatTabs(
+      [
+        {
+          id: 'a',
+          url: 'u1',
+          title: 't1',
+          openedAt: now - 3 * 86_400_000,
+          lastActiveAt: now - 2 * 3_600_000,
+          updatedAt: null
+        }
+      ],
+      'a',
+      now
+    )
+    expect(out).toContain('3d')
+    expect(out).toContain('2h')
+    expect(out).toContain('-')
+  })
+
   it('marks the active tab with * and the rest with a space', () => {
     const out = formatTabs(
       [

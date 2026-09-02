@@ -17,13 +17,7 @@ import { buildTabMemoryReport, selectServiceWorkerLogs } from '.'
 import { cardLabel, validateCapture } from '../card'
 import { loginItemName, loginLabel, validateLogin } from '../login-capture'
 import { findLoginMatch, type VaultLogin } from '../bitwarden-login'
-import {
-  candidatesForHost,
-  chooseLogin,
-  fillHost,
-  fillSite,
-  redactCandidates
-} from '../login-fill'
+import { candidatesForHost, chooseLogin, fillHost, fillSite, redactCandidates } from '../login-fill'
 import {
   fieldKey,
   forgetEntries,
@@ -50,6 +44,7 @@ import {
   addTabInactive,
   updateTab,
   selectTab as selectTabPure,
+  stampActiveTab,
   closeTab as closeTabPure,
   moveTab as moveTabPure,
   pinTab as pinTabPure,
@@ -467,6 +462,9 @@ export function makeContext(
       pinned: t.pinned === true,
       keepAwake: t.keepAwake === true,
       folderId: t.folderId ?? null,
+      openedAt: t.openedAt ?? null,
+      lastActiveAt: t.lastActiveAt ?? null,
+      updatedAt: t.updatedAt ?? null,
       audible: false,
       loading: false
     }))
@@ -548,7 +546,9 @@ export function makeContext(
   /** The url of the tab a fill targets: the named one, else the active one. */
   const fakeTabUrl = (tabId?: string): string => {
     const tabs = state.tabs.tabs
-    const tab = tabId ? tabs.find((t) => t.id === tabId) : tabs.find((t) => t.id === state.tabs.activeId)
+    const tab = tabId
+      ? tabs.find((t) => t.id === tabId)
+      : tabs.find((t) => t.id === state.tabs.activeId)
     if (tabId && !tab) throw new Error(`unknown tab: ${tabId}`)
     return tab?.url ?? ''
   }
@@ -1160,11 +1160,15 @@ export function makeContext(
     },
     newTab: (url?: string, background?: boolean) => {
       const id = `tab-${++state.tabSeq}`
-      const tab = { id, title: '', url: url ?? state.homeUrl, favicon: null }
+      const now = Date.now()
+      const tab = { id, title: '', url: url ?? state.homeUrl, favicon: null, openedAt: now }
       state.tabs = background ? addTabInactive(state.tabs, tab) : addTab(state.tabs, tab)
+      // Like the real manager: only stamp a focus when the tab actually took it.
+      if (state.tabs.activeId === id) state.tabs = stampActiveTab(state.tabs, now)
       state.closeArmedId = null
       recordVisit(tab.url, '')
       if (!background) recordMru(id)
+      const stamped = state.tabs.tabs.find((t) => t.id === id)
       return {
         ...tab,
         loaded: true,
@@ -1173,7 +1177,10 @@ export function makeContext(
         keepAwake: false,
         folderId: null,
         audible: false,
-        loading: false
+        loading: false,
+        openedAt: now,
+        lastActiveAt: stamped?.lastActiveAt ?? null,
+        updatedAt: null
       }
     },
     closeTab: (id: string) => {
@@ -1261,7 +1268,7 @@ export function makeContext(
     },
     selectTab: (id: string) => {
       if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
-      state.tabs = selectTabPure(state.tabs, id)
+      state.tabs = stampActiveTab(selectTabPure(state.tabs, id), Date.now())
       state.closeArmedId = null
       recordMru(id)
       return { id }
@@ -1618,7 +1625,12 @@ export function makeContext(
       const host = fillHost(url)
       if (host === '') throw new Error('not a web page — nothing to fill here')
       const items = fakeVaultLogins(id)
-      return { profileId: id, url, host, candidates: redactCandidates(candidatesForHost(items, host), host) }
+      return {
+        profileId: id,
+        url,
+        host,
+        candidates: redactCandidates(candidatesForHost(items, host), host)
+      }
     },
     fillLogin: async (params: {
       profileId?: string

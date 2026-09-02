@@ -594,6 +594,36 @@ describe('list-tabs', () => {
     })
   })
 
+  // The point of the timestamps: an external caller (a Claude session tidying up)
+  // must be able to see, from list-tabs alone, which tabs are old and unvisited.
+  it('reports openedAt / lastActiveAt / updatedAt per tab', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    const before = Date.now()
+    registry.execute('new-tab', {}, ctx) // tab-2, foreground: opened AND focused
+    registry.execute('new-tab', { background: true }, ctx) // tab-3, never focused
+    const result = registry.execute('list-tabs', {}, ctx) as {
+      ok: true
+      tabs: Array<{
+        id: string
+        openedAt: number | null
+        lastActiveAt: number | null
+        updatedAt: number | null
+      }>
+    }
+    const byId = (id: string): (typeof result.tabs)[number] => result.tabs.find((t) => t.id === id)!
+    expect(byId('tab-2').openedAt).toBeGreaterThanOrEqual(before)
+    expect(byId('tab-2').lastActiveAt).toBeGreaterThanOrEqual(before)
+    // A background tab was opened but never looked at — the null is the signal.
+    expect(byId('tab-3').openedAt).toBeGreaterThanOrEqual(before)
+    expect(byId('tab-3').lastActiveAt).toBeNull()
+    expect(byId('tab-3').updatedAt).toBeNull()
+    // Focusing it stamps it.
+    registry.execute('select-tab', { id: 'tab-3' }, ctx)
+    const after = registry.execute('list-tabs', {}, ctx) as typeof result
+    expect(after.tabs.find((t) => t.id === 'tab-3')!.lastActiveAt).toBeGreaterThanOrEqual(before)
+  })
+
   it('rejects a non-string windowId', () => {
     const { ctx } = makeContext()
     const registry = createCommandRegistry()

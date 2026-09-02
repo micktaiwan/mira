@@ -443,3 +443,58 @@ describe('boundsOnScreen', () => {
     expect(boundsOnScreen(undefined, [display])).toBeUndefined()
   })
 })
+
+describe('tab timestamps', () => {
+  it('round-trips openedAt / lastActiveAt / updatedAt', () => {
+    let s = emptyTabState()
+    s = addTab(s, {
+      id: 'a',
+      title: 'A',
+      url: 'https://a.test',
+      favicon: null,
+      openedAt: 1000,
+      lastActiveAt: 2000,
+      updatedAt: 3000
+    })
+    const win = toPersisted(s, false)
+    expect(win.tabs[0]).toMatchObject({ openedAt: 1000, lastActiveAt: 2000, updatedAt: 3000 })
+    const back = normalizeSessions({ p1: [win] })
+    expect(back.p1[0].tabs[0]).toMatchObject({
+      openedAt: 1000,
+      lastActiveAt: 2000,
+      updatedAt: 3000
+    })
+  })
+
+  it('omits the stamps a tab does not have (old shape preserved)', () => {
+    const win = toPersisted(twoTabs(), false)
+    expect(win.tabs[0]).not.toHaveProperty('openedAt')
+    expect(win.tabs[0]).not.toHaveProperty('lastActiveAt')
+    expect(win.tabs[0]).not.toHaveProperty('updatedAt')
+  })
+
+  it('drops garbage stamps rather than importing NaN or a negative age', () => {
+    const raw = {
+      p1: [
+        {
+          tabs: [
+            {
+              url: 'https://a.test',
+              title: 'A',
+              favicon: null,
+              openedAt: 'yesterday',
+              lastActiveAt: 0,
+              updatedAt: Number.NaN
+            }
+          ],
+          activeIndex: 0,
+          panelCollapsed: false
+        }
+      ]
+    }
+    const t = normalizeSessions(raw).p1[0].tabs[0]
+    expect(t).not.toHaveProperty('openedAt')
+    expect(t).not.toHaveProperty('lastActiveAt')
+    expect(t).not.toHaveProperty('updatedAt')
+  })
+})

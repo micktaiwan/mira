@@ -45,6 +45,13 @@ export interface PersistedTab {
    * the old shape. Unlike `loaded` (a runtime snapshot), this is durable tab state
    * carried across restarts so the tab comes back alive. */
   keepAwake?: boolean
+  /** When the tab was opened / last focused / last changed its page, epoch ms
+   * (see TabMeta). Written only when known, so a pre-timestamps file — and a tab
+   * that has never been focused or changed — keeps the old shape. Durable by
+   * design: the point is to tell, after weeks of restarts, which tabs are stale. */
+  openedAt?: number
+  lastActiveAt?: number
+  updatedAt?: number
 }
 
 /** A window's saved geometry: its restored (non-maximized) rectangle plus the
@@ -133,7 +140,10 @@ export function toPersisted(
       ...(t.pinned === true ? { pinned: true } : {}),
       ...(t.folderId ? { folderId: t.folderId } : {}),
       ...(loadedIds.has(t.id) ? { loaded: true } : {}),
-      ...(t.keepAwake === true ? { keepAwake: true } : {})
+      ...(t.keepAwake === true ? { keepAwake: true } : {}),
+      ...(t.openedAt !== undefined ? { openedAt: t.openedAt } : {}),
+      ...(t.lastActiveAt !== undefined ? { lastActiveAt: t.lastActiveAt } : {}),
+      ...(t.updatedAt !== undefined ? { updatedAt: t.updatedAt } : {})
     })),
     activeIndex: found === -1 ? 0 : found,
     panelCollapsed,
@@ -166,6 +176,11 @@ export function normalizeSessions(raw: unknown): PersistedSessions {
   return out
 }
 
+/** A persisted timestamp we accept: a finite, strictly positive epoch-ms number. */
+function isStamp(v: unknown): v is number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0
+}
+
 function normalizeWindow(value: unknown): PersistedWindow | null {
   if (!value || typeof value !== 'object') return null
   const v = value as Record<string, unknown>
@@ -186,7 +201,13 @@ function normalizeWindow(value: unknown): PersistedWindow | null {
       ...(tv.pinned === true ? { pinned: true } : {}),
       ...(typeof tv.folderId === 'string' && tv.folderId !== '' ? { folderId: tv.folderId } : {}),
       ...(tv.loaded === true ? { loaded: true } : {}),
-      ...(tv.keepAwake === true ? { keepAwake: true } : {})
+      ...(tv.keepAwake === true ? { keepAwake: true } : {}),
+      // Timestamps are only kept when they are finite positive numbers: a
+      // hand-edited or truncated file must not inject NaN into an age computation
+      // (a tab would then read as "opened at the epoch", i.e. always the stalest).
+      ...(isStamp(tv.openedAt) ? { openedAt: tv.openedAt } : {}),
+      ...(isStamp(tv.lastActiveAt) ? { lastActiveAt: tv.lastActiveAt } : {}),
+      ...(isStamp(tv.updatedAt) ? { updatedAt: tv.updatedAt } : {})
     })
   }
   if (tabs.length === 0) return null
