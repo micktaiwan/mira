@@ -13,6 +13,7 @@ import {
   pinTab,
   unpinTab,
   setKeepAwake,
+  stampActiveTab,
   closeActiveDecision,
   nextLoadedTab,
   adjacentTab,
@@ -418,5 +419,38 @@ describe('closeActiveDecision', () => {
 
   it('does nothing on an empty window', () => {
     expect(closeActiveDecision(emptyTabState(), null)).toEqual({ action: 'none' })
+  })
+})
+
+describe('tab timestamps', () => {
+  it('stamps updatedAt only when the patch touches the page', () => {
+    const s = addTab(emptyTabState(), tab('a'))
+    const titled = updateTab(s, 'a', { title: 'Hello' }, 1000)
+    expect(titled.tabs[0].updatedAt).toBe(1000)
+    // Bookkeeping (folder membership) is not a page change: the stamp must not move.
+    const filed = updateTab(titled, 'a', { folderId: 'f1' }, 2000)
+    expect(filed.tabs[0].updatedAt).toBe(1000)
+  })
+
+  it('leaves updatedAt alone when no clock is passed', () => {
+    const s = updateTab(addTab(emptyTabState(), tab('a')), 'a', { url: 'x' })
+    expect(s.tabs[0].updatedAt).toBeUndefined()
+  })
+
+  it('stamps lastActiveAt on the active tab only', () => {
+    let s = addTab(addTab(emptyTabState(), tab('a')), tab('b')) // b active
+    s = stampActiveTab(s, 500)
+    expect(s.tabs.find((t) => t.id === 'b')?.lastActiveAt).toBe(500)
+    expect(s.tabs.find((t) => t.id === 'a')?.lastActiveAt).toBeUndefined()
+    // Selecting alone does not stamp — the manager stamps the outcome.
+    s = selectTab(s, 'a')
+    expect(s.tabs.find((t) => t.id === 'a')?.lastActiveAt).toBeUndefined()
+    s = stampActiveTab(s, 900)
+    expect(s.tabs.find((t) => t.id === 'a')?.lastActiveAt).toBe(900)
+    expect(s.tabs.find((t) => t.id === 'b')?.lastActiveAt).toBe(500)
+  })
+
+  it('is a no-op on an empty list', () => {
+    expect(stampActiveTab(emptyTabState(), 1)).toEqual(emptyTabState())
   })
 })

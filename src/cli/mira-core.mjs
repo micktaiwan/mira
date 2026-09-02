@@ -327,19 +327,49 @@ export function buildCall(command, paramsJson, tabId) {
  * A second column marks a tab currently playing sound with `♪` (TabInfo.audible)
  * — the from-the-shell answer to "which tab is making noise?".
  *
- * @param {Array<{id:string,url?:string,title?:string,loaded?:boolean,audible?:boolean}>} tabs
+ * Then three age columns — opened / last focused / last changed — as compact
+ * durations ("3d", "4h", "-" when the tab carries no such timestamp). Ages, not
+ * dates: the question they answer is "what has been sitting here forever and was
+ * never looked at?", and a duration answers it without any arithmetic.
+ *
+ * @param {Array<{id:string,url?:string,title?:string,loaded?:boolean,audible?:boolean,openedAt?:number|null,lastActiveAt?:number|null,updatedAt?:number|null}>} tabs
  * @param {string} [activeId]
+ * @param {number} [now] epoch ms the ages are measured from (defaults to the clock)
  * @returns {string}
  */
-export function formatTabs(tabs, activeId) {
+export function formatTabs(tabs, activeId, now = Date.now()) {
   return (tabs ?? [])
     .map((t) => {
       const mark = t.id === activeId ? '*' : t.loaded === false ? 'z' : ' '
       const sound = t.audible === true ? '♪' : ' '
+      const ages = [t.openedAt, t.lastActiveAt, t.updatedAt]
+        .map((at) => formatAge(at, now).padStart(4))
+        .join(' ')
       const title = (t.title ?? '').slice(0, 40).padEnd(40)
-      return `${mark}${sound} ${t.id}  ${title}  ${t.url ?? ''}`
+      return `${mark}${sound} ${t.id}  ${ages}  ${title}  ${t.url ?? ''}`
     })
     .join('\n')
+}
+
+/**
+ * How long ago `at` (epoch ms) was, in one compact unit: `12s`, `5m`, `4h`,
+ * `23d`. Null/absent/future stamps print `-` — a tab with no timestamp must not
+ * read as freshly touched, and a clock that went backwards is not an age.
+ *
+ * @param {number|null|undefined} at
+ * @param {number} now
+ * @returns {string}
+ */
+export function formatAge(at, now) {
+  if (typeof at !== 'number' || !Number.isFinite(at) || at <= 0) return '-'
+  const s = Math.floor((now - at) / 1000)
+  if (s < 0) return '-'
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h`
+  return `${Math.floor(h / 24)}d`
 }
 
 /**

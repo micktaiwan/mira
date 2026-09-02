@@ -42,6 +42,19 @@ export interface TabInfo {
    * sidebar shows a speaker icon for it, and the toolbar audio button lists these
    * tabs. Always false for an asleep tab (no view to be audible). */
   audible: boolean
+  /** When the tab was opened, epoch ms, or null when unknown (a tab restored
+   * from a session file written before tabs carried timestamps). Persisted, so it
+   * survives restarts: a tab opened three weeks ago reports three weeks. */
+  openedAt: number | null
+  /** When the tab was last focused (made active), epoch ms, or null if it never
+   * was — opened in the background, or restored asleep and not looked at since.
+   * With `openedAt`, this is what tells a caller which tabs are just sitting
+   * there: old, never (or long ago) looked at. */
+  lastActiveAt: number | null
+  /** When the tab's PAGE last changed (navigation, title, favicon), epoch ms, or
+   * null if nothing changed since it was opened. Not touched by bookkeeping
+   * (pinning, moving between folders), so it measures the page, not the tab. */
+  updatedAt: number | null
   /** Whether the tab's main frame is currently loading (its WebContentsView is
    * fetching a page). A live runtime flag read from the native view, not
    * persisted: the toolbar shows a spinner beside the address bar while true.

@@ -151,7 +151,10 @@ function setup(): {
       pinned: false,
       keepAwake: false,
       audible: false,
-      loading: false
+      loading: false,
+      openedAt: null,
+      lastActiveAt: null,
+      updatedAt: null
     }),
     closeTab: () => ({ closed: true }),
     closeActiveTab: () => ({ closed: true, id: 'tab' }),
@@ -187,7 +190,10 @@ function setup(): {
           keepAwake: false,
           folderId: null,
           audible: false,
-          loading: false
+          loading: false,
+          openedAt: null,
+          lastActiveAt: null,
+          updatedAt: null
         }
       ],
       activeId: 'tab',

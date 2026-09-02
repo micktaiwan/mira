@@ -128,6 +128,7 @@ import {
   addTabAfterInactive,
   addTabInactive,
   selectTab as selectTabPure,
+  stampActiveTab,
   closeTab as closeTabPure,
   moveTab as moveTabPure,
   pinTab as pinTabPure,
@@ -1885,7 +1886,8 @@ export class ProfileManager {
     httpReferrer?: string
   ): TabMeta {
     const prevActiveId = pw.state.activeId
-    const tab: TabMeta = { id: randomUUID(), title: '', url, favicon: null }
+    const now = Date.now()
+    const tab: TabMeta = { id: randomUUID(), title: '', url, favicon: null, openedAt: now }
     // A tab opened from a link (afterId set) slots in right under its opener; a
     // plain new tab (Cmd+T, socket) lands at the head of the regular zone, so the
     // newest tab sits at the top of the list. When the opener is pinned, addTabAfter
@@ -1902,6 +1904,10 @@ export class ProfileManager {
       : afterId
         ? addTabAfter(pw.state, tab, afterId)
         : addTabAtHead(pw.state, tab)
+    // Only stamp a focus when the new tab actually took it: a background open
+    // leaves the previous tab active, and re-stamping THAT tab would claim a focus
+    // that never happened (the whole point of the timestamp is to spot stale tabs).
+    if (pw.state.activeId === tab.id) pw.state = stampActiveTab(pw.state, now)
     // The active tab may have changed: a pinned tab armed by Cmd+W is disarmed.
     pw.closeArmedId = null
     this.materializeTab(pw, tab, httpReferrer)
@@ -1957,12 +1963,14 @@ export class ProfileManager {
       // Re-point the existing tab at the requested section (an explicit ask
       // wins over whatever the panel was showing); no section = plain focus.
       if (section) {
-        pw.state = updateTab(pw.state, pw.settingsTabId, { url })
+        pw.state = updateTab(pw.state, pw.settingsTabId, { url }, Date.now())
       }
       return this.selectTabIn(pw, pw.settingsTabId)
     }
-    const tab: TabMeta = { id: randomUUID(), title: 'Settings', url, favicon: null }
+    const now = Date.now()
+    const tab: TabMeta = { id: randomUUID(), title: 'Settings', url, favicon: null, openedAt: now }
     pw.state = addTabAtHead(pw.state, tab) // becomes active, at the top of the list
+    pw.state = stampActiveTab(pw.state, now)
     pw.closeArmedId = null
     pw.settingsTabId = tab.id
     // No materializeTab: layout() will hide all web views since the active tab has
@@ -2007,7 +2015,13 @@ export class ProfileManager {
         ...(t.folderId ? { folderId: t.folderId } : {}),
         // Keep-awake is durable tab state: it comes back set so the tab is woken
         // below and stays immune to discard.
-        ...(t.keepAwake === true ? { keepAwake: true } : {})
+        ...(t.keepAwake === true ? { keepAwake: true } : {}),
+        // Ages are carried across the restart, never reset: a tab restored today
+        // that was opened three weeks ago is three weeks old, and that is exactly
+        // the fact list-tabs is meant to report.
+        ...(t.openedAt !== undefined ? { openedAt: t.openedAt } : {}),
+        ...(t.lastActiveAt !== undefined ? { lastActiveAt: t.lastActiveAt } : {}),
+        ...(t.updatedAt !== undefined ? { updatedAt: t.updatedAt } : {})
       })
       // Remember which tabs were awake at quit, keyed by the fresh id, so
       // wake-all-tabs (Cmd+Shift+A) can re-open exactly that set on demand.
@@ -2021,7 +2035,7 @@ export class ProfileManager {
     // normalizeSessions already clamped activeIndex into range.
     const activeTab = pw.state.tabs[saved.activeIndex]
     if (activeTab) {
-      pw.state = selectTabPure(pw.state, activeTab.id)
+      pw.state = stampActiveTab(selectTabPure(pw.state, activeTab.id), Date.now())
       this.materializeTab(pw, activeTab)
       this.notifyExtensionsActiveTab(pw)
     }
@@ -2476,7 +2490,8 @@ export class ProfileManager {
     wc.on('focus', () => (owner().focusTarget = 'page'))
     const patch = (p: Partial<Omit<TabMeta, 'id'>>): void => {
       const pw = owner()
-      pw.state = updateTab(pw.state, tabId, p)
+      // Page events are exactly what `updatedAt` measures, so they carry a clock.
+      pw.state = updateTab(pw.state, tabId, p, Date.now())
       // Page events (title / favicon / in-page nav) fire in bursts. Coalesce the
       // strip push and the disk write so a page load is one push + one write,
       // not one per event — both schedulePush and saveSession are debounced.
@@ -2831,6 +2846,12 @@ export class ProfileManager {
       pinned: t.pinned === true,
       keepAwake: t.keepAwake === true,
       folderId: t.folderId ?? null,
+      // Ages, epoch ms or null when unknown (see TabMeta). Null rather than 0 or
+      // "now": a missing stamp must not read as a fresh tab to whoever is deciding
+      // which tabs are stale enough to close.
+      openedAt: t.openedAt ?? null,
+      lastActiveAt: t.lastActiveAt ?? null,
+      updatedAt: t.updatedAt ?? null,
       // Live audio state read straight from the native view (like `loaded` from
       // pw.views): true while the page emits sound. An asleep tab has no view, so
       // it is never audible. Refreshed by the audio-state-changed push (wireView).
@@ -3028,6 +3049,9 @@ export class ProfileManager {
         : null
     pw.state = closeTabPure(pw.state, id)
     if (back) pw.state = selectTabPure(pw.state, back)
+    // Whoever inherited focus (the strip neighbor, or the MRU pick) is being
+    // looked at from now on, so it gets the focus stamp like an explicit select.
+    if (wasActive) pw.state = stampActiveTab(pw.state, Date.now())
     // The closed tab must never be a back/forward target again. The tab that
     // inherits focus is recorded by the notifyExtensionsActiveTab call below (the
     // normal active-change path), so the MRU cursor follows focus.
@@ -3102,11 +3126,15 @@ export class ProfileManager {
   } {
     const closed = pw.closedTabs.pop()
     if (!closed) return { reopened: false, id: null }
+    const now = Date.now()
+    // A reopened tab is a NEW tab: it is opened now. Its old age died with it (the
+    // closed-tab stack keeps url/title/position, not history).
     const tab: TabMeta = {
       id: randomUUID(),
       title: closed.title,
       url: closed.url,
-      favicon: closed.favicon
+      favicon: closed.favicon,
+      openedAt: now
     }
     // addTab appends + activates; then restore pinned state and slot the tab back
     // where it was (moveTab clamps into range and the pinned/regular zone).
@@ -3114,6 +3142,7 @@ export class ProfileManager {
     if (closed.pinned) pw.state = pinTabPure(pw.state, tab.id)
     if (closed.keepAwake) pw.state = setKeepAwakePure(pw.state, tab.id, true)
     pw.state = moveTabPure(pw.state, tab.id, closed.index)
+    pw.state = stampActiveTab(pw.state, now)
     pw.closeArmedId = null
     this.materializeTab(pw, tab)
     this.notifyExtensionsActiveTab(pw)
@@ -3385,8 +3414,18 @@ export class ProfileManager {
 
     // Add to the destination strip as the active tab. Folders are per-window, so the
     // tab lands loose; a pinned tab stays pinned (into dst's pinned block).
-    const moved: TabMeta = { id: tabId, title: tab.title, url: tab.url, favicon: tab.favicon }
+    // Same tab, same id, same age: only the window changes, so the timestamps
+    // travel with it (dropping them would make every torn-off tab look brand new).
+    const moved: TabMeta = {
+      id: tabId,
+      title: tab.title,
+      url: tab.url,
+      favicon: tab.favicon,
+      ...(tab.openedAt !== undefined ? { openedAt: tab.openedAt } : {}),
+      ...(tab.updatedAt !== undefined ? { updatedAt: tab.updatedAt } : {})
+    }
     dst.state = addTab(dst.state, moved)
+    dst.state = stampActiveTab(dst.state, Date.now())
     if (wasPinned) dst.state = pinTabPure(dst.state, tabId)
     // Place the tab where it was dropped (a hit-test on dst's rows): join the folder
     // of the tab it landed on and slot in before/after it — mirrors the in-window
@@ -3704,7 +3743,7 @@ export class ProfileManager {
       // Asleep: point it at the destination first, so its one load is ours. The
       // old title/favicon belong to the page we are leaving — clear them so the
       // strip does not label the tab with a page it no longer holds.
-      pw.state = updateTab(pw.state, tabId, { url, title: '', favicon: null })
+      pw.state = updateTab(pw.state, tabId, { url, title: '', favicon: null }, Date.now())
       const tab = pw.state.tabs.find((t) => t.id === tabId)
       if (tab) this.materializeTab(pw, tab)
       this.layout(pw)
@@ -3944,7 +3983,7 @@ export class ProfileManager {
     const target = nextLoadedTab(pw.state, new Set(pw.views.keys()))
     if (target) {
       // target is already materialized — just make it active, no reload.
-      pw.state = selectTabPure(pw.state, target)
+      pw.state = stampActiveTab(selectTabPure(pw.state, target), Date.now())
       // The active tab changed: disarm any pinned tab armed by Cmd+W.
       pw.closeArmedId = null
       this.discardView(pw, id)
@@ -3987,7 +4026,7 @@ export class ProfileManager {
   private selectTabIn(pw: ProfileWindow, id: string): { id: string } {
     const tab = pw.state.tabs.find((t) => t.id === id)
     if (!tab) throw new Error(`unknown tab: ${id}`)
-    pw.state = selectTabPure(pw.state, id)
+    pw.state = stampActiveTab(selectTabPure(pw.state, id), Date.now())
     // A tab switch breaks the Cmd+W double-press chain on a pinned tab.
     pw.closeArmedId = null
     // Lazy load: first selection is when a restored tab actually fetches its page.
@@ -5717,7 +5756,13 @@ export class ProfileManager {
           keepAwake: false,
           folderId: null,
           audible: false,
-          loading: false
+          loading: false,
+          // Just opened: openedAt is set by newTabIn, and a foreground tab is
+          // focused as it is born. A background tab has never been focused, hence
+          // the null — the command result must not claim a focus that did not happen.
+          openedAt: tab.openedAt ?? null,
+          lastActiveAt: tab.lastActiveAt ?? null,
+          updatedAt: null
         }
       },
       // Resolved across every open window (like discardTab): the id is globally

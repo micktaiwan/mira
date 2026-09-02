@@ -33,6 +33,21 @@ export interface TabMeta {
    * with `=== true`. Independent of `pinned` (a tab can be either, both, neither).
    * This is lifecycle, not presentation: it adds no visual marker to the tab. */
   keepAwake?: boolean
+  /** When the tab was opened, epoch ms. Set at creation and persisted, so it
+   * survives a restart (the tab is the same tab, with the same age). Optional:
+   * a tab restored from a file written before this existed has none, and stays
+   * without one rather than claiming to have been opened at the restart. */
+  openedAt?: number
+  /** When the tab was last made active (focused), epoch ms. Stamped every time
+   * activation lands on it — selection, a neighbor inheriting focus on close,
+   * the restore of the active tab — never by a mere repaint. Absent on a tab
+   * that has never been focused (opened in background, restored asleep). */
+  lastActiveAt?: number
+  /** When the tab's page last changed, epoch ms: a navigation, a new title, a
+   * new favicon. NOT touched by bookkeeping patches (folder membership, pin),
+   * so it answers "when did this page last do something" rather than "when did
+   * we last write the tab". Absent until the first such change. */
+  updatedAt?: number
 }
 
 /** A window's tab list plus its active tab. `activeId` is null only when there
@@ -119,16 +134,41 @@ export function selectTab(state: TabState, id: string): TabState {
   return { ...state, activeId: id }
 }
 
+/** The patch keys that mean "the page itself changed", and so bump `updatedAt`.
+ * Everything else (folder membership, flags) is bookkeeping about the tab, not
+ * about the page it holds. */
+const CONTENT_KEYS = ['url', 'title', 'favicon'] as const
+
 /** Merge new metadata (title / url / favicon) into one tab, leaving order and
- * the active tab untouched. No-op if the id is unknown. */
+ * the active tab untouched. No-op if the id is unknown. When `now` is given and
+ * the patch touches the page (url / title / favicon), the tab's `updatedAt` is
+ * stamped with it — callers that only move a tab between folders pass nothing,
+ * so the freshness signal is not diluted by bookkeeping writes. */
 export function updateTab(
   state: TabState,
   id: string,
-  patch: Partial<Omit<TabMeta, 'id'>>
+  patch: Partial<Omit<TabMeta, 'id'>>,
+  now?: number
 ): TabState {
+  const touchesPage = CONTENT_KEYS.some((k) => k in patch)
+  const stamp = now !== undefined && touchesPage ? { updatedAt: now } : {}
   return {
     ...state,
-    tabs: state.tabs.map((t) => (t.id === id ? { ...t, ...patch } : t))
+    tabs: state.tabs.map((t) => (t.id === id ? { ...t, ...patch, ...stamp } : t))
+  }
+}
+
+/** Stamp the ACTIVE tab as focused right now (epoch ms). Called by the manager
+ * whenever activation lands on a tab — a selection, a neighbor inheriting focus
+ * on close, the active tab of a restored session. Kept out of selectTab itself
+ * because activation also happens through addTab / closeTab, and the stamp must
+ * follow the outcome (who ended up active), not the operation. No-op when the
+ * list is empty. */
+export function stampActiveTab(state: TabState, now: number): TabState {
+  if (state.activeId === null) return state
+  return {
+    ...state,
+    tabs: state.tabs.map((t) => (t.id === state.activeId ? { ...t, lastActiveAt: now } : t))
   }
 }
 
