@@ -76,6 +76,30 @@ export function mruFocusAfterClose(
   return null
 }
 
+/** The pinned-tab twist on `mruFocusAfterClose`, for the Cmd+W ('neighbor') path.
+ * While other unpinned tabs remain, closing one must keep walking the strip — the
+ * neighbor rule, unchanged. But when the closed tab was the LAST unpinned one, the
+ * neighbor is whichever pinned tab happens to sit at the end of the pinned grid,
+ * which is a position, not a place I was. So in that single case focus goes to the
+ * most recently viewed pinned tab instead.
+ *
+ * `survivors` is the strip AFTER the close. Returns null whenever the rule does not
+ * apply (the closed tab was pinned, some unpinned tab survives, no pinned tab
+ * survives, or none of them is in the history), leaving the caller on the neighbor
+ * rule. Must be called BEFORE the id is pruned from the history. */
+export function mruFocusAfterCloseLastUnpinned(
+  mru: MruHistory,
+  closingId: string,
+  closingWasPinned: boolean,
+  survivors: ReadonlyArray<{ id: string; pinned?: boolean }>
+): string | null {
+  if (closingWasPinned) return null
+  if (survivors.some((t) => t.pinned !== true)) return null
+  const pinned = new Set(survivors.filter((t) => t.pinned === true).map((t) => t.id))
+  if (pinned.size === 0) return null
+  return mruFocusAfterClose(mru, closingId, pinned)
+}
+
 /** Drop `id` from the history entirely — the tab left the window (closed or torn
  * off), so it must never be a back/forward target again. The cursor is kept on
  * the same surviving entry: shifted left when the removed one sat at or before

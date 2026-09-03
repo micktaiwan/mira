@@ -446,6 +446,37 @@ describe('close-active-tab', () => {
     expect(registry.execute('close-tab', { id: 'tab-2' }, ctx)).toEqual({ ok: true, id: 'tab-2' })
     expect(tabState().tabs.map((t) => t.id)).toEqual(['tab-1'])
   })
+
+  it('closing the LAST unpinned tab returns to the pinned tab last viewed', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // tab-2
+    registry.execute('new-tab', {}, ctx) // tab-3, the only unpinned one below
+    registry.execute('pin-tab', { id: 'tab-1' }, ctx)
+    registry.execute('pin-tab', { id: 'tab-2' }, ctx)
+    // Look at both pinned tabs, tab-1 last, then go work in the unpinned tab.
+    registry.execute('select-tab', { id: 'tab-2' }, ctx)
+    registry.execute('select-tab', { id: 'tab-1' }, ctx)
+    registry.execute('select-tab', { id: 'tab-3' }, ctx)
+    // tab-1 is NOT tab-3's strip neighbor, so the neighbor rule would miss it.
+    const strip = tabState().tabs.map((t) => t.id)
+    expect(strip[strip.indexOf('tab-3') - 1]).not.toBe('tab-1')
+    registry.execute('close-active-tab', {}, ctx)
+    expect(tabState().activeId).toBe('tab-1')
+  })
+
+  it('keeps walking the strip while another unpinned tab survives', () => {
+    const { ctx, tabState } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', {}, ctx) // tab-2, unpinned
+    registry.execute('new-tab', {}, ctx) // tab-3, unpinned
+    registry.execute('pin-tab', { id: 'tab-1' }, ctx)
+    registry.execute('select-tab', { id: 'tab-1' }, ctx)
+    registry.execute('select-tab', { id: 'tab-3' }, ctx)
+    registry.execute('close-active-tab', {}, ctx)
+    // Unpinned tabs remain: the strip neighbor wins, not the pinned tab-1.
+    expect(tabState().activeId).toBe('tab-2')
+  })
 })
 
 describe('discard-active-tab', () => {

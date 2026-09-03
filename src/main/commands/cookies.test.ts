@@ -169,4 +169,23 @@ describe('clear-site-data command', () => {
     const res = await createCommandRegistry().execute('clear-site-data', {}, ctx)
     expect(res).toEqual({ ok: false, error: expect.stringContaining('no active site') })
   })
+
+  it('reloads the tab and flashes the counts when asked (the fast sign-out)', async () => {
+    mockedRows.mockReturnValue([row({ name: 'a' })])
+    const fake = makeContext()
+    const reg = createCommandRegistry()
+    await reg.execute('import-cookies', { to: 'default', profileDir: 'Default' }, fake.ctx)
+    fake.ctx.newTab('https://example.com')
+
+    const res = await reg.execute('clear-site-data', { reload: true }, fake.ctx)
+    expect(res).toEqual({ ok: true, host: 'example.com', cookiesRemoved: 1, reloaded: true })
+    expect(fake.nav).toContain('reload')
+    expect(fake.toasts.at(-1)).toContain('Cleared example.com')
+  })
+
+  it('rejects a non-boolean reload', async () => {
+    const { ctx } = makeContext()
+    const res = await createCommandRegistry().execute('clear-site-data', { reload: 'yes' }, ctx)
+    expect(res).toEqual({ ok: false, error: expect.stringContaining('"reload"') })
+  })
 })

@@ -297,6 +297,7 @@ export function buildHomePage(stats: HomeStats): string {
           <div class="sc-row"><span class="desc">New tab</span><kbd>⌘T</kbd></div>
           <div class="sc-row"><span class="desc">Close tab</span><kbd>⌘W</kbd></div>
           <div class="sc-row"><span class="desc">Close + forget site</span><kbd>⌘⌥W</kbd></div>
+          <div class="sc-row"><span class="desc">Clear site data + reload</span><kbd>⌘⌥⌫</kbd></div>
           <div class="sc-row"><span class="desc">Reopen closed</span><kbd>⌘⇧T</kbd></div>
           <div class="sc-row"><span class="desc">Duplicate tab</span><kbd>⌘⇧D</kbd></div>
           <div class="sc-row"><span class="desc">Prev / next</span><kbd>⌘↑ ↓</kbd></div>
