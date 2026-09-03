@@ -64,6 +64,10 @@ export interface AppMenuHandlers {
    * storage and history for the tab's registrable domain and all its subdomains.
    * Wired to the forget-site command; flashes a confirming toast. */
   forgetSite: () => void
+  /** Clear the active site's data and reload the page (Cmd+Alt+Backspace): its
+   * cookies and origin storage go, the tab stays — the fast sign-out. Wired to
+   * clear-site-data with reload:true; the command flashes the counts. */
+  clearSiteData: () => void
   /** Duplicate the active tab (Cmd+Shift+D): open a copy of the current page
    * right under it and focus it. Wired to the duplicate-active-tab command. */
   duplicateTab: () => void
@@ -216,6 +220,14 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         label: 'Close Tab & Forget Site',
         accelerator: 'CmdOrCtrl+Alt+W',
         click: () => handlers.forgetSite()
+      },
+      {
+        // Same wipe as above minus the closing: sign out of this site without
+        // losing the tab. Cmd+Alt+Backspace, next to Chrome's Cmd+Shift+Delete
+        // reflex for clearing data.
+        label: 'Clear Site Data & Reload',
+        accelerator: 'CmdOrCtrl+Alt+Backspace',
+        click: () => handlers.clearSiteData()
       },
       {
         label: 'Reopen Closed Tab',

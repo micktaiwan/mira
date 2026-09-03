@@ -155,6 +155,14 @@ const STATIC_COMMANDS: ReadonlyArray<Omit<PaletteEntry, 'group'>> = [
     keywords: 'cookies storage logout sign out forget site current page'
   },
   {
+    id: 'cmd:sign-out-site',
+    title: 'Clear Site Data & Reload',
+    command: 'clear-site-data',
+    params: { reload: true },
+    keywords: 'logout sign out cookies storage reload current page session',
+    shortcut: '⌘⌥⌫'
+  },
+  {
     id: 'cmd:clear-data',
     title: 'Clear Browsing Data',
     command: 'clear-data',

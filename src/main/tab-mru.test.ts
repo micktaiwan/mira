@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { emptyMru, mruRecord, mruStep, mruPrune, mruFocusAfterClose } from './tab-mru'
+import {
+  emptyMru,
+  mruRecord,
+  mruStep,
+  mruPrune,
+  mruFocusAfterClose,
+  mruFocusAfterCloseLastUnpinned
+} from './tab-mru'
 
 describe('tab-mru', () => {
   // Build a history by replaying a sequence of visits from empty.
@@ -107,6 +114,36 @@ describe('tab-mru', () => {
     it('falls back to the newest entry when the closing tab was never recorded', () => {
       const m = visit('a', 'b')
       expect(mruFocusAfterClose(m, 'z', alive('a', 'b'))).toBe('b')
+    })
+  })
+  describe('mruFocusAfterCloseLastUnpinned', () => {
+    // The strip after the close: p1/p2 pinned, u* unpinned.
+    const strip = (...spec: string[]): Array<{ id: string; pinned: boolean }> =>
+      spec.map((id) => ({ id, pinned: id.startsWith('p') }))
+
+    it('lands on the last VIEWED pinned tab, not the last one in the strip', () => {
+      const m = visit('p2', 'p1', 'u1') // p1 is the pinned tab looked at last
+      expect(mruFocusAfterCloseLastUnpinned(m, 'u1', false, strip('p1', 'p2'))).toBe('p1')
+    })
+
+    it('does nothing while another unpinned tab survives', () => {
+      const m = visit('p1', 'u1', 'u2')
+      expect(mruFocusAfterCloseLastUnpinned(m, 'u2', false, strip('p1', 'u1'))).toBeNull()
+    })
+
+    it('does nothing when the closed tab was itself pinned', () => {
+      const m = visit('p1', 'p2')
+      expect(mruFocusAfterCloseLastUnpinned(m, 'p2', true, strip('p1'))).toBeNull()
+    })
+
+    it('does nothing when no pinned tab survives', () => {
+      const m = visit('u1')
+      expect(mruFocusAfterCloseLastUnpinned(m, 'u1', false, strip())).toBeNull()
+    })
+
+    it('falls back to the neighbor when no surviving pinned tab was ever viewed', () => {
+      const m = visit('u1')
+      expect(mruFocusAfterCloseLastUnpinned(m, 'u1', false, strip('p1', 'p2'))).toBeNull()
     })
   })
 })

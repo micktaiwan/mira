@@ -144,7 +144,8 @@ import {
   mruRecord,
   mruStep,
   mruPrune,
-  mruFocusAfterClose
+  mruFocusAfterClose,
+  mruFocusAfterCloseLastUnpinned
 } from './tab-mru'
 import type { CloseFocus } from './tab-mru'
 import {
@@ -3039,14 +3040,19 @@ export class ProfileManager {
     // (the focus history), so a link opened from a pinned tab returns to it.
     // Computed before the id is pruned; 'recent' falls back to the neighbor when
     // the history has nothing left alive.
-    const back =
-      wasActive && focus === 'recent'
-        ? mruFocusAfterClose(
+    const survivors = pw.state.tabs.filter((t) => t.id !== id)
+    const back = !wasActive
+      ? null
+      : focus === 'recent'
+        ? mruFocusAfterClose(pw.mru, id, new Set(survivors.map((t) => t.id)))
+        : // 'neighbor', with the one exception: closing the LAST unpinned tab lands
+          // on the pinned tab last looked at, not on the end of the pinned grid.
+          mruFocusAfterCloseLastUnpinned(
             pw.mru,
             id,
-            new Set(pw.state.tabs.filter((t) => t.id !== id).map((t) => t.id))
+            pw.state.tabs[index].pinned === true,
+            survivors
           )
-        : null
     pw.state = closeTabPure(pw.state, id)
     if (back) pw.state = selectTabPure(pw.state, back)
     // Whoever inherited focus (the strip neighbor, or the MRU pick) is being

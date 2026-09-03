@@ -595,6 +595,10 @@ app.whenReady().then(async () => {
       closeTabToRecent: () =>
         runDetached('close-active-tab', { focus: 'recent' }, profiles.contextForFocused()),
       forgetSite: () => runDetached('forget-site', {}, profiles.contextForFocused()),
+      // Cmd+Alt+Backspace: wipe this site's cookies + storage and reload, so the
+      // page comes back signed out. The command owns the toast.
+      clearSiteData: () =>
+        runDetached('clear-site-data', { reload: true }, profiles.contextForFocused()),
       reopenTab: () => runDetached('reopen-closed-tab', {}, profiles.contextForFocused()),
       discardTab: () => runDetached('discard-active-tab', {}, profiles.contextForFocused()),
       wakeAllTabs: () => runDetached('wake-all-tabs', {}, profiles.contextForFocused()),

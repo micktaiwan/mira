@@ -159,13 +159,26 @@ export const cookieCommands: CommandMap<CommandContext> = {
   },
 
   // Destructive but scoped: clear one site's data (its cookies + origin storage)
-  // in the active tab's session. No `url` → the active tab's site. Reload the tab
-  // to see the sign-out take effect.
+  // in the active tab's session. No `url` → the active tab's site. The tab keeps
+  // its rendered page, so `reload: true` (Cmd+Alt+Backspace, "Clear Site Data &
+  // Reload") reloads it right after — that is what turns the wipe into a visible
+  // sign-out. The reload always hits the target tab, even when `url` named
+  // another site. A toast reports the counts, since the wipe is otherwise silent.
   'clear-site-data': async (ctx, params) => {
-    const { url } = (params ?? {}) as { url?: string }
+    const { url, reload } = (params ?? {}) as { url?: string; reload?: boolean }
+    if (reload !== undefined && typeof reload !== 'boolean') {
+      return { ok: false, error: '"reload" must be a boolean' }
+    }
     try {
       const result = await ctx.clearSiteData(url)
       if (!result) return { ok: false, error: 'no active site to clear' }
+      ctx.showToast(
+        `Cleared ${result.host}: ${result.cookiesRemoved} cookies and its storage removed.`
+      )
+      if (reload) {
+        ctx.getTargetWebContents().reload()
+        return { ok: true, ...result, reloaded: true }
+      }
       return { ok: true, ...result }
     } catch (error) {
       return fail(error)

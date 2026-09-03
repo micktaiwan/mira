@@ -62,7 +62,8 @@ import {
   mruRecord,
   mruStep,
   mruPrune,
-  mruFocusAfterClose
+  mruFocusAfterClose,
+  mruFocusAfterCloseLastUnpinned
 } from '../tab-mru'
 import {
   addFolder as addFolderPure,
@@ -424,14 +425,13 @@ export function makeContext(
   // the history and the tab that inherits focus becomes the current entry.
   const closeAndFocus = (id: string, focus: CloseFocus = 'neighbor'): void => {
     const wasActive = state.tabs.activeId === id
-    const back =
-      wasActive && focus === 'recent'
-        ? mruFocusAfterClose(
-            state.mru,
-            id,
-            new Set(state.tabs.tabs.filter((t) => t.id !== id).map((t) => t.id))
-          )
-        : null
+    const closing = state.tabs.tabs.find((t) => t.id === id)
+    const survivors = state.tabs.tabs.filter((t) => t.id !== id)
+    const back = !wasActive
+      ? null
+      : focus === 'recent'
+        ? mruFocusAfterClose(state.mru, id, new Set(survivors.map((t) => t.id)))
+        : mruFocusAfterCloseLastUnpinned(state.mru, id, closing?.pinned === true, survivors)
     state.tabs = closeTabPure(state.tabs, id)
     if (back) state.tabs = selectTabPure(state.tabs, back)
     state.mru = mruPrune(state.mru, id)
