@@ -238,7 +238,8 @@ function ProfileRow({
   onOpen,
   onEncrypt,
   onUnlock,
-  onLock
+  onLock,
+  onDelete
 }: {
   profile: Profile
   focused: boolean
@@ -254,6 +255,7 @@ function ProfileRow({
   onEncrypt: () => void
   onUnlock: () => void
   onLock: () => void
+  onDelete: () => void
 }): React.JSX.Element {
   // Local draft, seeded from the prop. The parent remounts this row (via key)
   // when the committed label changes, so no prop-sync effect is needed.
@@ -354,6 +356,20 @@ function ProfileRow({
           </button>
         )}
       </span>
+      <span className="profile-action-slot">
+        {/* Delete: never the default profile (it owns Electron's default session), and
+            only while closed — the wipe needs the partition's file handles released. */}
+        {profile.id !== 'default' && (
+          <button
+            className="btn btn-danger"
+            onClick={onDelete}
+            disabled={profile.open}
+            title={profile.open ? 'Close its window first' : 'Delete this profile and its data'}
+          >
+            Delete
+          </button>
+        )}
+      </span>
     </li>
   )
 }
@@ -434,6 +450,56 @@ function VaultPasswordDialog({
           </button>
           <button className="btn" onClick={() => void submit()} disabled={busy}>
             {busy ? 'Working…' : mode === 'encrypt' ? 'Encrypt' : 'Unlock'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** Confirmation for deleting a profile. Irreversible and silent otherwise — the
+ * cookies, storage, history and favorites of that profile go with it — so it is
+ * spelled out here before the command runs. Reuses the vault dialog's chrome
+ * (same overlay, same buttons); only the wording and the danger button differ.
+ * onConfirm returns an error string to show inline, or null on success. */
+function DeleteProfileDialog({
+  profileLabel,
+  encrypted,
+  onConfirm,
+  onClose
+}: {
+  profileLabel: string
+  /** An encrypted profile also loses its vault — worth saying out loud. */
+  encrypted: boolean
+  onConfirm: () => Promise<string | null>
+  onClose: () => void
+}): React.JSX.Element {
+  const [error, setError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const submit = async (): Promise<void> => {
+    setBusy(true)
+    const err = await onConfirm()
+    setBusy(false)
+    if (err) setError(err)
+    else onClose()
+  }
+
+  return (
+    <div className="vault-overlay" onClick={onClose}>
+      <div className="vault-dialog" onClick={(e) => e.stopPropagation()}>
+        <h3>Delete “{profileLabel}”</h3>
+        <p>
+          Its cookies, logins, storage, history and favorites are erased from disk
+          {encrypted ? ', and its encrypted vault is destroyed' : ''}. This cannot be undone.
+        </p>
+        {error && <p className="vault-error">{error}</p>}
+        <div className="vault-actions">
+          <button className="btn btn-ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </button>
+          <button className="btn btn-danger" onClick={() => void submit()} disabled={busy}>
+            {busy ? 'Deleting…' : 'Delete profile'}
           </button>
         </div>
       </div>
@@ -575,6 +641,8 @@ function ProfilesSection(): React.JSX.Element {
   // profile list (list-vaults is the runtime source of encrypted/unlocked).
   const [encrypted, setEncrypted] = useState<Set<string>>(new Set())
   const [unlocked, setUnlocked] = useState<Set<string>>(new Set())
+  // The profile awaiting delete confirmation, or null.
+  const [pendingDelete, setPendingDelete] = useState<Profile | null>(null)
   // The open password dialog, or null. Keyed to one profile + a mode.
   const [dialog, setDialog] = useState<{ mode: 'encrypt' | 'unlock'; profile: Profile } | null>(
     null
@@ -627,6 +695,14 @@ function ProfilesSection(): React.JSX.Element {
     void run('open-profile', { id })
   }
 
+  // Returns the error to show inside the dialog, or null on success — the
+  // profiles-changed push then refetches the list and the row disappears.
+  const confirmDelete = async (): Promise<string | null> => {
+    if (!pendingDelete) return null
+    const res = await run('delete-profile', { id: pendingDelete.id })
+    return res.ok ? null : String(res.error)
+  }
+
   const lock = async (id: string): Promise<void> => {
     const res = await run('lock-profile', { id })
     setError(res.ok ? null : String(res.error))
@@ -670,10 +746,19 @@ function ProfilesSection(): React.JSX.Element {
             onEncrypt={() => setDialog({ mode: 'encrypt', profile: p })}
             onUnlock={() => setDialog({ mode: 'unlock', profile: p })}
             onLock={() => void lock(p.id)}
+            onDelete={() => setPendingDelete(p)}
           />
         ))}
       </ul>
       <ThemesManager themes={themes} onError={setError} />
+      {pendingDelete && (
+        <DeleteProfileDialog
+          profileLabel={pendingDelete.label}
+          encrypted={encrypted.has(pendingDelete.id)}
+          onConfirm={confirmDelete}
+          onClose={() => setPendingDelete(null)}
+        />
+      )}
       {dialog && (
         <VaultPasswordDialog
           mode={dialog.mode}

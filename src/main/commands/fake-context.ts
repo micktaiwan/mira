@@ -136,6 +136,8 @@ export interface FakeContext {
   failLoad: (tabId: string, url: string) => void
   nav: string[]
   opened: string[]
+  /** Profiles deleted through delete-profile, in order. */
+  deletedProfiles: string[]
   /** One entry per openSettings call: the requested section, or null when none. */
   settingsOpened: Array<string | null>
   profiles: Array<ProfileInfo & { open: boolean }>
@@ -262,6 +264,8 @@ export function makeContext(
   const failedLoads = new Map<string, string>()
   const nav: string[] = []
   const opened: string[] = []
+  /** Profiles deleted through delete-profile, in order. */
+  const deletedProfiles: string[] = []
   const settingsOpened: Array<string | null> = []
   const findBarOpens: boolean[] = []
   const findCalls: Array<{ text: string; forward: boolean; newSession: boolean }> = []
@@ -684,6 +688,16 @@ export function makeContext(
       opened.push(id)
       state.focused = id
       return { id, label: finalLabel }
+    },
+    deleteProfile: async (id: string) => {
+      const profile = state.profiles.find((p) => p.id === id)
+      if (!profile) throw new Error(`unknown profile: ${id}`)
+      if (id === 'default') throw new Error('the default profile cannot be deleted')
+      if (profile.open) throw new Error('close the profile window before deleting it')
+      state.profiles = state.profiles.filter((p) => p.id !== id)
+      deletedProfiles.push(id)
+      if (state.focused === id) state.focused = null
+      return { id, label: profile.label }
     },
     renameProfile: (id: string, label: string) => {
       const profile = state.profiles.find((p) => p.id === id)
@@ -1983,6 +1997,7 @@ export function makeContext(
     },
     nav,
     opened,
+    deletedProfiles,
     settingsOpened,
     profiles: state.profiles,
     focused: state.focused,

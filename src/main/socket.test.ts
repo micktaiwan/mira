@@ -49,6 +49,7 @@ function setup(): {
     closeProfile: (id: string) => ({ id, closed: true }),
     createProfile: (label?: string) => ({ id: 'new', label: label ?? 'Profile 2' }),
     renameProfile: (id: string, label: string) => ({ id, label }),
+    deleteProfile: async (id: string) => ({ id, label: id }),
     setProfileColor: (id: string, color: string | null) => ({
       id,
       label: id,

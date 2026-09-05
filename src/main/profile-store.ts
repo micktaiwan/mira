@@ -7,9 +7,19 @@
 // See track.md ("Rename profil = label seul"). Persistence (profiles.json) and
 // window creation are native concerns handled elsewhere; this file has no I/O.
 
+/** Who created a profile. It decides who may DELETE it: a scripted caller (socket
+ * / MCP) may only delete what automation itself created, never a profile the user
+ * made by hand — an agent must not be one command away from wiping a real session.
+ * The user, in Settings, can delete either. */
+export type ProfileOrigin = 'user' | 'automation'
+
 export interface Profile {
   id: string
   label: string
+  /** Written only for an automation-created profile, so every pre-existing file
+   * (and every profile the user made) reads back as 'user' — the safe default.
+   * See ProfileOrigin. */
+  origin?: 'automation'
   /** The id of the theme this profile paints its chrome with (see
    * theme-store.ts). Absent falls back to the default theme, or to a legacy
    * `color` if one is still set. */
@@ -70,12 +80,13 @@ export function normalizeProfiles(raw: unknown): Profile[] {
   const list = Array.isArray(raw) ? raw : []
   for (const item of list) {
     if (!item || typeof item !== 'object') continue
-    const { id, label, themeId, color, encrypted } = item as {
+    const { id, label, themeId, color, encrypted, origin } = item as {
       id?: unknown
       label?: unknown
       themeId?: unknown
       color?: unknown
       encrypted?: unknown
+      origin?: unknown
     }
     if (typeof id !== 'string' || id.trim() === '') continue
     if (typeof label !== 'string' || label.trim() === '') continue
@@ -87,7 +98,8 @@ export function normalizeProfiles(raw: unknown): Profile[] {
       label: label.trim(),
       ...(typeof themeId === 'string' && themeId.trim() !== '' ? { themeId: themeId.trim() } : {}),
       ...(isProfileColor(color) ? { color } : {}),
-      ...(encrypted === true ? { encrypted: true } : {})
+      ...(encrypted === true ? { encrypted: true } : {}),
+      ...(origin === 'automation' ? { origin: 'automation' as const } : {})
     })
   }
   const def = out.find((p) => p.id === DEFAULT_PROFILE_ID) ?? {
@@ -110,6 +122,11 @@ export function renameProfile(profiles: Profile[], id: string, label: string): P
   return profiles.map((p) => (p.id === id ? { ...p, label: trimmed } : p))
 }
 
+/** Who created this profile — absent in the file means the user (see ProfileOrigin). */
+export function profileOrigin(profile: Profile): ProfileOrigin {
+  return profile.origin === 'automation' ? 'automation' : 'user'
+}
+
 /** Append a new profile. Throws on empty id/label or a duplicate id. */
 export function addProfile(profiles: Profile[], profile: Profile): Profile[] {
   const label = profile.label.trim()
@@ -118,8 +135,48 @@ export function addProfile(profiles: Profile[], profile: Profile): Profile[] {
   if (findById(profiles, profile.id)) throw new Error(`duplicate profile: ${profile.id}`)
   return [
     ...profiles,
-    { id: profile.id, label, ...(profile.color ? { color: profile.color } : {}) }
+    {
+      id: profile.id,
+      label,
+      ...(profile.color ? { color: profile.color } : {}),
+      ...(profile.origin === 'automation' ? { origin: 'automation' as const } : {})
+    }
   ]
+}
+
+/** Everything that decides whether profile `id` may be deleted, in one pure place
+ * so both the model and the ProfileManager (which must check BEFORE it wipes any
+ * file) ask the same question. Returns the profile, or throws:
+ *   - the DEFAULT profile is never deletable: it owns Electron's default session
+ *     (partitionForId returns undefined for it), so there is no self-contained dir
+ *     to remove, and normalizeProfiles would recreate it on the next read anyway.
+ *   - an unknown id is an error, not a no-op.
+ *   - `requester` 'automation' (a socket / MCP / agent call) may only delete what
+ *     automation itself created. A profile the user made by hand holds real
+ *     cookies and logins; no script gets to wipe it — the user does, from Settings.
+ */
+export function assertProfileDeletable(
+  profiles: Profile[],
+  id: string,
+  requester: ProfileOrigin = 'user'
+): Profile {
+  if (id === DEFAULT_PROFILE_ID) throw new Error('the default profile cannot be deleted')
+  const profile = findById(profiles, id)
+  if (!profile) throw new Error(`unknown profile: ${id}`)
+  if (requester === 'automation' && profileOrigin(profile) !== 'automation') {
+    throw new Error(`profile ${id} was not created by automation: delete it from Settings`)
+  }
+  return profile
+}
+
+/** Return a new list without profile `id`. Throws per assertProfileDeletable. */
+export function removeProfile(
+  profiles: Profile[],
+  id: string,
+  requester: ProfileOrigin = 'user'
+): Profile[] {
+  assertProfileDeletable(profiles, id, requester)
+  return profiles.filter((p) => p.id !== id)
 }
 
 /** Return a new list with profile `id`'s theme color set (a #rgb/#rrggbb hex)

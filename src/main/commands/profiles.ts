@@ -19,6 +19,10 @@ export interface ProfileContext {
   closeProfile: (id: string) => { id: string; closed: boolean }
   /** Create a new profile (fresh id + label) and open its window. */
   createProfile: (label?: string) => ProfileInfo
+  /** Delete a profile for good: its saved tabs, its cookies/storage partition, its
+   * browsing trails and (when encrypted) its vault. Irreversible. Throws on an
+   * unknown id, on the default profile, and while one of its windows is open. */
+  deleteProfile: (id: string) => Promise<{ id: string; label: string }>
   /** Relabel an existing profile. The id (and its cookies) are untouched.
    * Throws on unknown id or empty label. */
   renameProfile: (id: string, label: string) => ProfileInfo
@@ -43,6 +47,10 @@ export interface CloseProfileParams {
 
 export interface CreateProfileParams {
   label?: string
+}
+
+export interface DeleteProfileParams {
+  id: string
 }
 
 export interface RenameProfileParams {
@@ -78,6 +86,19 @@ export const profileCommands: CommandMap<CommandContext> = {
     try {
       const { id: closedId, closed } = ctx.closeProfile(id.trim())
       return { ok: true, id: closedId, closed }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  'delete-profile': async (ctx, params) => {
+    const { id } = (params ?? {}) as Partial<DeleteProfileParams>
+    if (typeof id !== 'string' || id.trim() === '') {
+      return { ok: false, error: 'missing "id"' }
+    }
+    try {
+      const { id: deleted, label } = await ctx.deleteProfile(id.trim())
+      return { ok: true, id: deleted, label }
     } catch (error) {
       return fail(error)
     }

@@ -13,7 +13,7 @@
 import { randomUUID } from 'crypto'
 import type { FocusFeed, TabFocus } from './focus-feed'
 import { shouldRestorePageFocus, type FocusTarget } from './focus-restore'
-import { existsSync } from 'node:fs'
+import { existsSync, rmSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
 import {
@@ -95,6 +95,10 @@ import {
   partitionForId,
   addProfile,
   renameProfile,
+  removeProfile,
+  assertProfileDeletable,
+  profileOrigin,
+  type ProfileOrigin,
   setProfileColor as setProfileColorPure,
   setProfileTheme as setProfileThemePure,
   findById,
@@ -1140,16 +1144,73 @@ export class ProfileManager {
     target.window.focus()
   }
 
-  /** Create a new profile (fresh id + label), persist it, and open its window. */
-  createProfile(label?: string): ProfileInfo {
+  /** Create a new profile (fresh id + label), persist it, and open its window.
+   * `origin` records WHO created it — 'automation' for a socket/MCP caller — and
+   * that is what later decides whether a scripted delete may touch it. */
+  createProfile(label?: string, origin: ProfileOrigin = 'user'): ProfileInfo {
     const profile: Profile = {
       id: randomUUID(),
-      label: label ?? nextProfileLabel(this.profiles)
+      label: label ?? nextProfileLabel(this.profiles),
+      ...(origin === 'automation' ? { origin: 'automation' as const } : {})
     }
     this.profiles = addProfile(this.profiles, profile)
     this.deps.persist(this.profiles)
     this.openProfile(profile.id)
     return { id: profile.id, label: profile.label }
+  }
+
+  /** Delete a profile for good: drop its saved tabs, wipe its cookies/storage
+   * partition and its browsing trails from disk, remove its vault when it is an
+   * encrypted one, then forget it. Irreversible — nothing is moved to a trash.
+   *
+   * Refuses while one of its windows is open: Electron still holds the partition's
+   * file handles, so the wipe would leave half of it behind (same reason encrypt
+   * and lock require a closed window). The default profile is refused by the pure
+   * model — it owns Electron's default session, which is not ours to remove.
+   *
+   * `requester` is the command's origin: an 'external' caller (socket / MCP / an
+   * agent) may only delete a profile that AUTOMATION created — never one the user
+   * made by hand, whose cookies and logins are real. From the UI ('ui') the user
+   * deletes what they want. */
+  async deleteProfile(id: string, requester: CommandOrigin = 'ui'): Promise<ProfileInfo> {
+    // Ask the pure model FIRST — nothing is wiped before it says yes. An 'external'
+    // command (socket / MCP) counts as automation and may only delete its own.
+    const profile = assertProfileDeletable(
+      this.profiles,
+      id,
+      requester === 'external' ? 'automation' : 'user'
+    )
+    if (this.windowsForProfile(id).length > 0) {
+      throw new Error('close the profile window before deleting it')
+    }
+    // Drop the in-memory readers FIRST (dispose, not flush): a pending debounced
+    // write would otherwise recreate the trail files right after the wipe.
+    this.evictProfileDataCaches(id)
+    // Its saved tabs go with it, so a restart does not try to restore a gone profile.
+    if (this.sessions[id]) {
+      delete this.sessions[id]
+      this.deps.persistSessions(this.sessions)
+    }
+    // Ask Chromium to drop the partition's data before removing the directory, so
+    // an in-memory session (this run opened it once) cannot flush it back.
+    try {
+      await this.sessionFor(id).clearStorageData()
+    } catch (error) {
+      console.error(`[mira] delete-profile: clearStorageData failed for ${id}`, error)
+    }
+    // The trails dir plus EVERY partition dir of this profile (canonical and any
+    // per-unlock nonce dir of an encrypted one).
+    vaultService.discardProfilePlaintext(this.deps.userDataDir, id)
+    if (profile.encrypted) {
+      rmSync(vaultPlan(this.deps.userDataDir, id).bundle, { recursive: true, force: true })
+    }
+    this.unlockedVaults.delete(id)
+    this.unlockedPartition.delete(id)
+    this.profiles = removeProfile(this.profiles, id)
+    this.deps.persist(this.profiles)
+    this.deps.onChange?.()
+    this.broadcastProfilesChanged()
+    return { id, label: profile.label }
   }
 
   /** Relabel an existing profile. The id (and its cookies) are untouched. */
@@ -1187,6 +1248,7 @@ export class ProfileManager {
     return {
       id: profile.id,
       label: profile.label,
+      origin: profileOrigin(profile),
       ...(profile.themeId ? { themeId: profile.themeId } : {}),
       ...(profile.color ? { color: profile.color } : {})
     }
@@ -5233,8 +5295,10 @@ export class ProfileManager {
       openExternalUrl: (url, profileId) => this.openUrl(url, profileId, raiseAllowed),
       openProfile: (id) => this.openProfile(id, raiseAllowed),
       closeProfile: (id) => this.closeProfile(id),
-      createProfile: (label) => this.createProfile(label),
+      createProfile: (label) =>
+        this.createProfile(label, origin === 'external' ? 'automation' : 'user'),
       renameProfile: (id, label) => this.renameProfile(id, label),
+      deleteProfile: (id) => this.deleteProfile(id, origin),
       setProfileColor: (id, color) => this.setProfileColor(id, color),
       listProfiles: () => this.listProfiles(),
       listThemes: () => this.listThemes(),
