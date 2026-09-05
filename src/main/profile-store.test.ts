@@ -11,6 +11,9 @@ import {
   isProfileColor,
   nextProfileLabel,
   parseProfileArg,
+  removeProfile,
+  assertProfileDeletable,
+  profileOrigin,
   type Profile
 } from './profile-store'
 
@@ -257,5 +260,93 @@ describe('parseProfileArg', () => {
 
   it('ignores an empty env var', () => {
     expect(parseProfileArg([], { MIRA_PROFILE: '  ' })).toBeNull()
+  })
+})
+
+describe('removeProfile', () => {
+  const list = (): Profile[] => [
+    { id: 'default', label: 'Default' },
+    { id: 'work', label: 'Work' },
+    { id: 'perso', label: 'Perso' }
+  ]
+
+  it('drops the profile and leaves the others untouched', () => {
+    const out = removeProfile(list(), 'work')
+    expect(out.map((p) => p.id)).toEqual(['default', 'perso'])
+  })
+
+  it('does not mutate the input list', () => {
+    const input = list()
+    removeProfile(input, 'work')
+    expect(input).toHaveLength(3)
+  })
+
+  it('refuses the default profile — it owns the default session', () => {
+    expect(() => removeProfile(list(), 'default')).toThrow(/default profile/)
+  })
+
+  it('refuses an unknown id', () => {
+    expect(() => removeProfile(list(), 'nope')).toThrow(/unknown profile/)
+  })
+})
+
+describe('profile origin', () => {
+  it('reads back as user when the file says nothing (every pre-existing profile)', () => {
+    expect(profileOrigin({ id: 'work', label: 'Work' })).toBe('user')
+  })
+
+  it('reads back as automation when the file says so', () => {
+    expect(profileOrigin({ id: 'bot', label: 'Bot', origin: 'automation' })).toBe('automation')
+  })
+
+  it('keeps the origin through normalize, and drops a bogus value', () => {
+    const out = normalizeProfiles([
+      { id: 'bot', label: 'Bot', origin: 'automation' },
+      { id: 'weird', label: 'Weird', origin: 'martian' }
+    ])
+    expect(profileOrigin(findById(out, 'bot')!)).toBe('automation')
+    expect(profileOrigin(findById(out, 'weird')!)).toBe('user')
+  })
+
+  it('addProfile carries an automation origin and omits it otherwise', () => {
+    const base = defaultProfiles()
+    expect(addProfile(base, { id: 'bot', label: 'Bot', origin: 'automation' })[1].origin).toBe(
+      'automation'
+    )
+    expect(addProfile(base, { id: 'mine', label: 'Mine' })[1].origin).toBeUndefined()
+  })
+})
+
+describe('assertProfileDeletable', () => {
+  const list = (): Profile[] => [
+    { id: 'default', label: 'Default' },
+    { id: 'mine', label: 'Mine' },
+    { id: 'bot', label: 'Bot', origin: 'automation' }
+  ]
+
+  it('lets automation delete what automation created', () => {
+    expect(assertProfileDeletable(list(), 'bot', 'automation').id).toBe('bot')
+    expect(removeProfile(list(), 'bot', 'automation').map((p) => p.id)).toEqual(['default', 'mine'])
+  })
+
+  it('refuses automation on a profile the user made by hand', () => {
+    expect(() => assertProfileDeletable(list(), 'mine', 'automation')).toThrow(
+      /not created by automation/
+    )
+    expect(() => removeProfile(list(), 'mine', 'automation')).toThrow(/not created by automation/)
+  })
+
+  it('lets the user delete either', () => {
+    expect(assertProfileDeletable(list(), 'mine', 'user').id).toBe('mine')
+    expect(assertProfileDeletable(list(), 'bot', 'user').id).toBe('bot')
+  })
+
+  it('refuses the default profile whoever asks', () => {
+    expect(() => assertProfileDeletable(list(), 'default', 'user')).toThrow(/default profile/)
+    expect(() => assertProfileDeletable(list(), 'default', 'automation')).toThrow(/default profile/)
+  })
+
+  it('refuses an unknown id before anything else', () => {
+    expect(() => assertProfileDeletable(list(), 'nope', 'automation')).toThrow(/unknown profile/)
   })
 })

@@ -834,10 +834,10 @@ body {
   /* Same native <ul> padding reset as .tab-list (base.css resets margin only). */
   padding: 0;
   /* Grid so every row shares column tracks: label | theme | status | badge |
-     vault-action | open-action. Each row is a subgrid onto these, so a row
-     missing a button keeps the others aligned across the whole list. */
+     vault-action | open-action | delete-action. Each row is a subgrid onto these,
+     so a row missing a button keeps the others aligned across the whole list. */
   display: grid;
-  grid-template-columns: 1fr max-content max-content max-content max-content max-content;
+  grid-template-columns: 1fr max-content max-content max-content max-content max-content max-content;
   gap: 8px;
 }
 

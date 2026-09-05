@@ -287,3 +287,62 @@ describe('whoami', () => {
     })
   })
 })
+
+describe('delete-profile', () => {
+  /** Seed a second profile and mark its window closed (deletion needs it closed). */
+  const seedClosed = (): ReturnType<typeof makeContext> & { workId: string } => {
+    const fake = makeContext()
+    const { id } = fake.ctx.createProfile('Work')
+    fake.profiles.find((p) => p.id === id)!.open = false
+    return Object.assign(fake, { workId: id })
+  }
+
+  it('deletes a closed profile and drops it from the list', async () => {
+    const { ctx, workId, deletedProfiles } = seedClosed()
+    const registry = createCommandRegistry()
+    expect(await registry.execute('delete-profile', { id: workId }, ctx)).toEqual({
+      ok: true,
+      id: workId,
+      label: 'Work'
+    })
+    expect(deletedProfiles).toEqual([workId])
+    const list = (await registry.execute('list-profiles', {}, ctx)) as unknown as {
+      profiles: Array<ProfileInfo & { open: boolean }>
+    }
+    expect(list.profiles.some((p) => p.id === workId)).toBe(false)
+  })
+
+  it('refuses the default profile', async () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    const res = await registry.execute('delete-profile', { id: 'default' }, ctx)
+    expect(res.ok).toBe(false)
+    expect(String(res.error)).toMatch(/default profile/)
+  })
+
+  it('refuses a profile whose window is open', async () => {
+    const fake = makeContext()
+    const { id } = fake.ctx.createProfile('Work') // created open
+    const registry = createCommandRegistry()
+    const res = await registry.execute('delete-profile', { id }, fake.ctx)
+    expect(res.ok).toBe(false)
+    expect(String(res.error)).toMatch(/close the profile window/)
+    expect(fake.deletedProfiles).toEqual([])
+  })
+
+  it('refuses an unknown id and a missing one', async () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(String((await registry.execute('delete-profile', { id: 'nope' }, ctx)).error)).toMatch(
+      /unknown profile/
+    )
+    expect(String((await registry.execute('delete-profile', {}, ctx)).error)).toMatch(/id/)
+  })
+
+  it('trims the id', async () => {
+    const { ctx, workId, deletedProfiles } = seedClosed()
+    const registry = createCommandRegistry()
+    await registry.execute('delete-profile', { id: `  ${workId}  ` }, ctx)
+    expect(deletedProfiles).toEqual([workId])
+  })
+})

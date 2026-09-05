@@ -34,6 +34,10 @@ export interface ProfileInfo {
   label: string
   themeId?: string
   color?: string
+  /** Who created the profile: 'user' by hand, 'automation' over the socket / MCP.
+   * Always resolved (never absent) on the way out, unlike the persisted shape —
+   * a scripted delete is allowed on 'automation' profiles only. */
+  origin?: 'user' | 'automation'
 }
 
 export type CommandResult = { ok: true; [key: string]: unknown } | { ok: false; error: string }
