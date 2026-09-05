@@ -24,6 +24,7 @@
 // window). The Electron glue below is thin.
 
 import { app, type WebContents } from 'electron'
+import { WINDOW_OPEN_SHIM_SOURCE } from './window-open-shim'
 
 // ── Service-worker health instrumentation ──────────────────────────────────
 // WhatsApp Web (and other SW-dependent PWAs) hang on their splash forever when the
@@ -170,6 +171,11 @@ export const CHROME_SHIM_SOURCE = String.raw`
 })();
 `
 
+/** Everything injected into a page's main world, in one blob: the Chrome fingerprint
+ * shim above, then the window.open stub that keeps a tab-open from reading as a blocked
+ * popup (window-open-shim.ts). Both are idempotent, so the re-assert below is safe. */
+const PAGE_SHIM_SOURCE = CHROME_SHIM_SOURCE + WINDOW_OPEN_SHIM_SOURCE
+
 // webContents we've already wired, so re-entry (both the global hook and any direct call
 // fire for the same view) doesn't attach twice.
 const wired = new WeakSet<WebContents>()
@@ -194,7 +200,7 @@ export function installStealthShim(wc: WebContents): void {
       .sendCommand('Page.enable')
       .then(() =>
         wc.debugger.sendCommand('Page.addScriptToEvaluateOnNewDocument', {
-          source: CHROME_SHIM_SOURCE
+          source: PAGE_SHIM_SOURCE
         })
       )
       .catch((error) => console.error('[mira] stealth: addScript failed', error))
@@ -202,7 +208,7 @@ export function installStealthShim(wc: WebContents): void {
     console.error('[mira] stealth: debugger attach failed', error)
   }
   const reassert = (): void => {
-    wc.executeJavaScript(CHROME_SHIM_SOURCE, true).catch(() => {})
+    wc.executeJavaScript(PAGE_SHIM_SOURCE, true).catch(() => {})
   }
   wc.on('did-navigate', reassert)
   wc.on('dom-ready', reassert)
