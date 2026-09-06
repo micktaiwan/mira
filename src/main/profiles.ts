@@ -12,7 +12,11 @@
 
 import { randomUUID } from 'crypto'
 import type { FocusFeed, TabFocus } from './focus-feed'
-import { shouldRestorePageFocus, type FocusTarget } from './focus-restore'
+import {
+  shouldFocusPageOnTabSelect,
+  shouldRestorePageFocus,
+  type FocusTarget
+} from './focus-restore'
 import { existsSync, rmSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
@@ -1801,7 +1805,7 @@ export class ProfileManager {
     pw.mru = mru
     this.mruSuppressRecord = true
     try {
-      this.selectTabIn(pw, id)
+      this.selectTabIn(pw, id, { focusPage: true })
     } finally {
       this.mruSuppressRecord = false
     }
@@ -3580,8 +3584,9 @@ export class ProfileManager {
       pw.window.focus()
     }
     // Select the tab so it becomes the visible WebContentsView of its window —
-    // with or without the raise above.
-    this.selectTabIn(pw, tabId)
+    // with or without the raise above. Only the UI path (raise) hands the keyboard
+    // to the page; a scripted activate leaves focus where the user put it.
+    this.selectTabIn(pw, tabId, { focusPage: raise })
     return { windowId: pw.windowId, id: tabId }
   }
 
@@ -4091,7 +4096,11 @@ export class ProfileManager {
     return { woken }
   }
 
-  private selectTabIn(pw: ProfileWindow, id: string): { id: string } {
+  private selectTabIn(
+    pw: ProfileWindow,
+    id: string,
+    opts: { focusPage?: boolean } = {}
+  ): { id: string } {
     const tab = pw.state.tabs.find((t) => t.id === id)
     if (!tab) throw new Error(`unknown tab: ${id}`)
     pw.state = stampActiveTab(selectTabPure(pw.state, id), Date.now())
@@ -4110,7 +4119,26 @@ export class ProfileManager {
     this.layout(pw)
     this.pushTabs(pw)
     this.saveSession(pw)
+    if (opts.focusPage) this.focusActivePageIn(pw)
     return { id }
+  }
+
+  /** Hand the keyboard to the active tab's page after a user-driven tab switch,
+   * so the first keystroke reaches the site instead of the chrome. Silently does
+   * nothing when the move would steal focus or has no page to give it to — the
+   * conditions live in shouldFocusPageOnTabSelect (focus-restore.ts). */
+  private focusActivePageIn(pw: ProfileWindow): void {
+    if (pw.window.isDestroyed()) return
+    const activeId = pw.state.activeId
+    const page = activeId ? this.liveContents(pw, activeId) : null
+    const ok = shouldFocusPageOnTabSelect({
+      userDriven: true,
+      windowFocused: pw.window.isFocused(),
+      hasActivePage: !!page,
+      overlayOpen: pw.paletteOpen || pw.mediaGalleryOpen
+    })
+    if (!ok) return
+    page?.focus()
   }
 
   /** Intercept Cmd+Up / Cmd+Down on `wc` (before the page or the macOS text
@@ -4510,7 +4538,7 @@ export class ProfileManager {
     const target = nextNavigableTabId(pw.state.tabs, pw.folders, pw.state.activeId, direction)
     if (!target) return { id: null }
     // selectTabIn materializes the (possibly asleep) target, re-lays-out and saves.
-    this.selectTabIn(pw, target)
+    this.selectTabIn(pw, target, { focusPage: true })
     return { id: target }
   }
 
@@ -5893,7 +5921,9 @@ export class ProfileManager {
       },
       selectTab: (id) => {
         if (!target) throw new Error('no target window')
-        return this.selectTabIn(target, id)
+        // A sidebar click hands the keyboard to the page; a socket/MCP select
+        // leaves it wherever the user has it (foreground-policy.ts, same spirit).
+        return this.selectTabIn(target, id, { focusPage: origin === 'ui' })
       },
       selectPrevTab: () => {
         if (!target) throw new Error('no target window')

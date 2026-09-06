@@ -19,3 +19,26 @@ export function shouldRestorePageFocus(input: {
 }): boolean {
   return input.target === 'page' && input.hasActivePage
 }
+
+/** Should selecting a tab hand the keyboard to the newly active page?
+ *
+ * Switching tabs used to leave the keyboard wherever it was — usually the chrome —
+ * so the first keystroke after a tab switch went to the window instead of the
+ * site. Focusing the page fixes that, but only under four conditions:
+ *
+ * - `userDriven`: the select came from Mira's own UI (click, Cmd+Up/Down, MRU),
+ *   never from a script, an extension hook or the background-open restore, which
+ *   would rip focus out of whatever the user is typing in.
+ * - `windowFocused`: focusing a webContents in a background window is exactly the
+ *   foreground theft foreground-policy.ts forbids.
+ * - `hasActivePage`: the Settings tab is chrome-rendered and has no web view.
+ * - `!overlayOpen`: while the palette or the media gallery is up, layout() hides
+ *   every view — the chrome owns the keyboard on purpose. */
+export function shouldFocusPageOnTabSelect(input: {
+  userDriven: boolean
+  windowFocused: boolean
+  hasActivePage: boolean
+  overlayOpen: boolean
+}): boolean {
+  return input.userDriven && input.windowFocused && input.hasActivePage && !input.overlayOpen
+}
