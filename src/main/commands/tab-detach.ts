@@ -16,6 +16,12 @@ export interface WindowInfo {
   tabCount: number
   bounds: { x: number; y: number; width: number; height: number }
   focused: boolean
+  /** In native (macOS) fullscreen — the window owns its own Space. Its `bounds`
+   * then cover the whole display, menu bar included. */
+  fullScreen: boolean
+  /** Maximized (zoomed) to the work area. Never true at the same time as
+   * `fullScreen`. Both are changed by set-window-fullscreen / set-window-maximized. */
+  maximized: boolean
 }
 
 /** Tab-detach capability slice. `detachTab` resolves the tab across all windows

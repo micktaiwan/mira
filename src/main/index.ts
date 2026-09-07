@@ -592,6 +592,12 @@ app.whenReady().then(async () => {
       newTab: () => runDetached('new-tab', {}, profiles.contextForFocused()),
       duplicateTab: () => runDetached('duplicate-active-tab', {}, profiles.contextForFocused()),
       closeTab: () => runDetached('close-active-tab', {}, profiles.contextForFocused()),
+      toggleFullScreen: () =>
+        runDetached('set-window-fullscreen', {}, profiles.contextForFocused()),
+      exitFullScreen: () =>
+        runDetached('set-window-fullscreen', { fullScreen: false }, profiles.contextForFocused()),
+      groupDuplicateTabs: () =>
+        runDetached('group-duplicate-tabs', {}, profiles.contextForFocused()),
       closeTabToRecent: () =>
         runDetached('close-active-tab', { focus: 'recent' }, profiles.contextForFocused()),
       forgetSite: () => runDetached('forget-site', {}, profiles.contextForFocused()),

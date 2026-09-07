@@ -57,6 +57,17 @@ export interface AppMenuHandlers {
    * the window — window closing moves to Cmd+Shift+W (see the File menu). */
   newTab: () => void
   closeTab: () => void
+  /** Enter or leave native fullscreen for the focused window (Ctrl+Cmd+F), and
+   * the always-available way out of it. Wired to set-window-fullscreen — the
+   * repair for a window left fullscreen by a page (a video whose tab was closed
+   * mid-fullscreen), where the frameless chrome shows no traffic lights. */
+  toggleFullScreen: () => void
+  exitFullScreen: () => void
+  /** Tidy the focused window's tab strip: exact duplicates gathered under their
+   * first occurrence, then same-site tabs brought next to each other (by
+   * registrable domain, then by host). Pinned tabs and tabs inside a folder are
+   * left alone. Wired to the group-duplicate-tabs command. */
+  groupDuplicateTabs: () => void
   /** Close the active tab and land on the last tab viewed, not the strip
    * neighbor (Cmd+Alt+Shift+W). Same command as closeTab, focus:'recent'. */
   closeTabToRecent: () => void
@@ -246,6 +257,13 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         accelerator: 'CmdOrCtrl+Shift+A',
         click: () => handlers.wakeAllTabs()
       },
+      // Reorder-only cleanup of the strip: twins under the first of them, then
+      // same-site tabs side by side. Nothing is opened or closed, and pinned /
+      // foldered tabs never move.
+      {
+        label: 'Group Duplicate Tabs',
+        click: () => handlers.groupDuplicateTabs()
+      },
       { type: 'separator' },
       // Move up / down the vertical tab strip; wraps around the ends. The
       // accelerator is shown for discoverability but NOT registered here
@@ -434,7 +452,19 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         },
         { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => handlers.zoomOut() },
         { type: 'separator' },
-        { role: 'togglefullscreen' }
+        // Our own items, not role:'togglefullscreen': the role only reaches the
+        // KEY window, and a window stuck in fullscreen with a frameless chrome
+        // has no traffic lights to click. These go through the registry, so the
+        // same door is open from the socket.
+        {
+          label: 'Toggle Full Screen',
+          accelerator: 'Control+Command+F',
+          click: () => handlers.toggleFullScreen()
+        },
+        {
+          label: 'Exit Full Screen',
+          click: () => handlers.exitFullScreen()
+        }
       ]
     },
     { role: 'windowMenu' }

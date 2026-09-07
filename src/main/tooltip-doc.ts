@@ -13,7 +13,8 @@ export const PAD = 16
 export const TOOLTIP_HTML = `<!doctype html>
 <html>
 <head><meta charset="utf-8"><style>
-  html, body { margin: 0; background: transparent; }
+  /* The window is sized to the bubble; inline baseline space must not add scrollbars. */
+  html, body { margin: 0; background: transparent; overflow: hidden; }
   body { padding: ${PAD}px; }
   #b {
     display: inline-block;

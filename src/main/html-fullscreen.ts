@@ -15,16 +15,29 @@ export interface PanelSnapshot {
   skillPaneOpen: boolean
 }
 
-/** One fullscreen episode: which tab's page is fullscreen, and the panel state
- * to reapply when it ends. */
+/** One fullscreen episode: which tab's page is fullscreen, the panel state to
+ * reapply when it ends, and whether the WINDOW was already in native fullscreen
+ * before the page asked. */
 export interface FullScreenEpisode {
   tabId: string
   restore: PanelSnapshot
+  /** True when the user had already put the window in native (macOS) fullscreen
+   * before the page went fullscreen — then the window must STAY fullscreen when
+   * the episode ends. False when Chromium fullscreened the window for the page:
+   * the window has to be brought back, and nothing else does it. A tab closed
+   * mid-video is exactly that case — it emits no `leave-html-full-screen`, so
+   * the window used to stay stuck fullscreen with the video gone. */
+  windowWasFullScreen: boolean
 }
 
-/** Start an episode: remember the panels as they are right now. */
-export function enterFullScreen(tabId: string, current: PanelSnapshot): FullScreenEpisode {
-  return { tabId, restore: current }
+/** Start an episode: remember the panels as they are right now, and whether the
+ * window was already fullscreen (so exiting knows whether to bring it back). */
+export function enterFullScreen(
+  tabId: string,
+  current: PanelSnapshot,
+  windowWasFullScreen = false
+): FullScreenEpisode {
+  return { tabId, restore: current, windowWasFullScreen }
 }
 
 /** A panel was toggled during the episode: its restore target becomes the new
@@ -39,4 +52,10 @@ export function panelChanged(
 /** End the episode: the panel state to reapply. */
 export function exitFullScreen(episode: FullScreenEpisode): PanelSnapshot {
   return episode.restore
+}
+
+/** Whether ending this episode must also take the WINDOW out of native
+ * fullscreen: only when the page is what put it there. */
+export function shouldLeaveWindowFullScreen(episode: FullScreenEpisode): boolean {
+  return !episode.windowWasFullScreen
 }

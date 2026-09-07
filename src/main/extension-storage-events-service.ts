@@ -61,6 +61,9 @@ interface SessionState {
 
 export class StorageEventBridgeService {
   private readonly states = new Map<Session, SessionState>()
+  /** Live listener declarations reset on stop; IPC listeners survive when
+   * Electron restarts the same worker version and must only be wired once. */
+  private readonly wiredWorkerIpc = new WeakSet<WorkerLike['ipc']>()
   private workerPreloadPath: string | null = null
   private framePreloadPath: string | null = null
   private ipcInstalled = false
@@ -130,6 +133,7 @@ export class StorageEventBridgeService {
         }
         return
       }
+      if (runningStatus !== 'starting' && runningStatus !== 'running') return
       const worker = this.workerFromVersionId(ses, versionId)
       if (!worker?.scope?.startsWith('chrome-extension://')) return
       const extensionId = extensionIdFromUrl(worker.scope)
@@ -143,15 +147,20 @@ export class StorageEventBridgeService {
       // declared, so a dead subscription can never keep traffic flowing. Its
       // own addListener calls republish within the same startup.
       state.listening.delete(extensionId)
+      const ipc = worker.ipc
+      if (this.wiredWorkerIpc.has(ipc)) return
+      const isCurrent = (): boolean => state.workers.get(extensionId)?.ipc === ipc
       try {
-        worker.ipc.on(STORAGE_REPORT_CHANNEL, (_event, payload) =>
-          this.deliver(ses, extensionId, payload)
-        )
-        worker.ipc.on(STORAGE_LISTEN_CHANNEL, (_event, payload) => {
+        ipc.on(STORAGE_REPORT_CHANNEL, (_event, payload) => {
+          if (isCurrent()) this.deliver(ses, extensionId, payload)
+        })
+        ipc.on(STORAGE_LISTEN_CHANNEL, (_event, payload) => {
+          if (!isCurrent()) return
           const on = readListening(payload)
           if (on === null) return
           state.listening.set(extensionId, on)
         })
+        this.wiredWorkerIpc.add(ipc)
       } catch (error) {
         console.warn(`[mira-storage] cannot wire the worker of ${extensionId}:`, error)
       }
