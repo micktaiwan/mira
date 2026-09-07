@@ -50,12 +50,14 @@ import { tabFoldersCommands } from './tab-folders'
 import { tabDetachCommands } from './tab-detach'
 import { tabMemoryCommands } from './tab-memory'
 import { tabMenuCommands } from './tab-menu'
+import { tabTidyCommands } from './tab-tidy'
 import { tabsCommands } from './tabs'
 import { themeCommands } from './themes'
 import { toastCommands } from './toast'
 import { tooltipCommands } from './tooltip'
 import { tracingCommands } from './tracing'
 import { vaultCommands } from './vault'
+import { windowStateCommands } from './window-state'
 import { zenCommands } from './zen'
 
 // Public types, re-exported so consumers keep importing from './commands'.
@@ -214,12 +216,14 @@ export function createCommandRegistry(): CommandRegistry {
     ...tabMemoryCommands,
     ...tabDetachCommands,
     ...tabMenuCommands,
+    ...tabTidyCommands,
     ...tabsCommands,
     ...themeCommands,
     ...toastCommands,
     ...tooltipCommands,
     ...tracingCommands,
     ...vaultCommands,
+    ...windowStateCommands,
     ...zenCommands
   }
   return buildRegistry(commands)

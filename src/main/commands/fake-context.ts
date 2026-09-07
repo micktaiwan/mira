@@ -55,6 +55,7 @@ import {
   adjacentTab,
   type TabState
 } from '../tab-store'
+import { tidyTabOrder } from '../tab-tidy'
 import {
   type MruHistory,
   type CloseFocus,
@@ -260,6 +261,9 @@ export function makeContext(
   const tabLoads: Array<{ url: string; tabId: string }> = []
   const tabReloads: Array<{ tabId: string; ignoreCache: boolean }> = []
   const windowsClosed: string[] = []
+  // Geometry mode of the fake's single window (set-window-fullscreen /
+  // set-window-maximized), reported back by listWindows.
+  const windowState = { fullScreen: false, maximized: false }
   /** tabId → the URL whose load failed there, mirroring ProfileManager's map. */
   const failedLoads = new Map<string, string>()
   const nav: string[] = []
@@ -1323,6 +1327,11 @@ export function makeContext(
       state.closeArmedId = null
       return { id }
     },
+    tidyTabs: () => {
+      const { tabs, moved } = tidyTabOrder(state.tabs.tabs)
+      state.tabs = { ...state.tabs, tabs }
+      return { moved }
+    },
     moveTab: (id: string, toIndex: number) => {
       if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
       state.tabs = moveTabPure(state.tabs, id, toIndex)
@@ -1357,9 +1366,26 @@ export function makeContext(
         profileId: 'default',
         tabCount: state.tabs.tabs.length,
         bounds: { x: 0, y: 0, width: 1000, height: 720 },
-        focused: true
+        focused: true,
+        fullScreen: windowState.fullScreen,
+        maximized: windowState.maximized
       }
     ],
+    // The fake models one window; its geometry mode is just a pair of flags,
+    // with the real rule that fullscreen wins over maximize.
+    setWindowFullScreen: async (fullScreen?: boolean, windowId?: string) => {
+      const id = windowId ?? 'fake-window'
+      if (id !== 'fake-window') throw new Error(`unknown window: ${id}`)
+      windowState.fullScreen = fullScreen ?? !windowState.fullScreen
+      if (windowState.fullScreen) windowState.maximized = false
+      return { windowId: id, fullScreen: windowState.fullScreen }
+    },
+    setWindowMaximized: async (maximized?: boolean, windowId?: string) => {
+      const id = windowId ?? 'fake-window'
+      if (id !== 'fake-window') throw new Error(`unknown window: ${id}`)
+      if (!windowState.fullScreen) windowState.maximized = maximized ?? !windowState.maximized
+      return { windowId: id, maximized: windowState.maximized }
+    },
     pinTab: (id: string) => {
       if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
       state.tabs = pinTabPure(state.tabs, id)

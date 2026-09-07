@@ -59,6 +59,21 @@ describe('the menu template', () => {
     expect(handlers.fillLogin).toHaveBeenCalledTimes(1)
   })
 
+  it('routes the fullscreen items to their handlers', () => {
+    const handlers = makeHandlers()
+    const template = appMenuTemplate(handlers)
+    const click = (label: string): void =>
+      find(template, label)?.click?.(
+        {} as Parameters<NonNullable<MenuItemConstructorOptions['click']>>[0],
+        undefined,
+        {} as KeyboardEvent
+      )
+    click('Toggle Full Screen')
+    click('Exit Full Screen')
+    expect(handlers.toggleFullScreen).toHaveBeenCalledTimes(1)
+    expect(handlers.exitFullScreen).toHaveBeenCalledTimes(1)
+  })
+
   it('gives no accelerator to two different items', () => {
     // The guard this file exists for: Electron does not complain when two items
     // claim the same accelerator, it silently fires only one of them.

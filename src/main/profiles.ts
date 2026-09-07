@@ -37,6 +37,7 @@ import {
   type WebContents
 } from 'electron'
 import { CHROME_PARTITION } from './chrome-session'
+import { changeWindowFullScreen, changeWindowMaximized } from './window-state'
 import {
   clampCaptureSize,
   resolveScreenshotPath,
@@ -146,6 +147,7 @@ import {
   nextLoadedTab,
   updateTab
 } from './tab-store'
+import { tidyTabOrder } from './tab-tidy'
 import {
   type MruHistory,
   emptyMru,
@@ -208,6 +210,7 @@ import {
   enterFullScreen,
   panelChanged,
   exitFullScreen,
+  shouldLeaveWindowFullScreen,
   type FullScreenEpisode
 } from './html-fullscreen'
 import { decideLocationAction, locationSettingsUrl } from './geolocation'
@@ -2748,7 +2751,10 @@ export class ProfileManager {
     const snapshot = { tabsCollapsed: pw.panelCollapsed, skillPaneOpen: pw.skillPane.open }
     this.toggleTabsPanelIn(pw, true)
     this.setSkillPaneIn(pw, { ...pw.skillPane, open: false })
-    pw.htmlFullScreen = enterFullScreen(tabId, snapshot)
+    // Remember whether the WINDOW was already fullscreen before the page asked:
+    // Chromium fullscreens it for the page, and only we know whether that state
+    // was the user's doing or the video's (see leaveHtmlFullScreenIn).
+    pw.htmlFullScreen = enterFullScreen(tabId, snapshot, pw.window.isFullScreen())
     this.layout(pw)
   }
 
@@ -2758,11 +2764,24 @@ export class ProfileManager {
   private leaveHtmlFullScreenIn(pw: ProfileWindow): void {
     if (!pw.htmlFullScreen) return
     const restore = exitFullScreen(pw.htmlFullScreen)
+    const leaveWindowFullScreen = shouldLeaveWindowFullScreen(pw.htmlFullScreen)
     // Disarm BEFORE reapplying, so the restore toggles are not recorded as
     // during-episode changes.
     pw.htmlFullScreen = null
     this.toggleTabsPanelIn(pw, restore.tabsCollapsed)
     this.setSkillPaneIn(pw, { ...pw.skillPane, open: restore.skillPaneOpen })
+    // Bring the window out of native fullscreen when the page is what put it
+    // there. Chromium does this itself on a normal exit, but NOT when the tab
+    // dies mid-fullscreen (closed or discarded during a video): the window then
+    // stayed fullscreen for good — nothing else takes it back, the flag is
+    // persisted with the session, and it came back fullscreen at every launch.
+    if (leaveWindowFullScreen && !pw.window.isDestroyed()) {
+      // Also cancel a pending ENTER: isFullScreen() can still be false here.
+      // Persist only once the native transition settles, while the window lives.
+      void this.setWindowFullScreenIn(pw, false).catch((error) => {
+        if (!pw.window.isDestroyed()) console.error('[mira] leaving HTML fullscreen:', error)
+      })
+    }
   }
 
   /** Position the active view below the toolbar, offset right by the tab panel
@@ -3651,6 +3670,8 @@ export class ProfileManager {
     tabCount: number
     bounds: { x: number; y: number; width: number; height: number }
     focused: boolean
+    fullScreen: boolean
+    maximized: boolean
   }> {
     const focused = this.findByWindow(BrowserWindow.getFocusedWindow())
     const out: ReturnType<ProfileManager['listOpenWindows']> = []
@@ -3662,10 +3683,43 @@ export class ProfileManager {
         profileId: pw.id,
         tabCount: pw.state.tabs.length,
         bounds: { x: b.x, y: b.y, width: b.width, height: b.height },
-        focused: pw === focused
+        focused: pw === focused,
+        // The geometry MODE, not just the rectangle: a window sitting at the
+        // display's full size is not necessarily fullscreen, and only these
+        // flags tell them apart from outside (set-window-fullscreen /
+        // set-window-maximized act on them).
+        fullScreen: pw.window.isFullScreen(),
+        maximized: pw.window.isMaximized()
       })
     }
     return out
+  }
+
+  /** Resolve a windowId to its live window, defaulting to the context's target.
+   * Throws with the same shape as the other window-addressed operations. */
+  private windowFor(target: ProfileWindow | null, windowId?: string): ProfileWindow {
+    if (windowId === undefined) {
+      if (!target) throw new Error('no target window')
+      return target
+    }
+    const pw = this.openById.get(windowId)
+    if (!pw || pw.window.isDestroyed()) throw new Error(`unknown window: ${windowId}`)
+    return pw
+  }
+
+  /** Enter / leave native fullscreen (default: toggle). Leaving restores the
+   * window's normal rectangle, which Electron kept while it was fullscreen. The
+   * new state is persisted like any other geometry change, so it does not come
+   * back at the next launch. */
+  private async setWindowFullScreenIn(pw: ProfileWindow, fullScreen?: boolean): Promise<boolean> {
+    return changeWindowFullScreen(pw.window, fullScreen, () => this.saveSession(pw))
+  }
+
+  /** Maximize (zoom) or restore the window (default: toggle). Fullscreen wins
+   * over maximize on macOS, so a fullscreen window is left alone — the caller
+   * exits fullscreen first. */
+  private async setWindowMaximizedIn(pw: ProfileWindow, maximized?: boolean): Promise<boolean> {
+    return changeWindowMaximized(pw.window, maximized, () => this.saveSession(pw))
   }
 
   /** Enable CDP Network events on a tab's already-attached debugger and route
@@ -4540,6 +4594,18 @@ export class ProfileManager {
     // selectTabIn materializes the (possibly asleep) target, re-lays-out and saves.
     this.selectTabIn(pw, target, { focusPage: true })
     return { id: target }
+  }
+
+  /** Tidy the window's strip: duplicates under their first occurrence, same-site
+   * tabs together (see tab-tidy.ts). Order-only, like moveTabIn — the visible view
+   * and the active tab do not change, so no re-layout, just push and persist. */
+  private tidyTabsIn(pw: ProfileWindow): { moved: number } {
+    const { tabs, moved } = tidyTabOrder(pw.state.tabs)
+    if (moved === 0) return { moved: 0 }
+    pw.state = { ...pw.state, tabs }
+    this.pushTabs(pw)
+    this.saveSession(pw)
+    return { moved }
   }
 
   private moveTabIn(pw: ProfileWindow, id: string, toIndex: number): { id: string } {
@@ -5890,6 +5956,10 @@ export class ProfileManager {
         if (!target) throw new Error('no target window')
         return this.moveTabIn(target, id, toIndex)
       },
+      tidyTabs: () => {
+        if (!target) throw new Error('no target window')
+        return this.tidyTabsIn(target)
+      },
       // Tear a tab off the target window into another window of the same profile:
       // onto an existing window under the drop point, or a fresh one there. The tab
       // is resolved in the target window (the chrome that owns the sidebar drag).
@@ -5903,6 +5973,20 @@ export class ProfileManager {
       // selects the tab in place (foreground-policy.ts).
       activateTab: (id) => this.activateTabById(id, raiseAllowed),
       listWindows: () => this.listOpenWindows(),
+      setWindowFullScreen: async (fullScreen, windowId) => {
+        const pw = this.windowFor(target, windowId)
+        return {
+          windowId: pw.windowId,
+          fullScreen: await this.setWindowFullScreenIn(pw, fullScreen)
+        }
+      },
+      setWindowMaximized: async (maximized, windowId) => {
+        const pw = this.windowFor(target, windowId)
+        return {
+          windowId: pw.windowId,
+          maximized: await this.setWindowMaximizedIn(pw, maximized)
+        }
+      },
       // A menu/UI close is a user close (the last window quits Mira, through the
       // confirmation gate); a socket/MCP close never quits (foreground-policy's
       // origin, same rule as close-profile — agents use `quit` for that).

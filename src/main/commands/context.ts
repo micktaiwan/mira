@@ -41,12 +41,14 @@ import type { TabDetachContext } from './tab-detach'
 import type { TabFoldersContext } from './tab-folders'
 import type { TabMemoryContext } from './tab-memory'
 import type { TabMenuContext } from './tab-menu'
+import type { TabTidyContext } from './tab-tidy'
 import type { TabsContext } from './tabs'
 import type { ThemeContext } from './themes'
 import type { ToastContext } from './toast'
 import type { TooltipContext } from './tooltip'
 import type { TracingContext } from './tracing'
 import type { VaultContext } from './vault'
+import type { WindowStateContext } from './window-state'
 import type { ZenContext } from './zen'
 
 export type CommandContext = AppContext &
@@ -84,10 +86,12 @@ export type CommandContext = AppContext &
   TabFoldersContext &
   TabMemoryContext &
   TabMenuContext &
+  TabTidyContext &
   TabsContext &
   ThemeContext &
   ToastContext &
   TooltipContext &
   TracingContext &
   VaultContext &
+  WindowStateContext &
   ZenContext

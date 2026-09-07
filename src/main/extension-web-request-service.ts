@@ -77,6 +77,9 @@ interface PendingAuth {
 
 export class WebRequestBridgeService {
   private readonly states = new Map<Session, SessionState>()
+  /** Electron can reuse a worker's IPC across a same-version restart. Its
+   * handlers survive even though our live subscriptions must be reset. */
+  private readonly wiredWorkerIpc = new WeakSet<WorkerLike['ipc']>()
   private readonly pendingAuth = new Map<string, PendingAuth>()
   private preloadPath: string | null = null
   private authHooked = false
@@ -163,6 +166,7 @@ export class WebRequestBridgeService {
         }
         return
       }
+      if (runningStatus !== 'starting' && runningStatus !== 'running') return
       const worker = this.workerFromVersionId(ses, versionId)
       if (!worker?.scope?.startsWith('chrome-extension://')) return
       const extensionId = idFromScope(worker.scope)
@@ -176,12 +180,19 @@ export class WebRequestBridgeService {
       // declared so a dead subscription can never keep traffic flowing. Its own
       // addListener calls republish within the same startup.
       state.subscriptions.delete(extensionId)
+      const ipc = worker.ipc
+      if (this.wiredWorkerIpc.has(ipc)) return
+      const isCurrent = (): boolean => state.workers.get(extensionId)?.ipc === ipc
       try {
-        worker.ipc.handle(WEB_REQUEST_SUBSCRIBE_CHANNEL, (_event, payload) => {
+        ipc.handle(WEB_REQUEST_SUBSCRIBE_CHANNEL, (_event, payload) => {
+          if (!isCurrent()) return { ok: false }
           this.setSubscriptions(ses, extensionId, payload)
           return { ok: true }
         })
-        worker.ipc.on(WEB_REQUEST_REPLY_CHANNEL, (_event, payload) => this.settleAuth(payload))
+        ipc.on(WEB_REQUEST_REPLY_CHANNEL, (_event, payload) => {
+          if (isCurrent()) this.settleAuth(payload)
+        })
+        this.wiredWorkerIpc.add(ipc)
         console.log(`[mira-webrequest] wired ${extensionId} worker version=${versionId}`)
       } catch (error) {
         console.warn(`[mira-webrequest] cannot wire the worker of ${extensionId}:`, error)

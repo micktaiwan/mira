@@ -170,10 +170,19 @@ function setup(): {
     recentTabForward: () => ({ id: null }),
     reopenClosedTab: () => ({ reopened: false, id: null }),
     moveTab: (id: string) => ({ id }),
+    tidyTabs: () => ({ moved: 0 }),
     detachTab: async () => ({ windowId: 'w', created: true }),
     moveTabToWindow: (_id: string, windowId: string) => ({ windowId }),
     activateTab: (id: string) => ({ windowId: 'w', id }),
     listWindows: () => [],
+    setWindowFullScreen: async (fullScreen?: boolean) => ({
+      windowId: 'w1',
+      fullScreen: fullScreen ?? false
+    }),
+    setWindowMaximized: async (maximized?: boolean) => ({
+      windowId: 'w1',
+      maximized: maximized ?? false
+    }),
     closeWindow: () => ({ windowId: 'w1', closed: true }),
     pinTab: (id: string) => ({ id, pinned: true }),
     unpinTab: (id: string) => ({ id, pinned: false }),
