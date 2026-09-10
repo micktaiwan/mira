@@ -163,6 +163,7 @@ function setup(): {
     discardTab: (id: string) => ({ discarded: true, id }),
     discardActiveTab: () => ({ discarded: true, id: 'tab' }),
     wakeAllTabs: () => ({ woken: 0 }),
+    sleepAllTabs: () => ({ slept: 0 }),
     selectTab: (id: string) => ({ id }),
     selectPrevTab: () => ({ id: null }),
     selectNextTab: () => ({ id: null }),

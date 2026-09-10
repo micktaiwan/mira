@@ -29,6 +29,17 @@ export interface WindowOpenDetails {
   /** The opener page's referrer, as Electron reports it. Carried onto the new
    * tab's load so it behaves like Chrome's target=_blank — see below. */
   referrer?: { url: string }
+  /** Set by Electron ONLY when the new window comes from a FORM that posts to
+   * target=_blank. Its body has to be replayed on the tab's load, or the page
+   * that opens is a plain GET of the form action — see postLoad below. */
+  postBody?: { data: unknown[]; contentType?: string; boundary?: string }
+}
+
+/** What a tab has to replay to reproduce a form POST: the raw body parts, in
+ * Electron's loadURL(postData) shape, plus the Content-Type the form used. */
+export interface PostLoad {
+  postData: unknown[]
+  extraHeaders: string
 }
 
 export type WindowOpenDecision =
@@ -39,8 +50,10 @@ export type WindowOpenDecision =
    * linkedin.com Referer — verified 2026-07-16). Undefined when the opener had
    * an empty referrer (e.g. a rel=noreferrer link).
    * background: true for a Cmd+click ('background-tab') — the new tab is added
-   * without becoming active, so the user stays on the page they were reading. */
-  | { kind: 'tab'; url: string; referrer?: string; background: boolean }
+   * without becoming active, so the user stays on the page they were reading.
+   * post: set when the opener was a form posting to target=_blank; the tab must
+   * load with this body instead of a bare GET (see postLoad). */
+  | { kind: 'tab'; url: string; referrer?: string; background: boolean; post?: PostLoad }
 
 /** Decide how to handle a window.open: as a real popup window (opener preserved,
  * needed for OAuth/SSO) or as a Mira tab. */
@@ -50,7 +63,29 @@ export function decideWindowOpen(details: WindowOpenDetails): WindowOpenDecision
   }
   const referrer = details.referrer?.url || undefined
   const background = details.disposition === 'background-tab'
-  return { kind: 'tab', url: details.url, referrer, background }
+  return { kind: 'tab', url: details.url, referrer, background, post: postLoad(details) }
+}
+
+/** Turn Electron's postBody into what loadURL needs, or undefined when the open
+ * carries no form body (the ordinary target=_blank link).
+ *
+ * WHY this exists: a form that posts to target=_blank is the only window.open
+ * whose URL alone does not reproduce the page. Re-fetching the action with a GET
+ * gets a different response — for a PrimeFaces "download this attachment" button
+ * (impots.gouv.fr's messagerie, verified 2026-09-09) the POST returns the PDF
+ * with Content-Disposition: attachment, while the GET just re-renders the portal
+ * and nothing downloads. So the body travels with the decision and the tab
+ * replays it.
+ *
+ * The Content-Type must be rebuilt by hand: Chromium reports the form's encoding
+ * in `contentType` and, for multipart bodies, the separator in `boundary` — and a
+ * multipart body is unparseable server-side without its boundary. */
+export function postLoad(details: WindowOpenDetails): PostLoad | undefined {
+  const body = details.postBody
+  if (!body || !Array.isArray(body.data) || body.data.length === 0) return undefined
+  const contentType = body.contentType || 'application/x-www-form-urlencoded'
+  const full = body.boundary ? `${contentType}; boundary=${body.boundary}` : contentType
+  return { postData: body.data, extraHeaders: `Content-Type: ${full}` }
 }
 
 /** Same decision, but for a window.open coming from an EXTENSION page (a

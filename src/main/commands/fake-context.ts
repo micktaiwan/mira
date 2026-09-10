@@ -61,6 +61,7 @@ import {
   setKeepAwake as setKeepAwakePure,
   closeActiveDecision,
   nextLoadedTab,
+  tabsToSleep,
   adjacentTab,
   type TabState
 } from '../tab-store'
@@ -1330,6 +1331,13 @@ export function makeContext(
         woken++
       }
       return { woken }
+    },
+    // Mirrors sleepAllTabsIn on the fake's lazy-load model: the chosen tabs just
+    // leave loadedTabIds (there is no view to tear down).
+    sleepAllTabs: () => {
+      const ids = tabsToSleep(state.tabs, state.loadedTabIds)
+      for (const id of ids) state.loadedTabIds.delete(id)
+      return { slept: ids.length }
     },
     discardTab: (id: string) => {
       if (!state.tabs.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)

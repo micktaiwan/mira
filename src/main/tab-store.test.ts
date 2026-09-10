@@ -16,6 +16,7 @@ import {
   stampActiveTab,
   closeActiveDecision,
   nextLoadedTab,
+  tabsToSleep,
   adjacentTab,
   type TabMeta
 } from './tab-store'
@@ -247,6 +248,35 @@ describe('nextLoadedTab', () => {
     const s = abc('b')
     nextLoadedTab(s, all)
     expect(s.tabs.map((t) => t.id)).toEqual(['a', 'b', 'c'])
+  })
+})
+
+describe('tabsToSleep', () => {
+  const strip = (): ReturnType<typeof selectTab> => {
+    let s = emptyTabState()
+    s = addTab(s, { ...tab('p'), pinned: true })
+    s = addTab(s, tab('a'))
+    s = addTab(s, { ...tab('k'), keepAwake: true })
+    s = addTab(s, tab('b'))
+    s = addTab(s, tab('c'))
+    return selectTab(s, 'b')
+  }
+
+  it('lists the loaded tabs except pinned, keep-awake and active, in strip order', () => {
+    expect(tabsToSleep(strip(), new Set(['p', 'a', 'k', 'b', 'c']))).toEqual(['a', 'c'])
+  })
+
+  it('never lists a tab that is already asleep', () => {
+    expect(tabsToSleep(strip(), new Set(['p', 'b', 'c']))).toEqual(['c'])
+  })
+
+  it('spares an unpinned active tab (the page on screen stays)', () => {
+    const s = selectTab(strip(), 'a')
+    expect(tabsToSleep(s, new Set(['a', 'c']))).toEqual(['c'])
+  })
+
+  it('returns nothing on an empty list', () => {
+    expect(tabsToSleep(emptyTabState(), new Set())).toEqual([])
   })
 })
 

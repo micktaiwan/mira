@@ -205,6 +205,20 @@ export function nextLoadedTab(state: TabState, loaded: ReadonlySet<string>): str
   return null
 }
 
+/** The tabs "Sleep All Except Pinned" puts to sleep: every loaded tab except the
+ * pinned ones, the keep-awake ones (immune to discard by definition) and the
+ * active one (the page on screen stays, so focus never moves and nothing new
+ * opens). `loaded` is the set of tab ids that currently have a live view, so an
+ * already-asleep tab is never listed. Strip order. Does not mutate the list. */
+export function tabsToSleep(state: TabState, loaded: ReadonlySet<string>): string[] {
+  return state.tabs
+    .filter(
+      (t) =>
+        loaded.has(t.id) && t.id !== state.activeId && t.pinned !== true && t.keepAwake !== true
+    )
+    .map((t) => t.id)
+}
+
 /** The tab one step from the active one in the strip: `direction` -1 for the
  * previous (arrow up), +1 for the next (arrow down). Steps through EVERY tab,
  * asleep or not — this is deliberate navigation (selecting a sleeper wakes it),

@@ -92,6 +92,9 @@ export interface AppMenuHandlers {
    * only wakes the active tab, this reloads the rest of that saved set. Wired to
    * the wake-all-tabs command; a no-op when they are already awake. */
   wakeAllTabs: () => void
+  /** Put every tab to sleep except the pinned, keep-awake and active ones: the
+   * inverse of Wake All Tabs. Wired to the sleep-all-tabs command. */
+  sleepAllTabs: () => void
   /** Step up / down the vertical tab strip (Cmd+Up / Cmd+Down). Wired to the
    * prev-tab / next-tab commands; steps through every tab, asleep or not. */
   prevTab: () => void
@@ -256,6 +259,12 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         label: 'Wake All Tabs',
         accelerator: 'CmdOrCtrl+Shift+A',
         click: () => handlers.wakeAllTabs()
+      },
+      // The inverse, to reclaim RAM in one go: pinned, keep-awake and the tab on
+      // screen stay live. No accelerator yet.
+      {
+        label: 'Sleep All Except Pinned',
+        click: () => handlers.sleepAllTabs()
       },
       // Reorder-only cleanup of the strip: twins under the first of them, then
       // same-site tabs side by side. Nothing is opened or closed, and pinned /
