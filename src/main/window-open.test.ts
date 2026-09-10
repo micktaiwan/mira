@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { decideWindowOpen, decideExtensionWindowOpen } from './window-open'
+import { decideWindowOpen, decideExtensionWindowOpen, postLoad } from './window-open'
 
 describe('decideWindowOpen', () => {
   it('routes a popup (new-window) to a real child window — OAuth/SSO opener survives', () => {
@@ -149,5 +149,47 @@ describe('decideExtensionWindowOpen', () => {
         disposition: 'foreground-tab'
       })
     ).toEqual({ kind: 'ignore' })
+  })
+})
+
+describe('postLoad — a form posting to target=_blank', () => {
+  it('replays a multipart body with its boundary, without which it is unparseable', () => {
+    expect(
+      decideWindowOpen({
+        url: 'https://cfspart.impots.gouv.fr/gaia2-zu-mapi/pages/index.xhtml',
+        disposition: 'foreground-tab',
+        postBody: {
+          data: [{ type: 'rawData', bytes: Buffer.from('a=1') }],
+          contentType: 'multipart/form-data',
+          boundary: '----WebKitFormBoundaryXyZ'
+        }
+      })
+    ).toEqual({
+      kind: 'tab',
+      url: 'https://cfspart.impots.gouv.fr/gaia2-zu-mapi/pages/index.xhtml',
+      referrer: undefined,
+      background: false,
+      post: {
+        postData: [{ type: 'rawData', bytes: Buffer.from('a=1') }],
+        extraHeaders: 'Content-Type: multipart/form-data; boundary=----WebKitFormBoundaryXyZ'
+      }
+    })
+  })
+
+  it('defaults the encoding when Chromium reports none, and omits an absent boundary', () => {
+    expect(
+      postLoad({
+        url: 'https://example.com/action',
+        postBody: { data: [{ type: 'rawData', bytes: Buffer.from('a=1') }] }
+      })
+    ).toEqual({
+      postData: [{ type: 'rawData', bytes: Buffer.from('a=1') }],
+      extraHeaders: 'Content-Type: application/x-www-form-urlencoded'
+    })
+  })
+
+  it('carries no post for an ordinary target=_blank link (no body, or an empty one)', () => {
+    expect(postLoad({ url: 'https://example.com' })).toBeUndefined()
+    expect(postLoad({ url: 'https://example.com', postBody: { data: [] } })).toBeUndefined()
   })
 })

@@ -608,6 +608,7 @@ app.whenReady().then(async () => {
       reopenTab: () => runDetached('reopen-closed-tab', {}, profiles.contextForFocused()),
       discardTab: () => runDetached('discard-active-tab', {}, profiles.contextForFocused()),
       wakeAllTabs: () => runDetached('wake-all-tabs', {}, profiles.contextForFocused()),
+      sleepAllTabs: () => runDetached('sleep-all-tabs', {}, profiles.contextForFocused()),
       prevTab: () => runDetached('prev-tab', {}, profiles.contextForFocused()),
       nextTab: () => runDetached('next-tab', {}, profiles.contextForFocused()),
       recentTabBack: () => runDetached('recent-tab-back', {}, profiles.contextForFocused()),

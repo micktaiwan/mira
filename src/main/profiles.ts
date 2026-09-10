@@ -145,6 +145,7 @@ import {
   setKeepAwake as setKeepAwakePure,
   closeActiveDecision,
   nextLoadedTab,
+  tabsToSleep,
   updateTab
 } from './tab-store'
 import { tidyTabOrder } from './tab-tidy'
@@ -190,7 +191,12 @@ import {
   type TabFolders
 } from './tab-folder-store'
 import { dockRight } from './devtools-layout'
-import { decideWindowOpen, decideExtensionWindowOpen, type WindowOpenDetails } from './window-open'
+import {
+  decideWindowOpen,
+  decideExtensionWindowOpen,
+  type WindowOpenDetails,
+  type PostLoad
+} from './window-open'
 import { installHoverReporter, reduceHover, hoverText, EMPTY_HOVER, type HoverEvent } from './hover'
 import { evalInWebContents } from './cdp-eval'
 import { keyToDispatchEvents } from './input-keys'
@@ -1821,7 +1827,12 @@ export class ProfileManager {
    * loading its url. This is the lazy-load boundary: a tab exists in the strip
    * without a view until it is first selected. No-op if already materialized.
    * All tabs of a profile window share the profile's session partition. */
-  private materializeTab(pw: ProfileWindow, tab: TabMeta, httpReferrer?: string): void {
+  private materializeTab(
+    pw: ProfileWindow,
+    tab: TabMeta,
+    httpReferrer?: string,
+    post?: PostLoad
+  ): void {
     if (pw.views.has(tab.id)) return
     // The Settings tab is chrome, not a web page: it never gets a WebContentsView.
     // layout() then hides every view while it is active, so the chrome's Settings
@@ -1908,7 +1919,15 @@ export class ProfileManager {
       // opener's URL as httpReferrer, as Chrome does for a target=_blank open —
       // some outbound gateways (LinkedIn's safety/go) 404 without it.
       // decision.background is the Cmd+click case: load it behind and stay put.
-      this.newTabIn(host, decision.url, false, tab.id, decision.background, decision.referrer)
+      this.newTabIn(
+        host,
+        decision.url,
+        false,
+        tab.id,
+        decision.background,
+        decision.referrer,
+        decision.post
+      )
       return { action: 'deny' }
     })
     // A blank tab (empty stored url) shows Mira's home page — the session summary —
@@ -1921,8 +1940,19 @@ export class ProfileManager {
     // outbound gateways require it: LinkedIn's www.linkedin.com/safety/go?url=…
     // drops the url and 404s to its language page without a linkedin.com Referer
     // (verified 2026-07-16). Only applies to a real url — the blank home has none.
-    if (tab.url && httpReferrer) {
-      view.webContents.loadURL(tab.url, { httpReferrer })
+    // `post` is the form-POST replay (a target=_blank form open): without it the
+    // action url would be re-fetched as a GET and the page that opens is not the
+    // one the form asked for — see postLoad in window-open.ts.
+    if (tab.url && (httpReferrer || post)) {
+      view.webContents.loadURL(tab.url, {
+        ...(httpReferrer ? { httpReferrer } : {}),
+        ...(post
+          ? {
+              postData: post.postData as Electron.LoadURLOptions['postData'],
+              extraHeaders: post.extraHeaders
+            }
+          : {})
+      })
     } else {
       view.webContents.loadURL(tab.url || this.blankPageUrl(pw))
     }
@@ -1955,7 +1985,8 @@ export class ProfileManager {
     focusChrome = false,
     afterId?: string,
     background = false,
-    httpReferrer?: string
+    httpReferrer?: string,
+    post?: PostLoad
   ): TabMeta {
     const prevActiveId = pw.state.activeId
     const now = Date.now()
@@ -1982,7 +2013,7 @@ export class ProfileManager {
     if (pw.state.activeId === tab.id) pw.state = stampActiveTab(pw.state, now)
     // The active tab may have changed: a pinned tab armed by Cmd+W is disarmed.
     pw.closeArmedId = null
-    this.materializeTab(pw, tab, httpReferrer)
+    this.materializeTab(pw, tab, httpReferrer, post)
     if (!background) {
       // Only the foreground path changed the active tab; skip the extension notify
       // (and any focusChrome) when opening in background so nothing steals focus.
@@ -3622,36 +3653,44 @@ export class ProfileManager {
     }
   }
 
-  /** Ensure `wc`'s tab is visible so real input (press-key) can land — Chromium
-   * silently drops a key sent to a hidden page. If already visible, a no-op.
+  /** Make `wc`'s tab the one its window would deliver input to, and say whether
+   * that succeeded. Called before every CDP input dispatch (press-key, click).
    *
-   * The escalation is deliberately focus-free, because press-key is a scripting
-   * command and a script must not steal the foreground (foreground-policy.ts):
-   *   1. select the tab in its own window — no raise, no activation;
-   *   2. still hidden? the window is minimized or fully covered by another app's
-   *      window (macOS occlusion marks the page hidden). restore + showInactive +
-   *      moveTop put it back on screen and on top of the z-order WITHOUT
-   *      activating Mira: the keyboard stays where the user left it.
-   * Returns whether the page reported visible within the budget; the caller turns
-   * a false into an error rather than a silent no-op keypress. */
+   * The distinction this makes is the whole point, because `document.visibilityState`
+   * collapses two very different states into the same `hidden`:
+   *   1. the tab is NOT the selected tab of its window. Its WebContentsView is not
+   *      the one laid out, so nothing can reach it. Selecting it fixes that, and it
+   *      is the only case where input genuinely cannot land.
+   *   2. the tab IS selected, but its window is minimized or fully covered by
+   *      another app (macOS marks the page occluded, so `visibilityState` reads
+   *      `hidden`). CDP `Input.dispatch*Event` goes straight into the renderer's
+   *      input pipeline and does not travel through the OS, so occlusion changes
+   *      nothing about whether the event lands.
+   *
+   * Treating case 2 as a failure is what used to make this refuse, and the only
+   * remedy it offered was raising the window — the one thing a scripting command
+   * must never do (foreground-policy.ts, and Mickael on 2026-09-10: he cannot keep
+   * Mira in front, he has other work on screen). So: select the tab, never raise,
+   * and let an occluded page be driven. */
   private async ensurePageVisibleForInput(wc: WebContents, id?: string): Promise<boolean> {
+    // Fast path: already the visible page of an unoccluded window.
     if (await this.isPageVisible(wc)) return true
-    if (id) {
+    if (!id) return false
+    const pw = this.ownerOf(id)
+    if (!pw || pw.window.isDestroyed()) return false
+    if (pw.state.activeId !== id) {
       try {
         this.activateTabById(id)
       } catch {
-        // Unknown/asleep tab: fall through to the poll, which will fail cleanly.
+        return false
       }
+      // Layout + compositor need a beat after a tab switch. A page that reports
+      // visible here is the unoccluded case; one that does not is case 2 below,
+      // which is fine.
+      if (await this.pollPageVisible(wc, 10)) return true
     }
-    if (await this.pollPageVisible(wc, 10)) return true
-    // Second try: put the window back on screen, still without activating the app.
-    const pw = id ? this.ownerOf(id) : null
-    if (pw && !pw.window.isDestroyed()) {
-      if (pw.window.isMinimized()) pw.window.restore()
-      if (!pw.window.isVisible()) pw.window.showInactive()
-      pw.window.moveTop()
-    }
-    return this.pollPageVisible(wc, 10)
+    // Case 2: selected tab, occluded or minimized window. Input still lands.
+    return pw.state.activeId === id
   }
 
   /** Poll `isPageVisible` up to `tries` times, 50 ms apart (layout + compositor
@@ -4150,6 +4189,19 @@ export class ProfileManager {
       this.saveSession(pw)
     }
     return { woken }
+  }
+
+  /** Put every loaded tab to sleep except the pinned, keep-awake and active ones
+   * (the pick lives in tabsToSleep). Focus and layout are untouched: only
+   * background views are torn down. Returns how many tabs it put to sleep. */
+  private sleepAllTabsIn(pw: ProfileWindow): { slept: number } {
+    const ids = tabsToSleep(pw.state, new Set(pw.views.keys()))
+    for (const id of ids) this.discardView(pw, id)
+    if (ids.length > 0) {
+      this.pushTabs(pw)
+      this.saveSession(pw)
+    }
+    return { slept: ids.length }
   }
 
   private selectTabIn(
@@ -4968,7 +5020,15 @@ export class ProfileManager {
     if (!target) return { action: 'allow' }
     // Same foreground/background rule as a page link: a Cmd+click inside an
     // extension popup loads behind. focusChrome is ignored on the background path.
-    this.newTabIn(target, decision.url, true, undefined, decision.background, decision.referrer)
+    this.newTabIn(
+      target,
+      decision.url,
+      true,
+      undefined,
+      decision.background,
+      decision.referrer,
+      decision.post
+    )
     return { action: 'deny' }
   }
 
@@ -5785,15 +5845,15 @@ export class ProfileManager {
         // case. isTrusted:true, so keyboard-shortcut UIs (Kondo archive 'e', …)
         // fire, which a synthetic DOM KeyboardEvent can't guarantee.
         const wc = this.webContentsForTab(target, tabId)
-        // Chromium delivers input ONLY to a visible tab; a hidden/background tab
-        // silently drops it (a misleading "ok" with no effect). Make the target
-        // the visible tab of its window first — without activating the app — then
-        // confirm; never report a false success.
+        // A tab that is not the selected one of its window cannot receive input,
+        // so select it first — without activating the app, and without raising the
+        // window. An occluded or minimized window is NOT a blocker: CDP input goes
+        // into the renderer directly (see ensurePageVisibleForInput).
         const id = tabId ?? target?.state.activeId ?? undefined
         const visible = await this.ensurePageVisibleForInput(wc, id)
         if (!visible) {
           throw new Error(
-            'tab could not be made visible for input (Mira may be hidden — `focus-app` first)'
+            'tab could not be selected for input (unknown tab, or its window is gone)'
           )
         }
         const events = keyToDispatchEvents(key, modifiers)
@@ -5816,7 +5876,7 @@ export class ProfileManager {
         const visible = await this.ensurePageVisibleForInput(wc, id)
         if (!visible) {
           throw new Error(
-            'tab could not be made visible for input (Mira may be hidden — bring its window forward)'
+            'tab could not be selected for input (unknown tab, or its window is gone)'
           )
         }
         // A named target is resolved INSIDE the page, so the coordinates are the
@@ -6020,6 +6080,10 @@ export class ProfileManager {
       wakeAllTabs: () => {
         if (!target) throw new Error('no target window')
         return this.wakeAllTabsIn(target)
+      },
+      sleepAllTabs: () => {
+        if (!target) throw new Error('no target window')
+        return this.sleepAllTabsIn(target)
       },
       moveTab: (id, toIndex) => {
         if (!target) throw new Error('no target window')

@@ -583,6 +583,30 @@ describe('wake-all-tabs', () => {
   })
 })
 
+describe('sleep-all-tabs', () => {
+  it('sleeps every loaded tab except pinned, keep-awake and active', () => {
+    const { ctx, tabState, loadedTabIds } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', { url: 'https://a.test' }, ctx) // tab-2
+    registry.execute('new-tab', { url: 'https://b.test' }, ctx) // tab-3
+    registry.execute('new-tab', { url: 'https://c.test' }, ctx) // tab-4, active
+    registry.execute('pin-tab', { id: 'tab-1' }, ctx)
+    registry.execute('set-tab-awake', { id: 'tab-2', keepAwake: true }, ctx)
+    for (const t of tabState().tabs) loadedTabIds.add(t.id)
+
+    expect(registry.execute('sleep-all-tabs', {}, ctx)).toEqual({ ok: true, slept: 1 })
+    expect([...loadedTabIds].sort()).toEqual(['tab-1', 'tab-2', 'tab-4'])
+    expect(tabState().activeId).toBe('tab-4')
+  })
+
+  it('is a no-op when nothing else is awake', () => {
+    const { ctx, loadedTabIds } = makeContext()
+    const registry = createCommandRegistry()
+    loadedTabIds.add('tab-1')
+    expect(registry.execute('sleep-all-tabs', {}, ctx)).toEqual({ ok: true, slept: 0 })
+  })
+})
+
 describe('list-tabs', () => {
   it('returns the tabs, active id and panel state', () => {
     const { ctx } = makeContext()

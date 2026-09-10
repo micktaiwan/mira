@@ -102,6 +102,11 @@ export interface TabsContext {
    * active tab untouched. Returns how many tabs it woke this call (0 when the set is
    * already fully awake, or the window was opened fresh). */
   wakeAllTabs: () => { woken: number }
+  /** Put every loaded tab to sleep except the pinned ones, the keep-awake ones and
+   * the active one — the inverse of wakeAllTabs, to reclaim RAM in one go. Focus
+   * does not move. Returns how many tabs it put to sleep (0 when nothing else was
+   * awake). */
+  sleepAllTabs: () => { slept: number }
   /** Focus an existing tab. Throws on an unknown id. */
   selectTab: (id: string) => { id: string }
   /** Select the previous tab in the strip (arrow up): the one above the active
@@ -293,6 +298,18 @@ export const tabsCommands: CommandMap<CommandContext> = {
     try {
       const { woken } = ctx.wakeAllTabs()
       return { ok: true, woken }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // The File-menu "Sleep All Except Pinned": free the RAM of every other tab in one
+  // go. Pinned, keep-awake and the active tab stay live, so the screen and focus
+  // are untouched. A no-op (slept:0) when nothing else is awake.
+  'sleep-all-tabs': (ctx) => {
+    try {
+      const { slept } = ctx.sleepAllTabs()
+      return { ok: true, slept }
     } catch (error) {
       return fail(error)
     }
