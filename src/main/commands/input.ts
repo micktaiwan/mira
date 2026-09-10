@@ -8,9 +8,15 @@
 import { type CommandMap, fail } from './registry'
 import type { CommandContext } from './context'
 import type { CdpModifier } from '../input-keys'
+import { parseClickParams, type ParsedClick } from '../input-mouse'
 
 /** Input capability slice. */
 export interface InputContext {
+  /** Click a tab's page for real (CDP mouse events), at a target resolved inside
+   * that page. Same tab resolution, visibility guard and errors as pressKeyInTab
+   * — a click that lands on a hidden tab is swallowed by Chromium, so it must
+   * fail loudly rather than answer ok. Resolves with where it clicked. */
+  clickInTab: (click: ParsedClick) => Promise<{ x: number; y: number; target: string }>
   /** Send a real keypress (keyDown+keyUp) to a tab's page. With a `tabId`, the
    * tab is looked up across ALL windows (ids are UUIDs); without one, the target
    * window's active tab. `modifiers` hold ctrl/meta/alt/shift for the press.
@@ -47,6 +53,17 @@ export const inputCommands: CommandMap<CommandContext> = {
     try {
       await ctx.pressKeyInTab(key, tabId, modifiers)
       return { ok: true, result: { key } }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  click: async (ctx, params) => {
+    const parsed = parseClickParams(params)
+    if ('error' in parsed) return { ok: false, error: parsed.error }
+    try {
+      const { x, y, target } = await ctx.clickInTab(parsed)
+      return { ok: true, x, y, target }
     } catch (error) {
       return fail(error)
     }

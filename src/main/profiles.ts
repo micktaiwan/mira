@@ -194,6 +194,8 @@ import { decideWindowOpen, decideExtensionWindowOpen, type WindowOpenDetails } f
 import { installHoverReporter, reduceHover, hoverText, EMPTY_HOVER, type HoverEvent } from './hover'
 import { evalInWebContents } from './cdp-eval'
 import { keyToDispatchEvents } from './input-keys'
+import { clickTargetScript, interpretClickTarget, mouseDispatchEvents } from './input-mouse'
+import { pollUntil, waitProbeScript, waitTimeoutMessage } from './wait'
 import {
   type MagnifierState,
   NO_MAGNIFIER,
@@ -5804,6 +5806,73 @@ export class ProfileManager {
           // Only detach a debugger we attached; leave stealth's in place.
           if (!wasAttached) dbg.detach()
         }
+      },
+      clickInTab: async (click) => {
+        // The mouse counterpart of pressKeyInTab, and deliberately the same
+        // mechanics: same tab lookup, same visibility guard, same debugger
+        // discipline. Only the payloads differ (input-mouse.ts).
+        const wc = this.webContentsForTab(target, click.tabId)
+        const id = click.tabId ?? target?.state.activeId ?? undefined
+        const visible = await this.ensurePageVisibleForInput(wc, id)
+        if (!visible) {
+          throw new Error(
+            'tab could not be made visible for input (Mira may be hidden — bring its window forward)'
+          )
+        }
+        // A named target is resolved INSIDE the page, so the coordinates are the
+        // page's own truth about where the element sits at this instant.
+        let point = { x: 0, y: 0, label: 'point' }
+        if (click.target.kind === 'point') {
+          point = { x: click.target.x, y: click.target.y, label: 'point' }
+        } else {
+          const raw = await evalInWebContents(
+            wc,
+            clickTargetScript(click.target, { nth: click.nth, scroll: click.scroll })
+          )
+          const resolved = interpretClickTarget(raw)
+          if ('error' in resolved) throw new Error(resolved.error)
+          point = resolved
+          // scrollIntoView is animated on many sites (`scroll-behavior: smooth`),
+          // so the rectangle read above is where the element was ON ITS WAY. Give
+          // the scroll a beat and re-read before clicking.
+          if (click.scroll) {
+            await new Promise((r) => setTimeout(r, 250))
+            const again = interpretClickTarget(
+              await evalInWebContents(
+                wc,
+                clickTargetScript(click.target, { nth: click.nth, scroll: false })
+              )
+            )
+            if ('error' in again) throw new Error(again.error)
+            point = again
+          }
+        }
+        const events = mouseDispatchEvents(point.x, point.y, { modifiers: click.modifiers })
+        const dbg = wc.debugger
+        const wasAttached = dbg.isAttached()
+        if (!wasAttached) dbg.attach('1.3')
+        try {
+          for (const ev of events) await dbg.sendCommand('Input.dispatchMouseEvent', ev)
+        } finally {
+          // Only detach a debugger we attached; leave stealth's in place.
+          if (!wasAttached) dbg.detach()
+        }
+        return { x: Math.round(point.x), y: Math.round(point.y), target: point.label }
+      },
+      waitInTab: async (condition, tabId, timeoutMs) => {
+        // Poll the condition in the page. Each probe is its own short evaluation:
+        // a single long `await` inside the page would die at exec-js's 5 s cap
+        // (cdp-eval.ts), no matter what timeout the caller asked for.
+        const wc = this.webContentsForTab(target, tabId)
+        const script = waitProbeScript(condition)
+        const outcome = await pollUntil({
+          probe: async () => (await evalInWebContents(wc, script)) === true,
+          timeoutMs
+        })
+        if (!outcome.ok) {
+          throw new Error(waitTimeoutMessage(condition, outcome.waitedMs, outcome.lastError))
+        }
+        return { waitedMs: outcome.waitedMs }
       },
       toggleDevToolsInActiveTab: () => {
         // The active tab's inspector, docked on the right into a host view we

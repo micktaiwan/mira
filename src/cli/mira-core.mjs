@@ -20,7 +20,20 @@
 /** Flags that take no value (their presence alone means `true`). Every other
  * `--flag` consumes the next token as its value unless that token is itself a
  * flag. Keeping this explicit avoids `--json tabs` swallowing `tabs`. */
-export const BOOLEAN_FLAGS = new Set(['json', 'active', 'help', 'new-tab', 'full', 'background'])
+export const BOOLEAN_FLAGS = new Set([
+  'json',
+  'active',
+  'help',
+  'new-tab',
+  'full',
+  'background',
+  // wait: --gone flips the condition (wait for a disappearance).
+  'gone',
+  // click: --scroll brings an off-screen target into view before clicking.
+  'scroll',
+  // batch: --keep-going runs every line even after one fails.
+  'keep-going'
+])
 
 /** Single-letter short flags, mapped to their long boolean name. `-n` == `--new-tab`.
  * A bare `-` is NOT a short flag: it stays a positional (e.g. `mira exec -` = stdin). */
@@ -48,6 +61,8 @@ export const TAB_BOUND = new Set([
   'collect-media',
   'download-media',
   'press-key',
+  'click',
+  'wait-for',
   'get-console',
   'screenshot'
 ])
@@ -540,4 +555,332 @@ export function resolveNavTarget(windows, opts = {}, labels = {}) {
       `Name the target — --tab <id> (or $MIRA_TAB), --window <id>, or --profile <label|id>:\n` +
       lines
   }
+}
+
+/**
+ * wait-for plan: block until a condition holds in the page. Exactly one of
+ * selector / text / url names WHAT to wait for; `--gone` waits for it to stop
+ * holding. The point is to delete `sleep` from automation scripts: a fixed sleep
+ * is too long when the page is already there and too short when it is not — and
+ * the short case is the dangerous one, since it reads as "the element does not
+ * exist" a few hundred ms before it appears.
+ *
+ * @param {string|null} tabId
+ * @param {{ selector?: unknown, text?: unknown, url?: unknown, gone?: boolean, timeout?: unknown }} opts
+ * @returns {{ request: {command:string, params:object} } | { error: string }}
+ */
+export function buildWait(tabId, opts = {}) {
+  const str = (v) => (typeof v === 'string' && v.trim() !== '' ? v : null)
+  const named = [
+    ['selector', str(opts.selector)],
+    ['text', str(opts.text)],
+    ['url', str(opts.url)]
+  ].filter(([, v]) => v !== null)
+  if (named.length === 0) return { error: 'wait needs --selector, --text or --url' }
+  if (named.length > 1) {
+    return { error: `wait takes one condition, got ${named.map(([k]) => '--' + k).join(' and ')}` }
+  }
+  const params = { [named[0][0]]: named[0][1] }
+  if (opts.gone === true) params.gone = true
+  if (opts.timeout !== undefined && opts.timeout !== '') {
+    const ms = Number(opts.timeout)
+    if (!Number.isFinite(ms) || ms <= 0) return { error: `--timeout must be a number of ms` }
+    params.timeoutMs = Math.round(ms)
+  }
+  if (tabId) params.tabId = tabId
+  return { request: { command: 'wait-for', params } }
+}
+
+/**
+ * click plan: a REAL mouse click (CDP), the missing third pillar next to exec-js
+ * and press-key. The target is named by --selector, --text or explicit viewport
+ * --at x,y; --nth picks among several matches (1-based), --scroll brings an
+ * off-screen target into view rather than clicking into the void.
+ *
+ * @param {string|null} tabId
+ * @param {{ selector?: unknown, text?: unknown, at?: unknown, nth?: unknown, scroll?: boolean }} opts
+ * @returns {{ request: {command:string, params:object} } | { error: string }}
+ */
+export function buildClick(tabId, opts = {}) {
+  const str = (v) => (typeof v === 'string' && v.trim() !== '' ? v : null)
+  const named = [
+    ['selector', str(opts.selector)],
+    ['text', str(opts.text)],
+    ['at', str(opts.at)]
+  ].filter(([, v]) => v !== null)
+  if (named.length === 0) return { error: 'click needs --selector, --text or --at x,y' }
+  if (named.length > 1) {
+    return { error: `click takes one target, got ${named.map(([k]) => '--' + k).join(' and ')}` }
+  }
+  const [kind, value] = named[0]
+  const params = {}
+  if (kind === 'at') {
+    const parts = value.split(',').map((n) => Number(n.trim()))
+    if (parts.length !== 2 || parts.some((n) => !Number.isFinite(n))) {
+      return { error: `--at wants viewport coordinates, e.g. --at 320,180 (got "${value}")` }
+    }
+    params.x = parts[0]
+    params.y = parts[1]
+  } else {
+    params[kind] = value
+  }
+  if (opts.nth !== undefined && opts.nth !== '') {
+    const n = Number(opts.nth)
+    if (!Number.isInteger(n) || n < 1)
+      return { error: '--nth must be a positive integer (1-based)' }
+    params.nth = n
+  }
+  if (opts.scroll === true) params.scroll = true
+  if (tabId) params.tabId = tabId
+  return { request: { command: 'click', params } }
+}
+
+/**
+ * Split one batch line into argv, the way a shell would for the simple cases:
+ * whitespace separates, 'single' and "double" quotes group (and keep their
+ * contents literal), a backslash escapes the next character outside quotes.
+ *
+ * Deliberately NOT a shell: no variable expansion, no globbing, no pipes. A
+ * batch file is a list of mira commands, not a program — anything that needs a
+ * shell belongs in a shell script that calls `mira batch`.
+ *
+ * @param {string} line
+ * @returns {{ argv: string[] } | { error: string }}
+ */
+export function tokenizeLine(line) {
+  const argv = []
+  let cur = ''
+  let started = false
+  let quote = null
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]
+    if (quote) {
+      if (c === quote) quote = null
+      else cur += c
+      continue
+    }
+    if (c === '"' || c === "'") {
+      quote = c
+      started = true
+      continue
+    }
+    if (c === '\\' && i + 1 < line.length) {
+      cur += line[++i]
+      started = true
+      continue
+    }
+    if (c === ' ' || c === '\t') {
+      if (started) argv.push(cur)
+      cur = ''
+      started = false
+      continue
+    }
+    cur += c
+    started = true
+  }
+  if (quote) return { error: `unterminated ${quote === '"' ? 'double' : 'single'} quote` }
+  if (started) argv.push(cur)
+  return { argv }
+}
+
+/**
+ * Parse a batch script into the lines to run. A line is exactly what would be
+ * typed after `mira`; `#` comments and blank lines are dropped. Line numbers are
+ * kept (1-based, counted over the ORIGINAL text) so an error names the line the
+ * author is looking at.
+ *
+ * @param {string} text
+ * @returns {{ lines: Array<{ lineNo: number, source: string, argv: string[] }> } | { error: string }}
+ */
+export function parseBatchScript(text) {
+  const lines = []
+  const raw = String(text ?? '').split('\n')
+  for (let i = 0; i < raw.length; i++) {
+    const source = raw[i].trim()
+    if (source === '' || source.startsWith('#')) continue
+    const tok = tokenizeLine(source)
+    if ('error' in tok) return { error: `line ${i + 1}: ${tok.error}` }
+    if (tok.argv.length === 0) continue
+    lines.push({ lineNo: i + 1, source, argv: tok.argv })
+  }
+  if (lines.length === 0) return { error: 'nothing to run: the batch has no command lines' }
+  return { lines }
+}
+
+/** Verbs a batch line may NOT use, with the reason. `watch` never returns, `use`
+ * only prints an export for the calling shell, and a nested `batch` would hide
+ * its own failures inside another one's summary. */
+export const BATCH_FORBIDDEN = new Map([
+  ['watch', 'watch streams forever; run it on its own'],
+  ['use', 'use only prints an export for the calling shell'],
+  ['batch', 'a batch cannot nest']
+])
+
+/**
+ * Turn ONE batch line's argv into the socket request to send. This is the same
+ * mapping `bin/mira` does in its switch, minus everything that needs a second
+ * round-trip or the terminal — so a batch is exactly N requests on one
+ * connection, and every line is validated BEFORE the first one is sent.
+ *
+ * The batch-level tab target rides in `env.tabId`; a line may override it with
+ * its own `--tab`.
+ *
+ * @param {string[]} argv
+ * @param {{ tabId?: string|null, cwd: string, home: string, readFile?: (p:string)=>string }} env
+ * @returns {{ request: {command:string, params?:object} } | { error: string }}
+ */
+export function buildLineRequest(argv, env) {
+  const { command, positionals, flags } = parseArgs(argv)
+  if (!command) return { error: 'empty line' }
+  const forbidden = BATCH_FORBIDDEN.get(command)
+  if (forbidden) return { error: `"${command}" is not allowed in a batch: ${forbidden}` }
+  const tabId = resolveTabId({ flagTab: flags.tab, envTab: env.tabId })
+
+  switch (command) {
+    case 'exec': {
+      const arg = positionals[0]
+      if (arg === '-') return { error: 'exec - (stdin) makes no sense in a batch; inline the code' }
+      const cr = resolveCode(arg, {
+        readStdin: () => '',
+        readFile:
+          env.readFile ??
+          (() => {
+            throw new Error('no file reader')
+          })
+      })
+      if ('error' in cr) return { error: cr.error }
+      return { request: buildExec(cr.code, tabId) }
+    }
+    case 'press': {
+      const modifiers =
+        typeof flags.mod === 'string'
+          ? flags.mod
+              .split(',')
+              .map((m) => m.trim())
+              .filter(Boolean)
+          : []
+      return buildPress(positionals[0], tabId, modifiers)
+    }
+    case 'click':
+      return buildClick(tabId, {
+        selector: flags.selector,
+        text: flags.text,
+        at: flags.at ?? positionals[0],
+        nth: flags.nth,
+        scroll: flags.scroll === true
+      })
+    case 'wait':
+    case 'wait-for':
+      return buildWait(tabId, {
+        selector: flags.selector,
+        text: flags.text,
+        url: flags.url,
+        gone: flags.gone === true,
+        timeout: flags.timeout
+      })
+    case 'reload':
+      return { request: buildReload(tabId) }
+    case 'shot':
+    case 'screenshot':
+      return buildScreenshot(positionals[0], tabId, {
+        full: flags.full === true,
+        cwd: env.cwd,
+        home: env.home
+      })
+    case 'nav':
+    case 'navigate':
+    case 'open': {
+      const url = positionals[0]
+      if (!url) return { error: `${command} needs a url` }
+      // The interactive CLI resolves a window here (and probes it) so a page
+      // never lands in the wrong profile. That is a multi-round-trip dance; in a
+      // batch we require a named tab instead of guessing — same protection, no
+      // hidden traffic.
+      if (!tabId) {
+        return {
+          error: `${command} in a batch needs a tab target: pass --tab <id> on the line, or set $MIRA_TAB / mira batch --tab <id>`
+        }
+      }
+      return {
+        request: buildNav(url, tabId, {
+          newTab: command === 'open' || flags['new-tab'] === true,
+          background: background(flags)
+        })
+      }
+    }
+    case 'tabs': {
+      const request = { command: 'list-tabs' }
+      if (typeof flags.window === 'string') request.params = { windowId: flags.window }
+      return { request }
+    }
+    case 'windows':
+      return { request: { command: 'list-windows' } }
+    case 'commands':
+      return { request: { command: 'list-commands' } }
+    case 'console':
+      return {
+        request: buildConsole(tabId, { level: flags.level, limit: flags.limit, since: flags.since })
+      }
+    case 'cookies':
+    case 'dump-cookies':
+      return {
+        request: {
+          command: 'dump-cookies',
+          params: typeof flags.url === 'string' ? { url: flags.url } : {}
+        }
+      }
+    case 'call': {
+      const name = positionals[0]
+      if (!name) return { error: 'call needs a command name' }
+      return buildCall(name, flags.params, tabId)
+    }
+    default:
+      return buildCall(command, flags.params, tabId)
+  }
+}
+
+/**
+ * Build every request of a batch up front. Nothing is sent until all the lines
+ * parse: half a sequence executed before a typo on line 7 is worse than no
+ * sequence at all, because the page is then in a state nobody described.
+ *
+ * @param {Array<{lineNo:number, source:string, argv:string[]}>} lines
+ * @param {{ tabId?: string|null, cwd: string, home: string, readFile?: (p:string)=>string }} env
+ * @returns {{ steps: Array<{lineNo:number, source:string, request:object}> } | { error: string }}
+ */
+export function buildBatch(lines, env) {
+  const steps = []
+  for (const line of lines) {
+    const built = buildLineRequest(line.argv, env)
+    if ('error' in built) return { error: `line ${line.lineNo}: ${built.error}  (${line.source})` }
+    steps.push({ lineNo: line.lineNo, source: line.source, request: built.request })
+  }
+  return { steps }
+}
+
+/**
+ * Render a finished batch: one line per step, then a count. A failed step keeps
+ * its error on the same line — reading a batch report must not require opening
+ * anything else.
+ *
+ * @param {Array<{lineNo:number, source:string, response?:object, skipped?:boolean}>} results
+ * @returns {string}
+ */
+export function formatBatchResults(results) {
+  const list = results ?? []
+  const body = list.map((r, i) => {
+    const idx = String(i + 1).padStart(2)
+    if (r.skipped) return `${idx}  skip  ${r.source}`
+    const ok = r.response && r.response.ok === true
+    const detail = ok
+      ? ''
+      : `  → ${r.response ? (r.response.error ?? JSON.stringify(r.response)) : 'no reply'}`
+    return `${idx}  ${ok ? 'ok  ' : 'FAIL'}  ${r.source}${detail}`
+  })
+  const ran = list.filter((r) => !r.skipped)
+  const failed = ran.filter((r) => !(r.response && r.response.ok === true)).length
+  const skipped = list.length - ran.length
+  const summary =
+    `${ran.length - failed} ok, ${failed} failed` + (skipped > 0 ? `, ${skipped} skipped` : '')
+  return [...body, summary].join('\n')
 }

@@ -57,6 +57,7 @@ import { toastCommands } from './toast'
 import { tooltipCommands } from './tooltip'
 import { tracingCommands } from './tracing'
 import { vaultCommands } from './vault'
+import { waitCommands } from './wait'
 import { windowStateCommands } from './window-state'
 import { zenCommands } from './zen'
 
@@ -110,6 +111,14 @@ export type { LoginsContext, LoginInfo } from './logins'
 export type { LoginFillContext, FillCandidateInfo, FillResult } from './login-fill'
 export type { HistoryEntry } from '../history-store'
 export type { InputContext, PressKeyParams } from './input'
+export type { ParsedClick, ClickTarget, ClickPoint, CdpMouseEvent } from '../input-mouse'
+export {
+  parseClickParams,
+  clickTargetScript,
+  interpretClickTarget,
+  mouseDispatchEvents,
+  mouseModifierMask
+} from '../input-mouse'
 export type { MagnifierContext } from './magnifier'
 export type { MediaContext, MediaItem, MediaKind, MediaSource } from './media'
 export type { NavContext } from './navigation'
@@ -173,6 +182,17 @@ export {
   TRACE_RECORDING_MODES
 } from '../tracing'
 export type { VaultContext } from './vault'
+export type { WaitContext } from './wait'
+export type { WaitCondition, ParsedWait } from '../wait'
+export {
+  parseWaitParams,
+  waitProbeScript,
+  describeCondition,
+  pollUntil,
+  waitTimeoutMessage,
+  DEFAULT_WAIT_MS,
+  WAIT_POLL_MS
+} from '../wait'
 export type { ZenContext, ZenState, PanelSnapshot } from './zen'
 export { nextZen } from './zen'
 
@@ -223,6 +243,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...tooltipCommands,
     ...tracingCommands,
     ...vaultCommands,
+    ...waitCommands,
     ...windowStateCommands,
     ...zenCommands
   }

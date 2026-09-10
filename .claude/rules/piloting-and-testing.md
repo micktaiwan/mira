@@ -23,6 +23,9 @@ $MIRA exec "document.title"             # exec-js sur l'onglet pinné (ou actif 
 $MIRA reload                            # reload l'onglet pinné (via exec-js) ou actif
 $MIRA shot /tmp/page.png [--full]       # capture PNG de l'onglet pinné/actif (--full = document entier)
 $MIRA nav example.com                   # navigate l'onglet actif
+$MIRA click --text 'Settings'           # VRAI clic souris CDP (--selector, --at x,y, --nth n, --scroll)
+$MIRA wait --selector '[role=dialog]'   # attend au lieu de dormir (--text, --url, --gone, --timeout ms)
+$MIRA batch @script.mira                # N lignes sur UNE connexion (--keep-going)
 $MIRA commands                          # list-commands du build qui tourne
 $MIRA call select-tab --params '{"id":"<uuid>"}'  # passthrough générique vers N'IMPORTE quelle commande
 ```
@@ -56,6 +59,35 @@ Dépannage rapide en shell si vraiment besoin de `nc` : garder stdin ouvert le t
 - **Aucune commande socket ne remonte Mira au premier plan.** Depuis le fix « foreground policy » (`src/main/foreground-policy.ts`), une commande qui arrive par le socket/MCP fait son travail sans jamais activer l'app : `new-tab`, `navigate`, `open-url`, `open-profile`, `activate-tab`, `press-key`, `detach-tab`. Seul `focus-app` remonte Mira, et c'est sa seule raison d'être — donc **il est interdit tant que Mickael ne l'a pas demandé** (skill `mira`) : c'est la seule porte qui reste pour lui couper ce qu'il est en train de taper, et le 30/08/2026 une session l'a franchie neuf fois en un après-midi pour se simplifier des tests. La même commande venue de l'UI (clic, Cmd+T) garde l'ancien comportement.
 - **`background:true` reste utile, mais pour autre chose** : il empêche la fenêtre de _basculer_ sur le nouvel onglet, donc rien ne bouge à l'écran. `new-tab {background:true}`, `navigate {newTab:true,background:true}`, ou `mira open <url> -b`. Tu récupères le `tabId` dans la réponse et tu pilotes via `exec-js`.
 - **Profil de test isolé.** Un profil dédié (session/cookies à part) existe pour ne pas polluer les profils réels. Son id concret et son usage vivent dans `CLAUDE.local.md` (non versionné).
+
+## Une séquence = un `mira batch`, jamais N tours d'agent
+
+Mesuré le 08/09/2026 : l'aller-retour socket est **sous la milliseconde**, un `mira exec` complet
+40 ms. Ce qui rendait le pilotage lent n'a jamais été Mira — c'était un process node et surtout
+**un tour d'agent par commande**. `mira batch @script.mira` (ou `-` pour stdin) rejoue N lignes sur
+une seule connexion : une ligne = ce qu'on taperait après `mira`, `#` et lignes vides ignorés.
+
+- **Tout est construit avant le premier envoi** : une faute sur la ligne 7 refuse le batch entier
+  plutôt que de laisser la page à moitié pilotée, dans un état que personne n'a décrit.
+- **Arrêt à la première ligne qui échoue** (`--keep-going` pour continuer), parce que tout ce qui
+  suit un clic raté s'exécute contre une page qui n'est pas dans l'état prévu.
+- **Verbes refusés, avec la raison** : `watch` (ne rend jamais la main), `use` (n'imprime qu'un
+  export pour le shell appelant), `batch` (pas d'imbrication). `nav` et `open` y exigent un onglet
+  nommé : sans fenêtre nommée, une page perso se charge dans le profil pro.
+- La cible d'onglet se pose une fois (`mira batch --tab <id>`, ou `$MIRA_TAB`) et chaque ligne peut
+  la surcharger avec son propre `--tab`.
+
+**Et dans un script, plus aucun `sleep` ni `MouseEvent` fabriqué à la main.** `mira wait`
+(`--selector` / `--text` / `--url`, plus `--gone` et `--timeout`) sonde la page toutes les 100 ms et
+rend le temps réellement attendu ; sur timeout il dit ce qu'il cherchait et pendant combien de
+temps. `mira click` (`--selector` / `--text` / `--at x,y`, plus `--nth` et `--scroll`) est un vrai
+clic CDP : la cible est résolue dans la page puis cliquée en son centre, et il refuse en le disant
+quand l'élément est invisible, hors viewport ou recouvert — au lieu de cliquer dans le vide et de
+répondre `ok`. Un exemple complet : `scratchpad/notion-people.mira`.
+
+⚠️ Le polling de `wait` est fait de **beaucoup d'évaluations courtes**, jamais d'un long `await`
+dans la page : `exec-js` coupe à 5 s (`cdp-eval.ts`), donc une attente en un seul appel mourrait à
+cinq secondes quel que soit le `--timeout` demandé.
 
 ## Piloter au clavier (vraie frappe) et onglets cachés
 
