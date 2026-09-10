@@ -59,3 +59,62 @@ describe('press-key', () => {
     })
   })
 })
+
+describe('click', () => {
+  it('clicks a selector on the active tab and reports where it landed', async () => {
+    const { ctx, clicks } = makeContext()
+    const res = await registry.execute('click', { selector: 'button.go' }, ctx)
+    expect(res).toEqual({ ok: true, x: 10, y: 20, target: 'selector:button.go' })
+    expect(clicks).toEqual([
+      { target: { kind: 'selector', value: 'button.go' }, nth: 1, scroll: false, modifiers: [] }
+    ])
+  })
+
+  it('clicks raw viewport coordinates, unchanged', async () => {
+    const { ctx } = makeContext()
+    expect(await registry.execute('click', { x: 320, y: 180 }, ctx)).toEqual({
+      ok: true,
+      x: 320,
+      y: 180,
+      target: 'point'
+    })
+  })
+
+  it('carries nth, scroll and modifiers to the target tab', async () => {
+    const { ctx, clicks } = makeContext()
+    await registry.execute('new-tab', { url: 'https://example.com' }, ctx)
+    await registry.execute(
+      'click',
+      { text: 'Settings', nth: 2, scroll: true, modifiers: ['meta'], tabId: 'tab-2' },
+      ctx
+    )
+    expect(clicks[0]).toEqual({
+      target: { kind: 'text', value: 'Settings' },
+      nth: 2,
+      scroll: true,
+      modifiers: ['meta'],
+      tabId: 'tab-2'
+    })
+  })
+
+  it('fails on an unknown tab, and on the Settings tab', async () => {
+    const { ctx } = makeContext()
+    expect(await registry.execute('click', { selector: 'a', tabId: 'nope' }, ctx)).toEqual({
+      ok: false,
+      error: 'unknown tab: nope'
+    })
+  })
+
+  it('rejects a missing or doubled target before touching the page', async () => {
+    const { ctx, clicks } = makeContext()
+    expect(await registry.execute('click', {}, ctx)).toEqual({
+      ok: false,
+      error: 'missing target: "selector", "text", or "x"/"y"'
+    })
+    expect(await registry.execute('click', { selector: 'a', text: 'b' }, ctx)).toEqual({
+      ok: false,
+      error: 'one target at a time'
+    })
+    expect(clicks).toEqual([])
+  })
+})

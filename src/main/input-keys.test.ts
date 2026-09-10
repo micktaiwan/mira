@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { resolveKey, modifierMask, keyToDispatchEvents, type CdpModifier } from './input-keys'
+import {
+  resolveKey,
+  modifierMask,
+  keyToDispatchEvents,
+  nativeVirtualKey,
+  type CdpModifier
+} from './input-keys'
 
 describe('resolveKey', () => {
   it('maps a lowercase letter to its KeyX code and uppercase virtual key code', () => {
@@ -20,9 +26,45 @@ describe('resolveKey', () => {
     expect(resolveKey(' ')).toEqual({ code: 'Space', keyCode: 32, printable: false })
   })
 
+  it('maps punctuation to its US-layout code, so shortcuts keyed on `code` fire', () => {
+    expect(resolveKey(',')).toEqual({ code: 'Comma', keyCode: 188, printable: true })
+    expect(resolveKey('.')).toEqual({ code: 'Period', keyCode: 190, printable: true })
+    expect(resolveKey('/')).toEqual({ code: 'Slash', keyCode: 191, printable: true })
+  })
+
+  it('gives a shifted character the code of the physical key it sits on', () => {
+    expect(resolveKey('?')).toEqual(resolveKey('/'))
+    expect(resolveKey('<')).toEqual(resolveKey(','))
+    expect(resolveKey('*')).toEqual({ code: 'Digit8', keyCode: 56, printable: true })
+  })
+
+  it('accepts the spelled-out name a shell can pass unquoted', () => {
+    expect(resolveKey('Comma')).toEqual(resolveKey(','))
+    expect(resolveKey('Slash')).toEqual(resolveKey('/'))
+    expect(resolveKey('Space')).toEqual(resolveKey(' '))
+  })
+
+  it('still types an unmapped character, with no code', () => {
+    expect(resolveKey('é')).toEqual({ code: '', keyCode: 'É'.charCodeAt(0), printable: true })
+  })
+
   it('throws on empty or unsupported keys', () => {
     expect(() => resolveKey('')).toThrow(/missing key/)
     expect(() => resolveKey('NotAKey')).toThrow(/unsupported key/)
+  })
+})
+
+describe('nativeVirtualKey', () => {
+  it('translates a DOM code to its kVK_* value on darwin', () => {
+    expect(nativeVirtualKey('KeyA', 65, 'darwin')).toBe(0)
+    expect(nativeVirtualKey('Comma', 188, 'darwin')).toBe(43)
+    expect(nativeVirtualKey('Enter', 13, 'darwin')).toBe(36)
+    expect(nativeVirtualKey('ArrowUp', 38, 'darwin')).toBe(126)
+  })
+
+  it('falls back to the Windows code for an unmapped code, or off darwin', () => {
+    expect(nativeVirtualKey('', 201, 'darwin')).toBe(201)
+    expect(nativeVirtualKey('KeyA', 65, 'linux')).toBe(65)
   })
 })
 
@@ -61,6 +103,26 @@ describe('keyToDispatchEvents', () => {
     const [down] = keyToDispatchEvents('e', ['meta'])
     expect(down.text).toBeUndefined()
     expect(down.modifiers).toBe(4)
+  })
+
+  it('keeps unmodifiedText under a shortcut, so macOS matches the right menu item', () => {
+    // Without it the event carries no characters at all, and Cocoa matches the
+    // first menu item with an empty key equivalent — About.
+    const [down] = keyToDispatchEvents('e', ['meta'])
+    expect(down.unmodifiedText).toBe('e')
+    expect(keyToDispatchEvents(',', ['meta'])[0].unmodifiedText).toBe(',')
+  })
+
+  it('never invents text for a non-printable key, modifier or not', () => {
+    const [down] = keyToDispatchEvents('Enter', ['meta'])
+    expect(down.text).toBeUndefined()
+    expect(down.unmodifiedText).toBeUndefined()
+  })
+
+  it('sends the macOS virtual key code on darwin, the Windows one elsewhere', () => {
+    expect(keyToDispatchEvents('e', [], 'darwin')[0].nativeVirtualKeyCode).toBe(14)
+    expect(keyToDispatchEvents('e', [], 'darwin')[0].windowsVirtualKeyCode).toBe(69)
+    expect(keyToDispatchEvents('e', [], 'win32')[0].nativeVirtualKeyCode).toBe(69)
   })
 
   it('keeps text under shift alone (shift still produces a character)', () => {

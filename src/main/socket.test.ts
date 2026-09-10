@@ -317,6 +317,8 @@ function setup(): {
     requestLocationAuthorization: () => 'authorized' as const,
     execJsInTab: (code: string) => Promise.resolve(`ran:${code}`),
     pressKeyInTab: () => Promise.resolve(),
+    clickInTab: () => Promise.resolve({ x: 0, y: 0, target: 'stub' }),
+    waitInTab: () => Promise.resolve({ waitedMs: 0 }),
     toggleDevToolsInActiveTab: () => true,
     inspectCookiesInActiveTab: () => Promise.resolve(true),
     // Skills slice: minimal stubs, not exercised by these socket-dispatch tests.

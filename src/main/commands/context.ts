@@ -48,6 +48,7 @@ import type { ToastContext } from './toast'
 import type { TooltipContext } from './tooltip'
 import type { TracingContext } from './tracing'
 import type { VaultContext } from './vault'
+import type { WaitContext } from './wait'
 import type { WindowStateContext } from './window-state'
 import type { ZenContext } from './zen'
 
@@ -93,5 +94,6 @@ export type CommandContext = AppContext &
   TooltipContext &
   TracingContext &
   VaultContext &
+  WaitContext &
   WindowStateContext &
   ZenContext

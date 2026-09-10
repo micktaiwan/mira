@@ -21,6 +21,13 @@
 //   mira use <id>                   pin an explicit id
 //   mira exec <code|-|@file>        run JS in the pinned/active tab
 //   mira press <key> [--mod a,b]    send a real keypress (e.g. e, Enter, ArrowDown)
+//   mira click --selector <css>|--text <str>|--at <x,y>   a REAL mouse click (CDP), not a synthetic MouseEvent
+//                                   (--nth <n>: pick among several matches, 1-based; --scroll: scroll it in view first)
+//   mira wait --selector <css>|--text <str>|--url <substr>  block until it holds, instead of sleeping blind
+//                                   (--gone: wait for it to disappear; --timeout <ms>, default 5000)
+//   mira batch <@file|-> [--keep-going]   run many lines over ONE connection: one process, one agent turn
+//                                   (a line = what you'd type after `mira`; # comments and blanks ignored;
+//                                    stops at the first failure unless --keep-going)
 //   mira reload                     reload the pinned or active tab (on the error page: retries the url that failed)
 //   mira console [--level e][--limit n][--since seq]  captured page console, iframes included (console.* + 403/CORS/CSP/exceptions)
 //   mira shot [path] [--full]       screenshot the pinned/active tab to a PNG (default: userData/screenshots/)
@@ -69,7 +76,12 @@ import {
   resolveCode,
   resolveTimeoutMs,
   background,
-  resolveNavTarget
+  resolveNavTarget,
+  buildClick,
+  buildWait,
+  parseBatchScript,
+  buildBatch,
+  formatBatchResults
 } from '../src/cli/mira-core.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -105,6 +117,69 @@ function call(request, socketPath, timeoutMs = 30000) {
         reject(new Error(`stale socket at ${socketPath} (Mira not listening)`))
       else reject(e)
     })
+  })
+}
+
+/** Open ONE connection and run requests over it, in order, each awaiting its own
+ * reply. This is what `mira batch` runs on.
+ *
+ * Why one connection: the socket round-trip is under a millisecond (measured
+ * 2026-09-08), so what made driving Mira slow was never the daemon — it was one
+ * node process, and above all one agent turn, per command. Twenty lines here
+ * cost one of each.
+ *
+ * Why in order rather than firing everything at once: a batch stops at the first
+ * failure by default, and everything after a missed click is noise against a
+ * page that is not in the expected state. At sub-millisecond latency, awaiting
+ * each reply costs nothing next to losing that guarantee.
+ */
+function openSession(socketPath, timeoutMs = 30000) {
+  return new Promise((resolveP, reject) => {
+    const conn = createConnection(socketPath)
+    let buf = ''
+    /** Replies come back in request order; each waiter is settled in turn. */
+    const pending = []
+    conn.setTimeout(timeoutMs)
+    conn.on('data', (chunk) => {
+      buf += chunk.toString()
+      let nl
+      while ((nl = buf.indexOf('\n')) >= 0) {
+        const line = buf.slice(0, nl)
+        buf = buf.slice(nl + 1)
+        const waiter = pending.shift()
+        if (!waiter) continue
+        try {
+          waiter.resolve(JSON.parse(line))
+        } catch {
+          waiter.reject(new Error(`bad reply: ${line}`))
+        }
+      }
+    })
+    conn.on('timeout', () => {
+      conn.destroy()
+      const e = new Error(`timed out after ${timeoutMs}ms`)
+      while (pending.length) pending.shift().reject(e)
+    })
+    conn.on('error', (e) => {
+      const err =
+        e && e.code === 'ENOENT'
+          ? new Error(`no Mira socket at ${socketPath} (is Mira running?)`)
+          : e && e.code === 'ECONNREFUSED'
+            ? new Error(`stale socket at ${socketPath} (Mira not listening)`)
+            : e
+      if (pending.length) while (pending.length) pending.shift().reject(err)
+      else reject(err)
+    })
+    conn.on('connect', () =>
+      resolveP({
+        ask: (request) =>
+          new Promise((res, rej) => {
+            pending.push({ resolve: res, reject: rej })
+            conn.write(JSON.stringify(request) + '\n')
+          }),
+        close: () => conn.end()
+      })
+    )
   })
 }
 
@@ -301,6 +376,81 @@ async function main() {
       })
       if ('error' in cr) return die(cr.error, 2)
       return send(buildExec(cr.code, tabId), { json })
+    }
+
+    case 'click': {
+      // A real CDP mouse click. The target is resolved INSIDE the page (css
+      // selector / visible text / raw viewport coordinates), then clicked at its
+      // centre — no hand-built MouseEvent, which real apps ignore anyway.
+      const built = buildClick(tabId, {
+        selector: flags.selector,
+        text: flags.text,
+        at: flags.at ?? positionals[0],
+        nth: flags.nth,
+        scroll: flags.scroll === true
+      })
+      if ('error' in built) return die(built.error, 2)
+      return send(built.request, {
+        json,
+        pretty: (r) => `clicked ${r.target ?? 'point'} at ${r.x},${r.y}`
+      })
+    }
+
+    case 'wait': {
+      // Block until a condition holds in the page, instead of sleeping blind.
+      const built = buildWait(tabId, {
+        selector: flags.selector,
+        text: flags.text,
+        url: flags.url,
+        gone: flags.gone === true,
+        timeout: flags.timeout
+      })
+      if ('error' in built) return die(built.error, 2)
+      return send(built.request, { json, pretty: (r) => `${r.condition} after ${r.waitedMs}ms` })
+    }
+
+    case 'batch': {
+      // Many lines, ONE connection, one process, one agent turn.
+      const arg = positionals[0]
+      if (!arg) return die('batch needs @file or - (stdin)', 2)
+      let text
+      try {
+        text = arg === '-' ? readFileSync(0, 'utf8') : readFileSync(arg.replace(/^@/, ''), 'utf8')
+      } catch (e) {
+        return die(`cannot read ${arg}: ${e instanceof Error ? e.message : String(e)}`, 2)
+      }
+      const parsed = parseBatchScript(text)
+      if ('error' in parsed) return die(parsed.error, 2)
+      // Build EVERY request before the first one goes out: a typo on line 7 must
+      // not leave the page half-driven, in a state nobody described.
+      const plan = buildBatch(parsed.lines, {
+        tabId,
+        cwd: process.cwd(),
+        home: homedir(),
+        readFile: (f) => readFileSync(f, 'utf8')
+      })
+      if ('error' in plan) return die(plan.error, 2)
+
+      const session = await openSession(socketPath, timeoutMs).catch((e) => die(e.message, 2))
+      const results = []
+      let stop = false
+      for (const step of plan.steps) {
+        if (stop) {
+          results.push({ ...step, skipped: true })
+          continue
+        }
+        const response = await session
+          .ask(step.request)
+          .catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+        results.push({ ...step, response })
+        if (response.ok !== true && flags['keep-going'] !== true) stop = true
+      }
+      session.close()
+      const failed = results.filter((r) => !r.skipped && r.response.ok !== true).length
+      const out = json
+        ? JSON.stringify({ ok: failed === 0, results: results.map((r) => r.response ?? null) })
+        : formatBatchResults(results)
+      return process.stdout.write(out + '\n', () => process.exit(failed === 0 ? 0 : 1))
     }
 
     case 'press': {

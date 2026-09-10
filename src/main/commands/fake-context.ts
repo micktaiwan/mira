@@ -4,9 +4,11 @@
 // Not a *.test.ts file, so Vitest does not treat it as a suite.
 
 import type {
+  ClickTarget,
   CommandContext,
   ExtensionInfo,
   FindStopAction,
+  ParsedClick,
   ProfileInfo,
   ServiceWorkerLogEntry,
   SkillPaneState,
@@ -14,6 +16,13 @@ import type {
   TabKind
 } from '.'
 import { buildTabMemoryReport, selectServiceWorkerLogs } from '.'
+import { waitTimeoutMessage, type WaitCondition } from '../wait'
+
+/** How a click target reads back in the fake's answer (the real one reports the
+ * element it actually hit; here the request is all there is). */
+function describeClickTarget(target: ClickTarget): string {
+  return target.kind === 'point' ? 'point' : `${target.kind}:${target.value}`
+}
 import { cardLabel, validateCapture } from '../card'
 import { loginItemName, loginLabel, validateLogin } from '../login-capture'
 import { findLoginMatch, type VaultLogin } from '../bitwarden-login'
@@ -195,6 +204,12 @@ export interface FakeContext {
   execJs: Array<{ code: string; tabId: string | null }>
   /** Key + target + modifiers passed to pressKeyInTab (press-key spy). */
   keyPresses: Array<{ key: string; tabId: string | null; modifiers: string[] | undefined }>
+  /** Every click passed to clickInTab (click spy). */
+  clicks: ParsedClick[]
+  /** Every wait passed to waitInTab (wait-for spy). */
+  waits: Array<{ condition: WaitCondition; tabId: string | null; timeoutMs: number }>
+  /** Flip to make every wait time out, so the failure path is testable. */
+  waitFails: { value: boolean }
   /** Sources passed to extractText (run-skill extraction spy). */
   extractCalls: SkillSource[]
   /** Prompt+text pairs passed to summarize (run-skill engine spy). */
@@ -280,6 +295,9 @@ export function makeContext(
   const execJs: Array<{ code: string; tabId: string | null }> = []
   const keyPresses: Array<{ key: string; tabId: string | null; modifiers: string[] | undefined }> =
     []
+  const clicks: ParsedClick[] = []
+  const waits: Array<{ condition: WaitCondition; tabId: string | null; timeoutMs: number }> = []
+  const waitFails = { value: false }
   const extractCalls: SkillSource[] = []
   const summarizeCalls: Array<{ prompt: string; text: string }> = []
   const chatCalls: Array<{ messages: ChatMessage[]; page: PageContext }> = []
@@ -1110,6 +1128,42 @@ export function makeContext(
       }
       keyPresses.push({ key, tabId: null, modifiers })
       return Promise.resolve()
+    },
+    clickInTab: (click: ParsedClick) => {
+      // Same tab resolution as pressKeyInTab, then record the click. The fake has
+      // no page, so a named target resolves to a made-up point: what is under
+      // test here is the command's plumbing, not the in-page geometry (that is
+      // input-mouse.test.ts).
+      const resolve = (id?: string): Error | null => {
+        if (id === undefined) {
+          const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
+          return !active || active.id === state.settingsTabId
+            ? new Error('no active web page')
+            : null
+        }
+        const tab = state.tabs.tabs.find((t) => t.id === id)
+        if (!tab) return new Error(`unknown tab: ${id}`)
+        if (tab.id === state.settingsTabId) return new Error('not a web page (Settings tab)')
+        return null
+      }
+      const bad = resolve(click.tabId)
+      if (bad) return Promise.reject(bad)
+      clicks.push(click)
+      const point =
+        click.target.kind === 'point' ? { x: click.target.x, y: click.target.y } : { x: 10, y: 20 }
+      return Promise.resolve({ ...point, target: describeClickTarget(click.target) })
+    },
+    waitInTab: (condition: WaitCondition, tabId: string | undefined, timeoutMs: number) => {
+      // Records the wait and answers instantly. Whether the condition ever holds
+      // is the page's business; the polling itself is tested in wait.test.ts.
+      if (tabId !== undefined && !state.tabs.tabs.some((t) => t.id === tabId)) {
+        return Promise.reject(new Error(`unknown tab: ${tabId}`))
+      }
+      waits.push({ condition, tabId: tabId ?? null, timeoutMs })
+      if (waitFails.value) {
+        return Promise.reject(new Error(waitTimeoutMessage(condition, timeoutMs)))
+      }
+      return Promise.resolve({ waitedMs: 12 })
     },
     toggleDevToolsInActiveTab: () => {
       // Mirror the manager: refuse when there's no active web page, otherwise flip
@@ -2051,6 +2105,9 @@ export function makeContext(
     cookiesSet,
     execJs,
     keyPresses,
+    clicks,
+    waits,
+    waitFails,
     extractCalls,
     summarizeCalls,
     chatCalls,
