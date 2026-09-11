@@ -1864,7 +1864,21 @@ export class ProfileManager {
       // iframes NESTED in web pages — Kondo's ext.html (extensions-plan.md §8.11).
       // Both session preloads (the lib's and ours) gate out of non-extension
       // frames immediately, so the per-iframe cost is negligible.
-      webPreferences: { ...(partition ? { partition } : {}), nodeIntegrationInSubFrames: true }
+      // backgroundThrottling: false keeps a covered window's tab inputtable.
+      // Electron then sets `disable_hidden_` on the tab's RenderWidgetHost
+      // (electron_api_web_contents.cc, HandleNewRenderFrame, 41-x-y), so the
+      // renderer keeps running and taking input. The page still REPORTS
+      // `document.visibilityState === 'hidden'` when the window is covered: the
+      // docs promise otherwise, but not for a WebContentsView
+      // (electron/electron#44590). Measured 2026-09-10: 4 real keystrokes typed
+      // into a hidden tab of a covered, unfocused window landed. Mickael drives
+      // Mira from scripts while other apps are in front, so this is required.
+      // ensurePageVisibleForInput relies on it.
+      webPreferences: {
+        ...(partition ? { partition } : {}),
+        nodeIntegrationInSubFrames: true,
+        backgroundThrottling: false
+      }
     })
     pw.window.contentView.addChildView(view)
     pw.views.set(tab.id, view)
@@ -3653,44 +3667,42 @@ export class ProfileManager {
     }
   }
 
-  /** Make `wc`'s tab the one its window would deliver input to, and say whether
-   * that succeeded. Called before every CDP input dispatch (press-key, click).
+  /** Make `wc`'s tab ready to receive real CDP input, and report whether it is.
+   * Called before every CDP input dispatch (press-key, click).
    *
-   * The distinction this makes is the whole point, because `document.visibilityState`
-   * collapses two very different states into the same `hidden`:
-   *   1. the tab is NOT the selected tab of its window. Its WebContentsView is not
-   *      the one laid out, so nothing can reach it. Selecting it fixes that, and it
-   *      is the only case where input genuinely cannot land.
-   *   2. the tab IS selected, but its window is minimized or fully covered by
-   *      another app (macOS marks the page occluded, so `visibilityState` reads
-   *      `hidden`). CDP `Input.dispatch*Event` goes straight into the renderer's
-   *      input pipeline and does not travel through the OS, so occlusion changes
-   *      nothing about whether the event lands.
+   * Two rules, both from use:
+   *   - Never raise the window. A scripting command must not steal the foreground
+   *     (foreground-policy.ts), and Mickael cannot keep Mira in front while he
+   *     works (2026-09-10). The only escalation is selecting the tab in its own
+   *     window.
+   *   - Never report a false success. A tab whose renderer is hidden DROPS CDP
+   *     input: measured 2026-09-10, 13 keystrokes into a focused login field left
+   *     it empty while press-key answered ok.
    *
-   * Treating case 2 as a failure is what used to make this refuse, and the only
-   * remedy it offered was raising the window — the one thing a scripting command
-   * must never do (foreground-policy.ts, and Mickael on 2026-09-10: he cannot keep
-   * Mira in front, he has other work on screen). So: select the tab, never raise,
-   * and let an occluded page be driven. */
+   * `document.visibilityState` is the wrong test once throttling is off. A Mira
+   * window covered by another app reports `hidden` whatever we do (Electron 41,
+   * WebContentsView: electron/electron#44590). But with backgroundThrottling
+   * disabled on the tab (materializeTab), Electron sets `disable_hidden_` on the
+   * tab's RenderWidgetHost (shell/browser/api/electron_api_web_contents.cc,
+   * HandleNewRenderFrame, 41-x-y), so the renderer keeps running and taking
+   * input while the page merely *reports* hidden. So: selected tab + throttling
+   * off = inputtable; otherwise fall back to the visibility check. */
   private async ensurePageVisibleForInput(wc: WebContents, id?: string): Promise<boolean> {
-    // Fast path: already the visible page of an unoccluded window.
-    if (await this.isPageVisible(wc)) return true
-    if (!id) return false
-    const pw = this.ownerOf(id)
-    if (!pw || pw.window.isDestroyed()) return false
-    if (pw.state.activeId !== id) {
-      try {
-        this.activateTabById(id)
-      } catch {
-        return false
+    if (id) {
+      const pw = this.ownerOf(id)
+      if (!pw || pw.window.isDestroyed()) return false
+      if (pw.state.activeId !== id) {
+        try {
+          this.activateTabById(id)
+        } catch {
+          return false
+        }
       }
-      // Layout + compositor need a beat after a tab switch. A page that reports
-      // visible here is the unoccluded case; one that does not is case 2 below,
-      // which is fine.
-      if (await this.pollPageVisible(wc, 10)) return true
+      if (pw.state.activeId === id && !wc.getBackgroundThrottling()) return true
     }
-    // Case 2: selected tab, occluded or minimized window. Input still lands.
-    return pw.state.activeId === id
+    if (await this.isPageVisible(wc)) return true
+    // Layout + compositor need a beat after a tab switch.
+    return this.pollPageVisible(wc, 10)
   }
 
   /** Poll `isPageVisible` up to `tries` times, 50 ms apart (layout + compositor
@@ -5845,15 +5857,14 @@ export class ProfileManager {
         // case. isTrusted:true, so keyboard-shortcut UIs (Kondo archive 'e', …)
         // fire, which a synthetic DOM KeyboardEvent can't guarantee.
         const wc = this.webContentsForTab(target, tabId)
-        // A tab that is not the selected one of its window cannot receive input,
-        // so select it first — without activating the app, and without raising the
-        // window. An occluded or minimized window is NOT a blocker: CDP input goes
-        // into the renderer directly (see ensurePageVisibleForInput).
+        // A hidden page drops CDP input (a misleading "ok" with no effect). Select
+        // the tab in its window — without raising it — then confirm the page is
+        // visible; never report a false success (see ensurePageVisibleForInput).
         const id = tabId ?? target?.state.activeId ?? undefined
         const visible = await this.ensurePageVisibleForInput(wc, id)
         if (!visible) {
           throw new Error(
-            'tab could not be selected for input (unknown tab, or its window is gone)'
+            'page is hidden, input would be dropped (tab unknown, or Mira window minimized/occluded)'
           )
         }
         const events = keyToDispatchEvents(key, modifiers)
@@ -5876,7 +5887,7 @@ export class ProfileManager {
         const visible = await this.ensurePageVisibleForInput(wc, id)
         if (!visible) {
           throw new Error(
-            'tab could not be selected for input (unknown tab, or its window is gone)'
+            'page is hidden, input would be dropped (tab unknown, or Mira window minimized/occluded)'
           )
         }
         // A named target is resolved INSIDE the page, so the coordinates are the
