@@ -173,6 +173,8 @@ app.setName('Mira')
 const logging = initLogging(app.getPath('userData'))
 console.log(`[mira] logging to ${logging.logsDir}`)
 
+
+
 // Fill the native "About Mira" panel (app menu → About) with true metadata,
 // overriding the package.json scaffold defaults ("example.com", a doubled
 // version). See about.ts for the (tested) string-building.
