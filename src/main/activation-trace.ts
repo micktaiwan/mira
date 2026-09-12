@@ -11,6 +11,11 @@
 // the app from C++ (a WebContentsView commit re-focusing its renderer widget), so
 // there are no frames of ours on the stack. Our own code activating — app.focus(),
 // window.show()/focus() from a command — leaves its call path right there.
+//
+// The limit, stated plainly: a stack shows what JS was running, not what caused
+// the activation. A Chromium-driven one that lands while one of our handlers is
+// on the stack reads as ours. It is evidence, not proof — but a named frame to
+// go and read beats the nothing we had before.
 
 /** One activation attempt, as seen from the swizzle. */
 export interface ActivationEvent {
@@ -31,29 +36,44 @@ export interface ActivationEvent {
  * with no JS on the stack (a page commit, a plugin, AppKit). */
 export type ActivationSource = 'app' | 'chromium'
 
-/** Frames that are the trace machinery itself, not a caller. */
+/** Frames that are the trace machinery itself, not a caller. Only useful in a
+ * dev build: the packaged app is one bundled index.js, so file names say nothing
+ * — hence dropping the first frame below, which is always the observer. */
 const SELF_FRAME = /activation-trace|mac-activation/
+
+/** Runtime plumbing: Node internals and Electron's own bootstrap. They say
+ * nothing about who asked, and they are what a Chromium-driven activation leaves
+ * behind when it lands inside a tick. */
+const RUNTIME_FRAME = /node:|js2c/
+
+/** The caller frames of a captured stack, observer frames removed.
+ *
+ * The FIRST frame is always the observer callback inside observeActivations, at
+ * whatever path the build gave it (in a packaged app: out/main/index.js, same as
+ * every other frame). Dropping it unconditionally is what keeps a real Chromium
+ * activation — which has no JS caller at all — from reading as one of ours. */
+function callerFrames(stack: string): string[] {
+  return stack
+    .split('\n')
+    .slice(1) // drop the "Error" header line
+    .map((l) => l.trim())
+    .filter((l) => l.startsWith('at '))
+    .slice(1) // drop the observer frame itself
+    .filter((l) => !SELF_FRAME.test(l) && !RUNTIME_FRAME.test(l))
+}
 
 /** Classify an activation by its captured stack: any frame that is not the trace
  * machinery means our JS drove it. */
 export function classifyActivation(stack?: string): ActivationSource {
   if (!stack) return 'chromium'
-  const frames = stack
-    .split('\n')
-    .slice(1) // drop the "Error" header line
-    .map((l) => l.trim())
-    .filter((l) => l.startsWith('at ') && !SELF_FRAME.test(l))
-  return frames.length > 0 ? 'app' : 'chromium'
+  return callerFrames(stack).length > 0 ? 'app' : 'chromium'
 }
 
 /** The first caller frame worth naming in a one-line log entry. */
 export function callerFrame(stack?: string): string {
   if (!stack) return '-'
-  for (const line of stack.split('\n').slice(1)) {
-    const frame = line.trim()
-    if (frame.startsWith('at ') && !SELF_FRAME.test(frame)) return frame.slice(3)
-  }
-  return '-'
+  const first = callerFrames(stack)[0]
+  return first ? first.slice(3) : '-'
 }
 
 /** One log line: timestamp, verdict, source, caller, context. Deliberately a
@@ -70,11 +90,7 @@ export function formatActivationEntry(event: ActivationEvent): string {
     event.context ?? '-'
   ].join(' | ')
   if (source !== 'app' || !event.stack) return head
-  const detail = event.stack
-    .split('\n')
-    .slice(1)
-    .map((l) => l.trim())
-    .filter((l) => l.startsWith('at ') && !SELF_FRAME.test(l))
+  const detail = callerFrames(event.stack)
     .slice(0, 8)
     .map((l) => `    ${l}`)
     .join('\n')
