@@ -173,8 +173,6 @@ app.setName('Mira')
 const logging = initLogging(app.getPath('userData'))
 console.log(`[mira] logging to ${logging.logsDir}`)
 
-
-
 // Fill the native "About Mira" panel (app menu → About) with true metadata,
 // overriding the package.json scaffold defaults ("example.com", a doubled
 // version). See about.ts for the (tested) string-building.
@@ -538,6 +536,9 @@ app.whenReady().then(async () => {
       // Route through the registry so it opens a Settings tab in the focused
       // window, like the toolbar / socket / Cmd+, path.
       openSettings: () => runDetached('open-settings', {}, profiles.contextForFocused()),
+      // Same check as the daily one, through the registry like every other menu
+      // item. The result reaches the user as a notification (update-service.ts).
+      checkForUpdates: () => runDetached('check-for-updates', {}, profiles.contextForFocused()),
       // Cmd+K: toggle the command palette in the focused window, through the same
       // bus as everything else (no `open` arg → flip the current state).
       togglePalette: () => runDetached('toggle-palette', {}, profiles.contextForFocused()),
