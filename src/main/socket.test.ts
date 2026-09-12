@@ -12,6 +12,8 @@ function setup(): {
   const ctx: CommandContext = {
     focusApp: () => {},
     quitApp: () => {},
+    appVersion: () => '1.0.0',
+    checkForUpdates: async () => ({ state: 'up-to-date' as const }),
     openExternalUrl: () => {},
     getSpacesState: () => ({ displays: [], window: null }),
     moveTargetWindowToSpace: () => 'noop',

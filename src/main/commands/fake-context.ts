@@ -243,6 +243,13 @@ export interface FakeContext {
   focusCalls: Array<string | undefined>
   /** One entry per quitApp call (quit spy). */
   quitCalls: boolean[]
+  /** Set what the fake `check-for-updates` answers. */
+  setUpdateOutcome: (
+    outcome:
+      | { state: 'newer'; version: string }
+      | { state: 'up-to-date' }
+      | { state: 'failed'; error: string }
+  ) => void
   /** URLs passed to openExternalUrl (open-url / open-file handoff spy). */
   externalOpens: string[]
   /** profileId passed alongside each openExternalUrl call (undefined when none). */
@@ -310,6 +317,11 @@ export function makeContext(
   const toasts: string[] = []
   const focusCalls: Array<string | undefined> = []
   const quitCalls: boolean[] = []
+  /** What the fake `check-for-updates` answers; tests swap it with setUpdateOutcome. */
+  let updateOutcome:
+    | { state: 'newer'; version: string }
+    | { state: 'up-to-date' }
+    | { state: 'failed'; error: string } = { state: 'up-to-date' }
   const externalOpens: string[] = []
   const externalOpenTargets: (string | undefined)[] = []
   const spaceMoves: number[] = []
@@ -593,6 +605,8 @@ export function makeContext(
     quitApp: () => {
       quitCalls.push(true)
     },
+    appVersion: () => '1.0.0',
+    checkForUpdates: async () => updateOutcome,
     // Default-browser handoff: openUrl targets the last-focused profile in the
     // real manager; the fake just records the resolved url (open-url / open-file).
     openExternalUrl: (url: string, profileId?: string) => {
@@ -2135,6 +2149,9 @@ export function makeContext(
       state.pageConsole.record(tabId, draft),
     focusCalls,
     quitCalls,
+    setUpdateOutcome: (outcome: typeof updateOutcome) => {
+      updateOutcome = outcome
+    },
     externalOpens,
     externalOpenTargets,
     spaceMoves,

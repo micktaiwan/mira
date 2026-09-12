@@ -88,6 +88,8 @@ import {
 } from './download-doc'
 import { observeActivations, setActivationSuppressed } from './mac-activation'
 import { formatActivationEntry } from './activation-trace'
+import { formatVersion, type Outcome, type UpdateChecker } from './update-check'
+import { createUpdateChecker, startUpdateSchedule } from './update-service'
 import { shouldSuppressActivation, type NavKind } from './activation-policy'
 import { mayForeground, type CommandOrigin } from './foreground-policy'
 import { isLiveContents } from './live-contents'
@@ -725,6 +727,7 @@ export class ProfileManager {
       magnifierEnabled: deps.magnifierEnabled
     }
     this.startActivationTrace()
+    this.checker()
   }
 
   /** Record every programmatic attempt to bring Mira to the front, to
@@ -749,6 +752,35 @@ export class ProfileManager {
       appendFile(logPath, `${formatActivationEntry({ ...event, context })}\n`).catch(() => {})
     })
     if (!started) console.error('[mira] activation trace unavailable (addon missing or too old)')
+  }
+
+  /** The daily update checker. Built once, at startup: its schedule is what
+   * makes the check daily, so it must not wait for someone to ask. */
+  private updateChecker: UpdateChecker | null = null
+
+  private checker(): UpdateChecker {
+    if (!this.updateChecker) {
+      this.updateChecker = createUpdateChecker()
+      startUpdateSchedule(this.updateChecker)
+    }
+    return this.updateChecker
+  }
+
+  /** Run a check now and report its outcome to the caller (the notification is
+   * shown by the checker itself). A failed request is an outcome, not a throw:
+   * being offline is not a command error. */
+  private async runUpdateCheck(): Promise<
+    | { state: 'newer'; version: string }
+    | { state: 'up-to-date' }
+    | { state: 'failed'; error: string }
+  > {
+    const seen: Outcome[] = []
+    await this.checker().checkNow((outcome) => seen.push(outcome))
+    const outcome = seen[0]
+    if (!outcome) return { state: 'up-to-date' }
+    if (outcome.kind === 'newer') return { state: 'newer', version: formatVersion(outcome.version) }
+    if (outcome.kind === 'failed') return { state: 'failed', error: outcome.error }
+    return { state: 'up-to-date' }
   }
 
   /** The ProfileData for a profile id, created (and its files loaded) on first use.
@@ -5482,6 +5514,10 @@ export class ProfileManager {
         suppressQuitPrompt()
         app.quit()
       },
+      appVersion: () => app.getVersion(),
+      // Same check as the daily one, on demand — and unlike the daily one it
+      // answers even when Mira is up to date (update-check.ts).
+      checkForUpdates: () => this.runUpdateCheck(),
       // Default-browser handoff: openUrl does its OWN targeting (an explicit
       // profileId, else the last-focused profile), independent of this context's
       // target window — the command may arrive over the socket while a different
