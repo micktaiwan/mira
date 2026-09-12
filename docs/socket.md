@@ -132,6 +132,8 @@ that order, between the tab id and the title.
 | `get-status`      | —      | memory usage + tab counts (total / loaded / asleep)                                            |
 | `list-tab-memory` | —      | cross-profile: every loaded tab ranked by its renderer-process memory; `{entries, totalBytes}` |
 | `whoami`          | —      | id of the profile owning the target window                                                     |
+| `version`         | —      | `{version}` — the running app's version, no network                                            |
+| `check-for-updates` | —    | ask GitHub for the latest release NOW: `{current, state}` with `state` one of `newer` (+ `version`), `up-to-date`, `failed` (+ `error`). Always answers, unlike the daily check, which stays silent unless there is a version it has not announced yet. Also shows a native notification. A repo with no release answers `failed: no release published yet` |
 
 ### Navigation (the active tab of the target window, or an explicit `tabId`)
 

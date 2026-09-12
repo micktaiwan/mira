@@ -38,6 +38,7 @@ import type { SkillsContext } from './skills'
 import type { SpacesContext } from './spaces'
 import type { StatusContext } from './status'
 import type { TabDetachContext } from './tab-detach'
+import type { UpdateContext } from './update'
 import type { TabFoldersContext } from './tab-folders'
 import type { TabMemoryContext } from './tab-memory'
 import type { TabMenuContext } from './tab-menu'
@@ -93,6 +94,7 @@ export type CommandContext = AppContext &
   ToastContext &
   TooltipContext &
   TracingContext &
+  UpdateContext &
   VaultContext &
   WaitContext &
   WindowStateContext &

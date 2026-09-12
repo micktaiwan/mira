@@ -56,6 +56,7 @@ import { themeCommands } from './themes'
 import { toastCommands } from './toast'
 import { tooltipCommands } from './tooltip'
 import { tracingCommands } from './tracing'
+import { updateCommands } from './update'
 import { vaultCommands } from './vault'
 import { waitCommands } from './wait'
 import { windowStateCommands } from './window-state'
@@ -242,6 +243,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...toastCommands,
     ...tooltipCommands,
     ...tracingCommands,
+    ...updateCommands,
     ...vaultCommands,
     ...waitCommands,
     ...windowStateCommands,
