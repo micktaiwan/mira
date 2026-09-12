@@ -14,6 +14,21 @@ const TRACE_ONLY = [
   '    at formatActivationEntry (/app/out/main/activation-trace.js:70:3)'
 ].join('\n')
 
+// A packaged build bundles everything into one index.js, so file names no longer
+// tell the observer apart from its caller — only its POSITION does (always first).
+const PACKAGED_OBSERVER_ONLY = [
+  'Error',
+  '    at /App/Contents/Resources/app.asar/out/main/index.js:6008:59',
+  '    at process.processTicksAndRejections (node:internal/process/task_queues:85:11)'
+].join('\n')
+
+const PACKAGED_OURS = [
+  'Error',
+  '    at /App/Contents/Resources/app.asar/out/main/index.js:6008:59',
+  '    at BrowserWindow.<anonymous> (/App/Contents/Resources/app.asar/out/main/index.js:12880:85)',
+  '    at BrowserWindow.emit (node:events:509:28)'
+].join('\n')
+
 describe('classifyActivation', () => {
   it('reads a stack with no frames at all as Chromium', () => {
     expect(classifyActivation(undefined)).toBe('chromium')
@@ -26,6 +41,14 @@ describe('classifyActivation', () => {
 
   it('reads a stack carrying app frames as our own code', () => {
     expect(classifyActivation(OURS)).toBe('app')
+  })
+
+  // Measured on the packaged app, 2026-09-12: without dropping the observer frame
+  // by position, every Chromium activation reads as one of ours.
+  it('drops the observer frame in a packaged build, where paths all look alike', () => {
+    expect(classifyActivation(PACKAGED_OBSERVER_ONLY)).toBe('chromium')
+    expect(classifyActivation(PACKAGED_OURS)).toBe('app')
+    expect(callerFrame(PACKAGED_OURS)).toContain('index.js:12880')
   })
 })
 
