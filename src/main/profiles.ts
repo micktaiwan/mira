@@ -18,7 +18,7 @@ import {
   type FocusTarget
 } from './focus-restore'
 import { existsSync, rmSync } from 'node:fs'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, writeFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
 import {
   app,
@@ -86,7 +86,8 @@ import {
   parseDownloadActionUrl,
   type DownloadPageInfo
 } from './download-doc'
-import { setActivationSuppressed } from './mac-activation'
+import { observeActivations, setActivationSuppressed } from './mac-activation'
+import { formatActivationEntry } from './activation-trace'
 import { shouldSuppressActivation, type NavKind } from './activation-policy'
 import { mayForeground, type CommandOrigin } from './foreground-policy'
 import { isLiveContents } from './live-contents'
@@ -723,6 +724,31 @@ export class ProfileManager {
       skillPaneWidth: deps.skillPaneWidth,
       magnifierEnabled: deps.magnifierEnabled
     }
+    this.startActivationTrace()
+  }
+
+  /** Record every programmatic attempt to bring Mira to the front, to
+   * `<userData>/activation.log`.
+   *
+   * This is a diagnostic, not a guard. Mira still jumps in front of the user from
+   * time to time, and the deliberate raises are all gated (foreground-policy.ts) —
+   * so reading the code after the fact proves nothing and the report stays
+   * unfalsifiable. The swizzle sees EVERY attempt, suppressed or not; the JS stack
+   * captured with it says whether our own code asked (frames of ours) or Chromium
+   * did it from C++ (none). Next time it happens, the answer is in the file with
+   * its timestamp. */
+  private startActivationTrace(): void {
+    const logPath = join(app.getPath('userData'), 'activation.log')
+    const started = observeActivations((event) => {
+      const focused = BrowserWindow.getFocusedWindow()
+      const context = [
+        `armed=${this.activationSuppressTimer !== null}`,
+        `focusedWindow=${focused ? 'yes' : 'no'}`,
+        `windows=${BrowserWindow.getAllWindows().length}`
+      ].join(' ')
+      appendFile(logPath, `${formatActivationEntry({ ...event, context })}\n`).catch(() => {})
+    })
+    if (!started) console.error('[mira] activation trace unavailable (addon missing or too old)')
   }
 
   /** The ProfileData for a profile id, created (and its files loaded) on first use.
