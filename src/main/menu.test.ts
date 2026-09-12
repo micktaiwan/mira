@@ -59,6 +59,17 @@ describe('the menu template', () => {
     expect(handlers.fillLogin).toHaveBeenCalledTimes(1)
   })
 
+  it('routes Check for Updates to the checkForUpdates handler', () => {
+    const handlers = makeHandlers()
+    const item = find(appMenuTemplate(handlers), 'Check for Updates…')
+    item?.click?.(
+      {} as Parameters<NonNullable<MenuItemConstructorOptions['click']>>[0],
+      undefined,
+      {} as KeyboardEvent
+    )
+    expect(handlers.checkForUpdates).toHaveBeenCalledTimes(1)
+  })
+
   it('routes the fullscreen items to their handlers', () => {
     const handlers = makeHandlers()
     const template = appMenuTemplate(handlers)

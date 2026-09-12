@@ -13,6 +13,9 @@ export interface AppMenuHandlers {
   openProfile: (id: string) => void
   newProfile: () => void
   openSettings: () => void
+  /** Run an update check on demand (the App menu item). Unlike the daily check,
+   * it answers even when Mira is up to date. */
+  checkForUpdates: () => void
   /** Toggle the Cmd+K command palette in the focused window. A menu accelerator
    * (not a renderer keydown) so it fires whatever holds focus — chrome or page. */
   togglePalette: () => void
@@ -186,6 +189,7 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
     role: 'appMenu',
     submenu: [
       { role: 'about' },
+      { label: 'Check for Updates…', click: () => handlers.checkForUpdates() },
       { type: 'separator' },
       settingsItem,
       { type: 'separator' },
