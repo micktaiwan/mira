@@ -24,6 +24,9 @@ const nativeRequire = createRequire(__filename)
 
 interface MiraActivationAddon {
   setSuppressActivation(on: boolean): boolean
+  /** Registered observer, called on EVERY programmatic activation attempt.
+   * Older builds of the addon do not have it — hence the optional. */
+  setActivationObserver?(fn: ((suppressed: boolean, ignoring: boolean) => void) | null): boolean
 }
 
 let addon: MiraActivationAddon | null = null
@@ -59,5 +62,35 @@ export function setActivationSuppressed(on: boolean): void {
     a.setSuppressActivation(on)
   } catch (error) {
     console.error('[mira] setSuppressActivation failed:', error)
+  }
+}
+
+/** Watch every programmatic activation attempt — the ones swallowed by the
+ * suppression flag AND the ones that go through and pull Mira in front of the
+ * user. `stack` is captured here, in JS, because it is the only thing that says
+ * WHO asked: frames of ours mean our own code, an empty one means Chromium.
+ *
+ * Returns false when the addon is absent or too old to expose the hook, so a
+ * caller can say "no trace available" instead of silently watching nothing.
+ * Passing null clears the observer. */
+export function observeActivations(
+  cb:
+    ((event: { at: number; suppressed: boolean; ignoring: boolean; stack?: string }) => void) | null
+): boolean {
+  const a = loadAddon()
+  if (!a?.setActivationObserver) return false
+  try {
+    if (!cb) return a.setActivationObserver(null)
+    return a.setActivationObserver((suppressed, ignoring) => {
+      // Never let a diagnostic throw inside the swizzle.
+      try {
+        cb({ at: Date.now(), suppressed, ignoring, stack: new Error().stack })
+      } catch {
+        /* ignore */
+      }
+    })
+  } catch (error) {
+    console.error('[mira] setActivationObserver failed:', error)
+    return false
   }
 }
