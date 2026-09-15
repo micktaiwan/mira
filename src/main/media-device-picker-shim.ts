@@ -27,6 +27,24 @@ export function parseMediaWants(constraints: unknown): {
   return { wantVideo: !!c.video, wantAudio: !!c.audio }
 }
 
+/** True when one kind's constraint already pins a device with `deviceId.exact`. Pure. */
+function pinsExactDevice(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false
+  const exact = ((value as MediaTrackConstraints).deviceId as ConstrainDOMStringParameters | undefined)
+    ?.exact
+  return Array.isArray(exact) ? exact.length > 0 : typeof exact === 'string' && exact !== ''
+}
+
+/** The page already chose its devices: every wanted kind pins an exact deviceId
+ * (e.g. from its own in-page mic selector). Then the picker is skipped, like
+ * Chrome which never re-asks a site that picks its own device. Pure. */
+export function pageChoseDevices(constraints: unknown): boolean {
+  const c = (constraints ?? {}) as { video?: unknown; audio?: unknown }
+  const { wantVideo, wantAudio } = parseMediaWants(c)
+  if (!wantVideo && !wantAudio) return false
+  return (!wantVideo || pinsExactDevice(c.video)) && (!wantAudio || pinsExactDevice(c.audio))
+}
+
 /** Merge a chosen deviceId into one kind's constraint value. `true` becomes
  * `{ deviceId: { exact } }`; an existing constraints object keeps its fields and
  * gains the exact deviceId. `exact` pins the user's choice so Chromium cannot
@@ -75,6 +93,12 @@ export const GUM_SHIM_MAIN_WORLD = `(bridge) => {
       var c = constraints || {};
       var wantVideo = !!c.video, wantAudio = !!c.audio;
       if (!wantVideo && !wantAudio) return orig(constraints);
+      // Mirrors pageChoseDevices: the page pinned its devices itself, no picker.
+      var pins = function (value) {
+        var exact = value && typeof value === 'object' && value.deviceId && value.deviceId.exact;
+        return Array.isArray(exact) ? exact.length > 0 : typeof exact === 'string' && exact !== '';
+      };
+      if ((!wantVideo || pins(c.video)) && (!wantAudio || pins(c.audio))) return orig(constraints);
       return md.enumerateDevices().then(function (devices) {
         var reduce = function (kind) {
           return devices.filter(function (d) { return d.kind === kind; })

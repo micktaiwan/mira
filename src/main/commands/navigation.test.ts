@@ -322,9 +322,31 @@ describe('focus-address-bar', () => {
   it('hands focus to the target window address bar', () => {
     const fake = makeContext()
     const registry = createCommandRegistry()
-    expect(registry.execute('focus-address-bar', {}, fake.ctx)).toEqual({ ok: true })
+    expect(registry.execute('focus-address-bar', {}, fake.ctx)).toMatchObject({ ok: true })
     registry.execute('focus-address-bar', undefined, fake.ctx)
     expect(fake.addressBarFocuses()).toBe(2)
+  })
+
+  it('copies the active url to the clipboard with a toast', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', { url: 'https://example.com/x' }, fake.ctx)
+    expect(registry.execute('focus-address-bar', {}, fake.ctx)).toEqual({
+      ok: true,
+      copied: 'https://example.com/x'
+    })
+    expect(fake.clipboardWrites).toEqual(['https://example.com/x'])
+    expect(fake.toasts).toEqual(['Copied!'])
+  })
+
+  it('still focuses, without copying, when there is no url', () => {
+    const fake = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('close-tab', { id: 'tab-1' }, fake.ctx)
+    expect(registry.execute('focus-address-bar', {}, fake.ctx)).toEqual({ ok: true })
+    expect(fake.addressBarFocuses()).toBe(1)
+    expect(fake.clipboardWrites).toEqual([])
+    expect(fake.toasts).toEqual([])
   })
 })
 

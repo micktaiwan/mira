@@ -3,6 +3,7 @@
 import { normalizeInput, sameUrl, settingsSectionFor } from '../url'
 import { type CommandMap, type NavigableContents, fail } from './registry'
 import type { CommandContext } from './context'
+import { copyActiveUrl } from './tabs'
 
 /** Navigation capability slice: reach the active view's webContents. */
 export interface NavContext {
@@ -223,13 +224,16 @@ export const navigationCommands: CommandMap<CommandContext> = {
   // Cmd+L, the browser reflex: focus the address bar and select what it holds.
   // It also gets you off the error page — the bar keeps showing the URL that
   // FAILED (not the error page's data: URL), so Enter re-navigates to it.
+  // It also copies the active url with a "Copied!" toast. New tabs focus the bar
+  // through ProfileManager directly, not this command, so they never copy.
   'focus-address-bar': (ctx) => {
     try {
       ctx.focusAddressBar()
     } catch (error) {
       return fail(error)
     }
-    return { ok: true }
+    const copy = copyActiveUrl(ctx)
+    return copy.ok ? { ok: true, copied: copy.url } : { ok: true }
   },
 
   reload: (ctx, params) => reloadCommand(ctx, params, false),
