@@ -22,6 +22,9 @@ export type MediaSource = 'dom' | 'network'
 
 /** One media resource, as the gallery renders it. */
 export interface MediaItem {
+  /** Blob verified by an explicit page audio analysis. */
+  audioDownloadable?: boolean
+  audioTabId?: string
   /** Absolute URL, or a data: URL for an inline SVG / exported canvas. Empty
    * only for a tainted canvas we could not export (cross-origin). */
   url: string

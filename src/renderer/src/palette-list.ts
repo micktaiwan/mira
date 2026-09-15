@@ -71,12 +71,10 @@ function filterEntries(entries: PaletteEntry[], query: string): PaletteEntry[] {
 
 /** The rows a query yields, in display order.
  *
- * Both modes offer the synthetic "go to / search" row on a non-empty query, but
- * at opposite ends. Address mode leads with it: the bar's whole job is to go
- * somewhere, so Enter on what you typed must be the default. Launcher mode
- * trails it, so a matching command or tab still wins Enter and the search row is
- * the fallback — including when nothing matches and it is the only row, which is
- * what lets Cmd+K search the web at all. */
+ * Both modes lead with the synthetic "go to / search" row on a non-empty query:
+ * Enter on what you typed searches the web (or opens the address). In launcher
+ * mode the row also advertises Cmd+Enter, which runs it from any selection — so
+ * arrowing down to a command or tab never costs the search shortcut. */
 export function buildPaletteList(
   entries: PaletteEntry[],
   query: string,
@@ -87,5 +85,5 @@ export function buildPaletteList(
   const ranked = filterEntries(source, query)
   if (query.trim() === '') return ranked
   const go = goToEntry(query)
-  return mode === 'address' ? [go, ...ranked] : [...ranked, go]
+  return [mode === 'launcher' ? { ...go, shortcut: '⌘↵' } : go, ...ranked]
 }

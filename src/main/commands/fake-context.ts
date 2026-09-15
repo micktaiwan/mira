@@ -1010,6 +1010,8 @@ export function makeContext(
     },
     // Media slice: no real page/network here, so return empty harvests and record
     // the gallery toggle. Enough for the command-layer tests.
+    analyzePageAudio: async () => ({ media: [], unavailable: 0 }),
+    downloadPageAudio: async () => {},
     collectMedia: async () => [],
     downloadMedia: async (urls) => ({ saved: urls.length, failed: [] }),
     downloadVideoUrl: async () => ({ saved: true, file: 'clip.mp4' }),

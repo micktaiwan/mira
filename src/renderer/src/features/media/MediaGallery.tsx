@@ -15,6 +15,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
  * the main types). */
 interface MediaItem {
   url: string
+  audioDownloadable?: boolean
+  audioTabId?: string
   kind: 'image' | 'video' | 'audio' | 'svg' | 'canvas' | 'font' | 'other'
   mime?: string
   width?: number
@@ -81,6 +83,7 @@ function canDownload(item: MediaItem): boolean {
 function canSave(item: MediaItem): boolean {
   if (item.tainted) return false
   if (item.pageUrl) return true
+  if (item.audioDownloadable) return true
   if (isStream(item)) return false
   return Boolean(item.url)
 }
@@ -118,6 +121,7 @@ function Thumb({ item }: { item: MediaItem }): React.JSX.Element {
 export default function MediaGallery({ onClose }: { onClose: () => void }): React.JSX.Element {
   const [media, setMedia] = useState<MediaItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [analyzing, setAnalyzing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Which kinds are shown. Empty = "all" until the first toggle; we seed it from
   // the kinds actually present once loaded so no button starts dead.
@@ -146,6 +150,30 @@ export default function MediaGallery({ onClose }: { onClose: () => void }): Reac
       setMedia([])
     }
     setLoading(false)
+  }
+
+  const analyzeAudio = async (): Promise<void> => {
+    setAnalyzing(true)
+    setSummary(null)
+    try {
+      const res = await run('analyze-page-audio')
+      if (!res.ok) throw new Error((res.error as string) ?? 'Audio analysis failed')
+      const items = (res.media as MediaItem[]) ?? []
+      setMedia((previous) => {
+        const urls = new Set(items.map((item) => item.url))
+        return [...previous.filter((item) => !urls.has(item.url)), ...items]
+      })
+      setActive(new Set<Kind>(['audio']))
+      setError(null)
+      const unavailable = (res.unavailable as number) ?? 0
+      setSummary(
+        `${items.length} audio sources found${unavailable ? ` · ${unavailable} unavailable (live stream, expired blob or over 32 MB)` : ''}`
+      )
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Audio analysis failed')
+    } finally {
+      setAnalyzing(false)
+    }
   }
 
   // Refresh button: an event handler, so flipping loading synchronously is fine.
@@ -196,16 +224,18 @@ export default function MediaGallery({ onClose }: { onClose: () => void }): Reac
   const downloadOne = (item: MediaItem): void => {
     const key = keyOf(item)
     const viaYtdlp = Boolean(item.pageUrl)
-    if (!viaYtdlp && (isStream(item) || !item.url)) {
+    if (!item.audioDownloadable && !viaYtdlp && (isStream(item) || !item.url)) {
       setDl((prev) => ({ ...prev, [key]: 'error' }))
       setDlErr((prev) => ({ ...prev, [key]: 'no downloadable source for this video' }))
       return
     }
     setDl((prev) => ({ ...prev, [key]: 'pending' }))
     setDlErr((prev) => ({ ...prev, [key]: '' }))
-    const call = viaYtdlp
-      ? run('download-video-url', { url: item.pageUrl })
-      : run('download-media', { url: item.url })
+    const call = item.audioDownloadable
+      ? run('download-page-audio', { url: item.url, tabId: item.audioTabId })
+      : viaYtdlp
+        ? run('download-video-url', { url: item.pageUrl })
+        : run('download-media', { url: item.url, tabId: item.audioTabId })
     void call.then((res) => {
       const ok = viaYtdlp ? res.ok === true : res.ok === true && ((res.saved as number) ?? 0) > 0
       setDl((prev) => ({ ...prev, [key]: ok ? 'done' : 'error' }))
@@ -257,7 +287,21 @@ export default function MediaGallery({ onClose }: { onClose: () => void }): Reac
         </div>
         <div className="media-actions">
           {summary && <span className="media-summary">{summary}</span>}
-          <button type="button" className="media-btn" onClick={refresh} title="Refresh">
+          <button
+            type="button"
+            className="media-btn"
+            onClick={() => void analyzeAudio()}
+            disabled={loading || analyzing}
+          >
+            {analyzing ? 'Analyzing audio…' : 'Analyze page audio'}
+          </button>
+          <button
+            type="button"
+            className="media-btn"
+            onClick={refresh}
+            disabled={analyzing}
+            title="Refresh"
+          >
             ⟳
           </button>
           <button
@@ -295,7 +339,7 @@ export default function MediaGallery({ onClose }: { onClose: () => void }): Reac
                 </span>
               </div>
               <div className="media-meta">
-                <span className="media-dims">
+                <span className="media-dims" title={item.alt || item.url}>
                   {item.width && item.height ? `${item.width}×${item.height}` : item.kind}
                   {sizeText(item.bytes) && ` · ${sizeText(item.bytes)}`}
                 </span>
@@ -319,7 +363,7 @@ export default function MediaGallery({ onClose }: { onClose: () => void }): Reac
                   const title = item.tainted
                     ? 'Cross-origin canvas — cannot export'
                     : !saveable
-                      ? 'Streamed video — no permalink found to download it'
+                      ? 'Media source unavailable — try Analyze page audio for audio blobs'
                       : state === 'error'
                         ? `Download failed: ${dlErr[keyOf(item)] || 'unknown'}`
                         : state === 'done'

@@ -71,6 +71,7 @@ import { PageConsoleStore, attachedSessionId, draftFromCdpMessage } from './page
 import { isAbortedLoad, isExpectedExit, processGoneLine, subframeFailureLine } from './frame-trace'
 import { MediaBuffer, captureStats, fileNameFor, mergeMedia } from './media-capture'
 import { MEDIA_COLLECT_SOURCE, nearestVideoPermalinkSource, parseDomMedia } from './media-collect'
+import { audioAnalysisSource, type AudioAnalysis } from './audio-analysis'
 import { ytdlpDownload } from './ytdlp'
 import {
   DownloadTracker,
@@ -5774,6 +5775,23 @@ export class ProfileManager {
         const total = target.state.tabs.length
         const loaded = target.views.size
         return { total, loaded, asleep: total - loaded }
+      },
+      analyzePageAudio: async (tabId) => {
+        const { wc, buffer } = this.resolveMediaTab(target, tabId)
+        const resolvedId = tabId ?? target?.state.activeId
+        const result = (await evalInWebContents(wc, audioAnalysisSource())) as AudioAnalysis
+        result.media = mergeMedia([
+          ...result.media,
+          ...(buffer?.list() ?? []).filter((item) => item.kind === 'audio')
+        ])
+        for (const item of result.media) item.audioTabId = resolvedId ?? tabId
+        return result
+      },
+      downloadPageAudio: async (url, tabId) => {
+        const { wc } = this.resolveMediaTab(target, tabId)
+        const data = await evalInWebContents(wc, audioAnalysisSource(url))
+        if (typeof data !== 'string' || !data.startsWith('data:')) throw new Error('Cannot read audio')
+        await this.saveMediaUrl(wc, data, app.getPath('downloads'), new Set())
       },
       collectMedia: async (tabId) => {
         const { wc, buffer } = this.resolveMediaTab(target, tabId)
