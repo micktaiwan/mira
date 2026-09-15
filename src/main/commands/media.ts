@@ -20,6 +20,8 @@ export interface MediaContext {
    * buffer), merged and deduped with provenance. Defaults to the active tab;
    * a `tabId` targets any tab across windows. Throws on an unknown/asleep tab
    * or when there is no active web page. */
+  analyzePageAudio: (tabId?: string) => Promise<import('../audio-analysis').AudioAnalysis>
+  downloadPageAudio: (url: string, tabId?: string) => Promise<void>
   collectMedia: (tabId?: string) => Promise<MediaItem[]>
   /** Download one or more urls (http(s) or data:) to the Downloads folder for
    * the tab's profile session. Resolves with how many saved and which failed. */
@@ -51,6 +53,30 @@ export function readUrls(params: unknown): string[] {
 }
 
 export const mediaCommands: CommandMap<CommandContext> = {
+  'analyze-page-audio': async (ctx, params) => {
+    const { tabId } = (params ?? {}) as { tabId?: unknown }
+    if (tabId !== undefined && (typeof tabId !== 'string' || !tabId.trim()))
+      return { ok: false, error: 'invalid "tabId"' }
+    try {
+      const result = await ctx.analyzePageAudio(tabId as string | undefined)
+      return { ok: true, ...result, count: result.media.length }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+  'download-page-audio': async (ctx, params) => {
+    const { url, tabId } = (params ?? {}) as { url?: unknown; tabId?: unknown }
+    if (typeof url !== 'string' || !url.startsWith('blob:'))
+      return { ok: false, error: 'expected a blob audio URL' }
+    if (tabId !== undefined && (typeof tabId !== 'string' || !tabId.trim()))
+      return { ok: false, error: 'invalid "tabId"' }
+    try {
+      await ctx.downloadPageAudio(url, tabId as string | undefined)
+      return { ok: true, saved: 1 }
+    } catch (error) {
+      return fail(error)
+    }
+  },
   'collect-media': async (ctx, params) => {
     const { tabId } = (params ?? {}) as { tabId?: unknown }
     if (tabId !== undefined && (typeof tabId !== 'string' || tabId.trim() === '')) {

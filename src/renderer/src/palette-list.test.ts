@@ -16,9 +16,10 @@ const ENTRIES: PaletteEntry[] = [
 ]
 
 describe('buildPaletteList', () => {
-  it('offers a search row LAST in launcher mode, so a real match still wins Enter', () => {
+  it('leads with the search row in launcher mode, advertising Cmd+Enter', () => {
     const rows = buildPaletteList(ENTRIES, 'credit', 'launcher')
-    expect(rows.map((r) => r.id)).toEqual(['bank', 'address:go'])
+    expect(rows.map((r) => r.id)).toEqual(['address:go', 'bank'])
+    expect(rows[0].shortcut).toBe('⌘↵')
   })
 
   it('offers a search row even when nothing matches — the Cmd+K web search', () => {
@@ -32,6 +33,7 @@ describe('buildPaletteList', () => {
   it('leads with the search row in address mode', () => {
     const rows = buildPaletteList(ENTRIES, 'credit', 'address')
     expect(rows.map((r) => r.id)).toEqual(['address:go', 'bank'])
+    expect(rows[0].shortcut).toBeUndefined()
   })
 
   it('narrows address mode to navigation targets only', () => {

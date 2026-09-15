@@ -124,6 +124,8 @@ function setup(): {
     getMemoryUsage: () => ({ rss: 0, processes: 1 }),
     listTabMemory: () => ({ entries: [], tabsBytes: 0, otherBytes: 0, totalBytes: 0 }),
     getTabCounts: () => ({ total: 0, loaded: 0, asleep: 0 }),
+    analyzePageAudio: async () => ({ media: [], unavailable: 0 }),
+    downloadPageAudio: async () => {},
     collectMedia: async () => [],
     downloadMedia: async () => ({ saved: 0, failed: [] }),
     downloadVideoUrl: async () => ({ saved: true, file: 'clip.mp4' }),

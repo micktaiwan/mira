@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { buildPaletteList, type PaletteEntry, type PaletteMode } from './palette-list'
+import { buildPaletteList, goToEntry, type PaletteEntry, type PaletteMode } from './palette-list'
 
 interface Props {
   /** Dismiss the palette (Esc, backdrop click, or after a pick). The parent tells
@@ -28,9 +28,10 @@ const GROUP_ICONS: Record<PaletteEntry['group'], string> = {
  *
  * Two modes share this surface (see CLAUDE.md "tout pilotable"): 'launcher' (Cmd+K)
  * lists everything and opens picked pages in a NEW tab; 'address' (typed in the URL
- * bar) lists only navigation targets and opens picks in the CURRENT tab. Both offer
- * a "go to / search" row for what you typed — leading in address mode, trailing in
- * launcher. Cmd+Enter (or Cmd+click) flips the target in both. Which rows show up in
+ * bar) lists only navigation targets and opens picks in the CURRENT tab. Both lead
+ * with a "go to / search" row for what you typed. Cmd+Enter runs that row from any
+ * selection in launcher mode and flips the target in address mode; Cmd+click flips
+ * the target in both. Which rows show up in
  * which order is buildPaletteList's job (palette-list.ts).
  *
  * The parent mounts this only while open, so its state starts fresh each opening. */
@@ -106,8 +107,13 @@ function CommandPalette({ onClose, mode, initialQuery }: Props): React.JSX.Eleme
       setSelected(Math.max(active - 1, 0))
     } else if (e.key === 'Enter') {
       e.preventDefault()
+      // Launcher: Cmd+Enter is the web-search shortcut, whatever row is selected.
+      if (mode === 'launcher' && e.metaKey) {
+        if (query.trim() !== '') runEntry(goToEntry(query), false)
+        return
+      }
       const entry = filtered[active]
-      // Cmd+Enter opens in the opposite target (new tab ↔ current tab).
+      // Address mode: Cmd+Enter opens in the opposite target (new tab ↔ current tab).
       if (entry) runEntry(entry, e.metaKey)
     }
   }

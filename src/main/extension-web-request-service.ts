@@ -421,7 +421,7 @@ function idFromScope(scope: string): string {
   return match ? match[1] : ''
 }
 
-function sessionOf(webContents: WebContents | undefined): Session | null {
+function sessionOf(webContents: WebContents | null | undefined): Session | null {
   try {
     return webContents?.session ?? null
   } catch {
@@ -429,7 +429,7 @@ function sessionOf(webContents: WebContents | undefined): Session | null {
   }
 }
 
-function tabIdOf(webContents: WebContents | undefined): number {
+function tabIdOf(webContents: WebContents | null | undefined): number {
   try {
     return webContents?.id ?? -1
   } catch {
