@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { applyChosenDevices, parseMediaWants } from './media-device-picker-shim'
+import {
+  applyChosenDevices,
+  pageChoseDevices,
+  parseMediaWants
+} from './media-device-picker-shim'
+
+describe('pageChoseDevices', () => {
+  it('skips the picker when every wanted kind pins an exact deviceId', () => {
+    expect(pageChoseDevices({ audio: { deviceId: { exact: 'mic1' } } })).toBe(true)
+    expect(pageChoseDevices({ audio: { deviceId: { exact: ['mic1'] } }, video: false })).toBe(true)
+  })
+
+  it('still asks when a wanted kind is not pinned', () => {
+    expect(pageChoseDevices({ audio: true })).toBe(false)
+    expect(pageChoseDevices({ audio: { deviceId: 'mic1' } })).toBe(false) // ideal, not exact
+    expect(pageChoseDevices({ audio: { deviceId: { exact: '' } } })).toBe(false)
+    expect(
+      pageChoseDevices({ audio: { deviceId: { exact: 'mic1' } }, video: true })
+    ).toBe(false)
+    expect(pageChoseDevices({})).toBe(false)
+  })
+})
 
 describe('parseMediaWants', () => {
   it('reads truthy video/audio constraints as wanted', () => {

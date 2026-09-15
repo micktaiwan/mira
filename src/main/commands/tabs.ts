@@ -4,7 +4,7 @@
 // the native WebContentsView-per-tab and layout live behind this context slice,
 // implemented by the ProfileManager (src/main/profiles.ts).
 
-import { type CommandMap, fail } from './registry'
+import { type CommandMap, type CommandResult, fail } from './registry'
 import { normalizeInput } from '../url'
 import type { CommandContext } from './context'
 import type { CloseFocus } from '../tab-mru'
@@ -204,6 +204,20 @@ export interface SetTabAwakeParams {
 
 export interface ToggleTabsPanelParams {
   collapsed?: boolean
+}
+
+/** copy-active-url's body, shared with focus-address-bar (Cmd+L copies too). */
+export function copyActiveUrl(ctx: CommandContext): CommandResult {
+  try {
+    const { tabs, activeId } = ctx.listTabs()
+    const url = tabs.find((t) => t.id === activeId)?.url.trim() ?? ''
+    if (url === '') return { ok: false, error: 'no url to copy' }
+    ctx.writeClipboard(url)
+    ctx.showToast('Copied!')
+    return { ok: true, url }
+  } catch (error) {
+    return fail(error)
+  }
 }
 
 export const tabsCommands: CommandMap<CommandContext> = {
@@ -458,18 +472,7 @@ export const tabsCommands: CommandMap<CommandContext> = {
   // socket / MCP client can lift the url too. Refuses with ok:false when there is
   // no active tab or it has no url yet (a fresh empty tab): copying '' and then
   // toasting "Copied!" would flash a lie.
-  'copy-active-url': (ctx) => {
-    try {
-      const { tabs, activeId } = ctx.listTabs()
-      const url = tabs.find((t) => t.id === activeId)?.url.trim() ?? ''
-      if (url === '') return { ok: false, error: 'no url to copy' }
-      ctx.writeClipboard(url)
-      ctx.showToast('Copied!')
-      return { ok: true, url }
-    } catch (error) {
-      return fail(error)
-    }
-  },
+  'copy-active-url': (ctx) => copyActiveUrl(ctx),
 
   // With `windowId` (from list-windows), lists THAT window's strip; without, the
   // window this context targets (the IPC sender, or the focused one for the
