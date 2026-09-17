@@ -44,6 +44,7 @@ import { parseTraceParams, type TraceStart } from '../tracing'
 import { resolveScreenshotPath, type ScreenshotRequest, type ScreenshotResult } from '../screenshot'
 import type { LlmConfig, ChatMessage, PageContext } from '../llm'
 import { nextZen, type PanelSnapshot } from './zen'
+import { planReveal } from './reveal-tab'
 import { PageConsoleStore, type PageConsoleDraft } from '../page-console'
 import {
   emptyTabState,
@@ -170,6 +171,8 @@ export interface FakeContext {
   /** Ids of the folders created with `edit: true` — the real ProfileManager
    * focuses the chrome and pushes mira:edit-tab-folder for each of these. */
   folderEdits: string[]
+  /** Tab ids passed to reveal-tab (the real manager pushes mira:reveal-tab). */
+  revealedTabs: string[]
   /** Live view of the fake window's zen-mode flag (toggle-zen spy): true while the
    * toolbar, status bar, and both panels are hidden. */
   chromeHidden: () => boolean
@@ -340,6 +343,7 @@ export function makeContext(
   const magnifierEnabled = { value: false }
   // Folders whose name field was requested (create-tab-folder with edit: true).
   const folderEdits: string[] = []
+  const revealedTabs: string[] = []
   // The fake Spaces world: three user desktops on one display (stable fake ids).
   const fakeSpaceIds = [101, 103, 107]
   let windowSpace = 0
@@ -504,6 +508,7 @@ export function makeContext(
       openedAt: t.openedAt ?? null,
       lastActiveAt: t.lastActiveAt ?? null,
       updatedAt: t.updatedAt ?? null,
+      lastAudibleAt: t.lastAudibleAt ?? null,
       audible: false,
       loading: false
     }))
@@ -1003,6 +1008,25 @@ export function makeContext(
       memoryByPid.set(9999, 5 * 1024 * 1024) // a non-tab process (extension/GPU)
       return buildTabMemoryReport(tabs, memoryByPid, [...memoryByPid.keys()])
     },
+    // Same shape the manager builds: every tab with a lastAudibleAt stamp. The
+    // fake has no audio, so none is audible right now.
+    listAudioHistory: () =>
+      state.tabs.tabs.flatMap((t) =>
+        t.lastAudibleAt === undefined
+          ? []
+          : [
+              {
+                tabId: t.id,
+                profileId: state.focused ?? 'default',
+                profileLabel: state.focused ?? 'default',
+                title: t.title || t.url || 'Untitled',
+                url: t.url,
+                favicon: t.favicon,
+                lastAudibleAt: t.lastAudibleAt,
+                audible: false
+              }
+            ]
+      ),
     getTabCounts: () => {
       // The fake has no lazy-load, so every tab counts as loaded.
       const total = state.tabs.tabs.length
@@ -1269,7 +1293,8 @@ export function makeContext(
         loading: false,
         openedAt: now,
         lastActiveAt: stamped?.lastActiveAt ?? null,
-        updatedAt: null
+        updatedAt: null,
+        lastAudibleAt: null
       }
     },
     closeTab: (id: string) => {
@@ -1525,6 +1550,11 @@ export function makeContext(
       state.folders = renameFolderPure(state.folders, id, title)
       return { renamed: true }
     },
+    editTabFolder: (id: string) => {
+      if (!hasFolder(state.folders, id)) return { editing: false }
+      folderEdits.push(id)
+      return { editing: true }
+    },
     removeTabFolder: (id: string) => {
       if (!hasFolder(state.folders, id)) return { removed: false }
       state.folders = removeFolderPure(state.folders, id)
@@ -1549,6 +1579,18 @@ export function makeContext(
       if (tab.pinned === true && folderId !== null) return { moved: false }
       state.tabs = setTabFolderPure(state.tabs, tabId, folderId)
       return { moved: true }
+    },
+    revealTab: (tabId?: string) => {
+      const id = tabId ?? state.tabs.activeId
+      const tab = id ? state.tabs.tabs.find((t) => t.id === id) : undefined
+      if (!tab) return { revealed: false, tabId: null, showPanel: false, expandFolderId: null }
+      const plan = planReveal(tab, state.folders, state.panelCollapsed)
+      if (plan.showPanel) state.panelCollapsed = false
+      if (plan.expandFolderId) {
+        state.folders = setFolderCollapsedPure(state.folders, plan.expandFolderId, false)
+      }
+      revealedTabs.push(tab.id)
+      return { revealed: true, tabId: tab.id, ...plan }
     },
     toggleZen: (hidden?: boolean) => {
       const live = { tabsCollapsed: state.panelCollapsed, skillPaneOpen: state.skillPane.open }
@@ -2112,6 +2154,7 @@ export function makeContext(
     panelCollapsed: () => state.panelCollapsed,
     folders: () => state.folders,
     folderEdits,
+    revealedTabs,
     chromeHidden: () => state.chromeHidden,
     zoomLevel: () => state.zoomLevel,
     paletteOpen: () => state.paletteOpen,

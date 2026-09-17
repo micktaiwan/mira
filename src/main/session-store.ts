@@ -52,6 +52,8 @@ export interface PersistedTab {
   openedAt?: number
   lastActiveAt?: number
   updatedAt?: number
+  /** When the tab last emitted sound (see TabMeta). Written only when known. */
+  lastAudibleAt?: number
 }
 
 /** A window's saved geometry: its restored (non-maximized) rectangle plus the
@@ -143,7 +145,8 @@ export function toPersisted(
       ...(t.keepAwake === true ? { keepAwake: true } : {}),
       ...(t.openedAt !== undefined ? { openedAt: t.openedAt } : {}),
       ...(t.lastActiveAt !== undefined ? { lastActiveAt: t.lastActiveAt } : {}),
-      ...(t.updatedAt !== undefined ? { updatedAt: t.updatedAt } : {})
+      ...(t.updatedAt !== undefined ? { updatedAt: t.updatedAt } : {}),
+      ...(t.lastAudibleAt !== undefined ? { lastAudibleAt: t.lastAudibleAt } : {})
     })),
     activeIndex: found === -1 ? 0 : found,
     panelCollapsed,
@@ -207,7 +210,8 @@ function normalizeWindow(value: unknown): PersistedWindow | null {
       // (a tab would then read as "opened at the epoch", i.e. always the stalest).
       ...(isStamp(tv.openedAt) ? { openedAt: tv.openedAt } : {}),
       ...(isStamp(tv.lastActiveAt) ? { lastActiveAt: tv.lastActiveAt } : {}),
-      ...(isStamp(tv.updatedAt) ? { updatedAt: tv.updatedAt } : {})
+      ...(isStamp(tv.updatedAt) ? { updatedAt: tv.updatedAt } : {}),
+      ...(isStamp(tv.lastAudibleAt) ? { lastAudibleAt: tv.lastAudibleAt } : {})
     })
   }
   if (tabs.length === 0) return null

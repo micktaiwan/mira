@@ -131,6 +131,7 @@ that order, between the tab id and the title.
 | `list-commands`   | —      | `{commands: string[]}` — every command name, sorted                                            |
 | `get-status`      | —      | memory usage + tab counts (total / loaded / asleep)                                            |
 | `list-tab-memory` | —      | cross-profile: every loaded tab ranked by its renderer-process memory; `{entries, totalBytes}` |
+| `list-audio-history` | —      | cross-profile: every open tab that has emitted sound, audible-now first then most recent first; `{entries:[{tabId, profileId, profileLabel, title, url, favicon, lastAudibleAt, audible}]}`. `lastAudibleAt` (epoch ms) is stamped on audio start and stop and persisted with the session |
 | `whoami`          | —      | id of the profile owning the target window                                                     |
 | `version`         | —      | `{version}` — the running app's version, no network                                            |
 | `check-for-updates` | —    | ask GitHub for the latest release NOW: `{current, state}` with `state` one of `newer` (+ `version`), `up-to-date`, `failed` (+ `error`). Always answers, unlike the daily check, which stays silent unless there is a version it has not announced yet. Also shows a native notification. A repo with no release answers `failed: no release published yet` |
@@ -220,6 +221,7 @@ Disabling snaps any magnified tab back to 100%.
 | `reopen-closed-tab`                      | —                     | restore the most recently closed tab                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `toggle-tabs-panel`                      | `collapsed?`          | collapse/expand the tab sidebar                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `toggle-zen`                             | `hidden?`             | zen (focus) mode: hide/show the toolbar, status bar, and both side panels at once. `hidden` omitted flips it; a boolean forces it. Exiting restores the panels to their pre-zen state. Cmd+Shift+H.                                                                                                                                                                                                                                                                       |
+| `reveal-tab` | `id?` | show where a tab (default: the active one) sits in the sidebar: shows the sidebar if hidden, expands its collapsed folder, then the chrome scrolls to its row and flashes it. `{tabId, showPanel, expandFolderId}`. Errors: `no active tab`, `unknown tab: <id>`. Cmd+Shift+E. |
 
 ### Page introspection (devtools domain)
 
@@ -407,7 +409,7 @@ A field is keyed by its `name` (else its `id`, else its `aria-label`), a site by
 
 | Command                                      | Params                          | Effect / result                                                                          |
 | -------------------------------------------- | ------------------------------- | ---------------------------------------------------------------------------------------- |
-| `open-settings`                              | `section?`                      | open the Settings tab (`general`, `ai`, `profiles`, `extensions`, `permissions`, `data`) |
+| `open-settings`                              | `section?`                      | open the Settings tab (`general`, `ai`, `profiles`, `tabs`, `audio`, `extensions`, `permissions`, `data`) |
 | `get-settings`                               | —                               | current app settings                                                                     |
 | `set-home-url`                               | `url`                           | home page                                                                                |
 | `set-llm-config`                             | `provider`, `apiKey?`, `model?` | AI engine (`claude-cli`, `anthropic-api`, `extractive`)                                  |

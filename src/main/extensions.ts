@@ -76,6 +76,7 @@ import { formatExtTabLog } from './extensions-tab-log'
 import { OffscreenHostService } from './extension-offscreen'
 import { WebRequestBridgeService } from './extension-web-request-service'
 import { StorageEventBridgeService } from './extension-storage-events-service'
+import { serializeSwConsole, shouldCompactSwConsole } from './sw-console-file'
 import { guardedVerdict } from './web-request-guard'
 import {
   type DisabledExtensions,
@@ -380,6 +381,10 @@ export class ExtensionsService {
   /** Resolved on-disk JSONL path per session for the SW console mirror. */
   private readonly swConsoleFile = new Map<Session, string>()
 
+  /** Lines currently in each session's on-disk mirror. The in-memory ring is
+   * capped, the file is not: without this counter it only shrank at startup. */
+  private readonly swConsoleFileLines = new Map<Session, number>()
+
   /** Monotonic sequence for captured SW log entries — lets a caller poll for
    * "what's new since seq N" even as old entries drop out of the buffer. Seeded
    * from disk on attach so it keeps climbing across reloads. */
@@ -467,7 +472,7 @@ export class ExtensionsService {
       if (buffer.length > SW_CONSOLE_BUFFER_LIMIT) {
         buffer.splice(0, buffer.length - SW_CONSOLE_BUFFER_LIMIT)
       }
-      this.appendSwConsole(ses, entry)
+      this.appendSwConsole(ses, entry, buffer)
     })
   }
 
@@ -546,20 +551,32 @@ export class ExtensionsService {
       this.swConsoleSeq = Math.max(this.swConsoleSeq, entry.seq)
     }
     try {
-      writeFileSync(
-        path,
-        buffer.map((e) => JSON.stringify(e)).join('\n') + (buffer.length ? '\n' : '')
-      )
+      writeFileSync(path, serializeSwConsole(buffer))
     } catch {
       // can't rewrite — harmless, the in-memory ring still works
     }
+    this.swConsoleFileLines.set(ses, buffer.length)
     return buffer
   }
 
-  /** Append one captured entry to `ses`'s disk mirror. Best-effort. */
-  private appendSwConsole(ses: Session, entry: ServiceWorkerLogEntry): void {
+  /** Append one captured entry to `ses`'s disk mirror, compacting the file back
+   * to the in-memory tail once it has grown past SW_CONSOLE_FILE_LIMIT lines.
+   * Best-effort. */
+  private appendSwConsole(
+    ses: Session,
+    entry: ServiceWorkerLogEntry,
+    buffer: readonly ServiceWorkerLogEntry[]
+  ): void {
+    const path = this.swConsoleFilePath(ses)
+    const lines = (this.swConsoleFileLines.get(ses) ?? 0) + 1
+    this.swConsoleFileLines.set(ses, lines)
     try {
-      appendFileSync(this.swConsoleFilePath(ses), JSON.stringify(entry) + '\n')
+      if (shouldCompactSwConsole(lines)) {
+        writeFileSync(path, serializeSwConsole(buffer))
+        this.swConsoleFileLines.set(ses, buffer.length)
+      } else {
+        appendFileSync(path, JSON.stringify(entry) + '\n')
+      }
     } catch {
       // disk hiccup — the in-memory ring is the source of truth for reads
     }

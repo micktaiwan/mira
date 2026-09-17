@@ -72,6 +72,13 @@ const mira = {
   // Main asks the sidebar to open a tab folder's name field (a folder just created
   // from the "New Folder…" menu): the field opens focused with its default name
   // selected, so the folder can be named right away. Returns an unsubscribe function.
+  // Main asks the sidebar to scroll a tab's row into view and flash it (the
+  // reveal-tab command, after it showed the panel / expanded the folder).
+  onRevealTab: (callback: (tabId: string) => void): (() => void) => {
+    const listener = (_event: unknown, payload: { id: string }): void => callback(payload.id)
+    ipcRenderer.on('mira:reveal-tab', listener)
+    return () => ipcRenderer.removeListener('mira:reveal-tab', listener)
+  },
   onEditTabFolder: (callback: (folderId: string) => void): (() => void) => {
     const listener = (_event: unknown, payload: { id: string }): void => callback(payload.id)
     ipcRenderer.on('mira:edit-tab-folder', listener)

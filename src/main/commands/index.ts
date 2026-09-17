@@ -16,6 +16,7 @@ import { buildRegistry, type CommandMap, type CommandRegistryOf } from './regist
 import type { CommandContext } from './context'
 import { appCommands } from './app'
 import { audioCommands } from './audio'
+import { audioHistoryCommands } from './audio-history'
 import { bookmarksCommands } from './bookmarks'
 import { cardsCommands } from './cards'
 import { consoleCommands } from './console'
@@ -61,12 +62,14 @@ import { vaultCommands } from './vault'
 import { waitCommands } from './wait'
 import { windowStateCommands } from './window-state'
 import { zenCommands } from './zen'
+import { revealTabCommands } from './reveal-tab'
 
 // Public types, re-exported so consumers keep importing from './commands'.
 export type { CommandContext } from './context'
 export type { NavigableContents, ProfileInfo, CommandResult, CommandHandler } from './registry'
 export type { AppContext } from './app'
 export type { AudioContext } from './audio'
+export type { AudioHistoryContext, AudioHistoryEntry } from './audio-history'
 export type { BookmarkContext } from './bookmarks'
 export type { BookmarkNode, BookmarkUrl, BookmarkFolder, BookmarkTree } from '../bookmark-store'
 export type { CardsContext, CardVaultInfo } from './cards'
@@ -196,6 +199,8 @@ export {
 } from '../wait'
 export type { ZenContext, ZenState, PanelSnapshot } from './zen'
 export { nextZen } from './zen'
+export type { RevealTabContext, RevealPlan } from './reveal-tab'
+export { planReveal } from './reveal-tab'
 
 export type CommandRegistry = CommandRegistryOf<CommandContext>
 
@@ -235,6 +240,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...statusCommands,
     ...tabFoldersCommands,
     ...tabMemoryCommands,
+    ...audioHistoryCommands,
     ...tabDetachCommands,
     ...tabMenuCommands,
     ...tabTidyCommands,
@@ -247,7 +253,8 @@ export function createCommandRegistry(): CommandRegistry {
     ...vaultCommands,
     ...waitCommands,
     ...windowStateCommands,
-    ...zenCommands
+    ...zenCommands,
+    ...revealTabCommands
   }
   return buildRegistry(commands)
 }

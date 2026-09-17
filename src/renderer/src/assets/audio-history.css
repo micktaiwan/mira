@@ -1,0 +1,8 @@
+/* Settings → Audio: the rows of the audio history are clickable (go to the tab). */
+.audio-history-row {
+  cursor: pointer;
+}
+
+.audio-history-row:hover td {
+  background: var(--ev-c-gray-3);
+}

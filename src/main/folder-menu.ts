@@ -6,8 +6,8 @@
 //
 // Actions are emitted as `command` items so they route through the same registry
 // bus as everything else ("tout pilotable"): collapse/expand, pick an accent
-// color (or clear it), and remove the folder. Rename is not here — it is the
-// sidebar's inline double-click field (a native menu can't host a text input).
+// color (or clear it), rename, and remove the folder. A native menu can't host a
+// text input, so Rename asks main to open the sidebar's inline name field.
 
 /** The folder a right-click landed on: enough to label collapse vs expand and to
  * mark the currently selected color. */
@@ -56,7 +56,7 @@ export type FolderMenuItem =
   | { type: 'submenu'; label: string; items: FolderMenuItem[] }
 
 /** Decide the menu for a right-click on a folder header: collapse/expand toggle,
- * a "Color" submenu (each preset, then "No Color" to clear — the active one
+ * Rename, a "Color" submenu (each preset, then "No Color" to clear — the active one
  * checked), then Remove. Id-taking commands carry the folder id. */
 export function buildFolderMenu(
   folder: FolderMenuTarget,
@@ -88,6 +88,13 @@ export function buildFolderMenu(
       command: 'toggle-tab-folder',
       params: { id: folder.id },
       label: folder.collapsed ? 'Expand Folder' : 'Collapse Folder',
+      enabled: true
+    },
+    {
+      type: 'command',
+      command: 'edit-tab-folder',
+      params: { id: folder.id },
+      label: 'Rename Folder…',
       enabled: true
     },
     { type: 'separator' },

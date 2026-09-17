@@ -123,6 +123,7 @@ function setup(): {
     forgetDomain: () => Promise.resolve({ domain: null, cookiesRemoved: 0, historyRemoved: 0 }),
     getMemoryUsage: () => ({ rss: 0, processes: 1 }),
     listTabMemory: () => ({ entries: [], tabsBytes: 0, otherBytes: 0, totalBytes: 0 }),
+    listAudioHistory: () => [],
     getTabCounts: () => ({ total: 0, loaded: 0, asleep: 0 }),
     analyzePageAudio: async () => ({ media: [], unavailable: 0 }),
     downloadPageAudio: async () => {},
@@ -159,7 +160,8 @@ function setup(): {
       loading: false,
       openedAt: null,
       lastActiveAt: null,
-      updatedAt: null
+      updatedAt: null,
+      lastAudibleAt: null
     }),
     closeTab: () => ({ closed: true }),
     closeActiveTab: () => ({ closed: true, id: 'tab' }),
@@ -208,7 +210,8 @@ function setup(): {
           loading: false,
           openedAt: null,
           lastActiveAt: null,
-          updatedAt: null
+          updatedAt: null,
+          lastAudibleAt: null
         }
       ],
       activeId: 'tab',
@@ -226,12 +229,14 @@ function setup(): {
     listTabFolders: () => ({ folders: [] }),
     createTabFolder: () => ({ id: 'folder-1' }),
     renameTabFolder: () => ({ renamed: true }),
+    editTabFolder: () => ({ editing: true }),
     removeTabFolder: () => ({ removed: true }),
     toggleTabFolder: (_id: string, collapsed?: boolean) => ({ collapsed: collapsed ?? true }),
     setTabFolderColor: () => ({ updated: true }),
     showFolderMenu: () => {},
     moveTabToFolder: () => ({ moved: true }),
     toggleZen: (hidden?: boolean) => ({ hidden: hidden ?? true }),
+    revealTab: () => ({ revealed: false, tabId: null, showPanel: false, expandFolderId: null }),
     setPaletteOpen: (open?: boolean) => ({ open: open ?? true }),
     // Bookmark slice: minimal stubs, not exercised by these socket-dispatch tests.
     addBookmark: (url?: string, title?: string) => ({

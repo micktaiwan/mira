@@ -9,6 +9,7 @@ import ExtensionActions from './features/extensions/ExtensionActions'
 import FindBar from './features/find/FindBar'
 import MediaGallery from './features/media/MediaGallery'
 import { ReloadSpinner } from './features/loading/ReloadSpinner'
+import { useRevealTab } from './features/reveal-tab/useRevealTab'
 import { applyTheme, initialTheme } from './features/profile-theme/profile-theme'
 import type { SkillPaneState, TabFolder } from '../../preload/index.d'
 
@@ -366,6 +367,8 @@ function App(): React.JSX.Element {
       el.select()
     })
   }, [])
+
+  useRevealTab()
 
   useEffect(() => {
     // Main pushes this right after creating a folder from the "New Folder…" menu:

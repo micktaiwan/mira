@@ -35,7 +35,7 @@ export interface SetHomeUrlParams {
 
 export const settingsCommands: CommandMap<CommandContext> = {
   // Open the Settings surface, optionally on a specific sub-section (the same
-  // names as the panel's tabs: 'general', 'ai', 'profiles', 'extensions',
+  // names as the panel's tabs: 'general', 'ai', 'profiles', 'tabs', 'audio', 'extensions',
   // 'permissions', 'data'). Unknown names fall back to the default section.
   'open-settings': (ctx, params) => {
     const { section } = (params ?? {}) as { section?: unknown }

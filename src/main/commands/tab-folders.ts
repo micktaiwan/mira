@@ -22,6 +22,9 @@ export interface TabFoldersContext {
   createTabFolder: (title: string, tabId?: string, edit?: boolean) => { id: string }
   /** Relabel a folder. `renamed` is false on an unknown id. */
   renameTabFolder: (id: string, title: string) => { renamed: boolean }
+  /** Hand keyboard focus to the chrome and open a folder's name field (selected)
+   * — the "Rename Folder…" right-click flow. `editing` is false on an unknown id. */
+  editTabFolder: (id: string) => { editing: boolean }
   /** Remove a folder; its tabs become loose (they are NOT closed). `removed` is
    * false on an unknown id. */
   removeTabFolder: (id: string) => { removed: boolean }
@@ -103,6 +106,17 @@ export const tabFoldersCommands: CommandMap<CommandContext> = {
     try {
       const { renamed } = ctx.renameTabFolder(id.trim(), title.trim())
       return { ok: true, renamed }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  'edit-tab-folder': (ctx, params) => {
+    const { id } = (params ?? {}) as Partial<TabFolderIdParams>
+    if (typeof id !== 'string' || id.trim() === '') return { ok: false, error: 'missing "id"' }
+    try {
+      const { editing } = ctx.editTabFolder(id.trim())
+      return { ok: true, editing }
     } catch (error) {
       return fail(error)
     }

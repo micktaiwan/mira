@@ -1,5 +1,6 @@
 import './assets/main.css'
 import './assets/media.css'
+import './assets/audio-history.css'
 
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
