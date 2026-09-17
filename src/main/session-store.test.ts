@@ -6,7 +6,14 @@ import {
   boundsOnScreen,
   type PersistedBounds
 } from './session-store'
-import { emptyTabState, addTab, selectTab, setKeepAwake, type TabState } from './tab-store'
+import {
+  emptyTabState,
+  addTab,
+  selectTab,
+  setKeepAwake,
+  updateTab,
+  type TabState
+} from './tab-store'
 
 function twoTabs(): TabState {
   let s = emptyTabState()
@@ -114,6 +121,13 @@ describe('toPersisted', () => {
       keepAwake: true
     })
     expect('keepAwake' in tabs[1]).toBe(false)
+  })
+
+  it('writes lastAudibleAt only when the tab has made a sound', () => {
+    const s = updateTab(twoTabs(), 'a', { lastAudibleAt: 1234 })
+    const tabs = toPersisted(s, false).tabs
+    expect(tabs[0].lastAudibleAt).toBe(1234)
+    expect('lastAudibleAt' in tabs[1]).toBe(false)
   })
 })
 
@@ -312,6 +326,25 @@ describe('normalizeSessions', () => {
     expect(tabs[0].keepAwake).toBe(true)
     expect('keepAwake' in tabs[1]).toBe(false)
     expect('keepAwake' in tabs[2]).toBe(false)
+  })
+
+  it('keeps a valid lastAudibleAt stamp and drops a bad one', () => {
+    const raw = {
+      p: [
+        {
+          tabs: [
+            { url: 'https://a.test', lastAudibleAt: 1234 },
+            { url: 'https://b.test', lastAudibleAt: 'NaN' },
+            { url: 'https://c.test', lastAudibleAt: -1 }
+          ],
+          activeIndex: 0
+        }
+      ]
+    }
+    const tabs = normalizeSessions(raw).p[0].tabs
+    expect(tabs[0].lastAudibleAt).toBe(1234)
+    expect('lastAudibleAt' in tabs[1]).toBe(false)
+    expect('lastAudibleAt' in tabs[2]).toBe(false)
   })
 
   it('degrades a non-object to an empty map', () => {

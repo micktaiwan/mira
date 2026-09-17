@@ -8,6 +8,7 @@
 
 import type { AppContext } from './app'
 import type { AudioContext } from './audio'
+import type { AudioHistoryContext } from './audio-history'
 import type { BookmarkContext } from './bookmarks'
 import type { CardsContext } from './cards'
 import type { ConsoleContext } from './console'
@@ -32,6 +33,7 @@ import type { PaletteContext } from './palette'
 import type { PaneContext } from './pane'
 import type { PermissionContext } from './permissions'
 import type { ProfileContext } from './profiles'
+import type { RevealTabContext } from './reveal-tab'
 import type { ScreenshotContext } from './screenshot'
 import type { SettingsContext } from './settings'
 import type { SkillsContext } from './skills'
@@ -55,6 +57,7 @@ import type { ZenContext } from './zen'
 
 export type CommandContext = AppContext &
   AudioContext &
+  AudioHistoryContext &
   BookmarkContext &
   CardsContext &
   ConsoleContext &
@@ -79,6 +82,7 @@ export type CommandContext = AppContext &
   PaneContext &
   PermissionContext &
   ProfileContext &
+  RevealTabContext &
   ScreenshotContext &
   SettingsContext &
   SkillsContext &

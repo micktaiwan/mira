@@ -127,6 +127,13 @@ const STATIC_COMMANDS: ReadonlyArray<Omit<PaletteEntry, 'group'>> = [
     shortcut: '⌘S'
   },
   {
+    id: 'cmd:reveal-tab',
+    title: 'Reveal Tab in Sidebar',
+    command: 'reveal-tab',
+    keywords: 'find locate where current active show scroll',
+    shortcut: '⇧⌘E'
+  },
+  {
     id: 'cmd:toggle-panel',
     title: 'Toggle Tab Panel',
     command: 'toggle-tabs-panel',

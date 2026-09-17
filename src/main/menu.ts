@@ -28,6 +28,9 @@ export interface AppMenuHandlers {
   /** Toggle zen (focus) mode (Cmd+Shift+H) in the focused window: hide/show the
    * toolbar, status bar, and both side panels at once. Wired to toggle-zen. */
   toggleZen: () => void
+  /** Show where the active tab sits in the sidebar (Cmd+Shift+E): shows the
+   * sidebar, expands its folder, scrolls to the row and flashes it. */
+  revealTab: () => void
   /** Navigate the focused window back / forward in its history. Wired to the
    * back / forward commands so the Cmd+Arrow accelerators stay pilotable. */
   goBack: () => void
@@ -310,6 +313,11 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         accelerator: 'CmdOrCtrl+Alt+Right',
         registerAccelerator: false,
         click: () => handlers.recentTabForward()
+      },
+      {
+        label: 'Reveal Tab in Sidebar',
+        accelerator: 'CmdOrCtrl+Shift+E',
+        click: () => handlers.revealTab()
       },
       { type: 'separator' },
       {

@@ -23,10 +23,11 @@ function findCommand(items: FolderMenuItem[], command: string, color?: unknown):
 describe('buildFolderMenu', () => {
   const base = { id: 'f1', collapsed: false, color: null }
 
-  it('offers collapse, a Color submenu, and remove', () => {
+  it('offers collapse, rename, a Color submenu, and remove', () => {
     const items = buildFolderMenu(base)
     expect(labels(items)).toEqual([
       'Collapse Folder',
+      'Rename Folder…',
       'Color▸',
       ...FOLDER_COLORS.map((c) => c.name),
       'No Color',
@@ -43,6 +44,7 @@ describe('buildFolderMenu', () => {
   it('carries the folder id on every id-taking command', () => {
     const items = buildFolderMenu(base)
     for (const cmd of [
+      ...findCommand(items, 'edit-tab-folder'),
       ...findCommand(items, 'set-tab-folder-color'),
       ...findCommand(items, 'remove-tab-folder')
     ]) {

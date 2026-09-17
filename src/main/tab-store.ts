@@ -48,6 +48,11 @@ export interface TabMeta {
    * so it answers "when did this page last do something" rather than "when did
    * we last write the tab". Absent until the first such change. */
   updatedAt?: number
+  /** When the tab last emitted sound, epoch ms: stamped when its audio starts AND
+   * when it stops, so a tab playing now or that just went quiet reads as recent.
+   * Not a page change, so it never touches `updatedAt`. Absent on a tab that has
+   * never been audible. */
+  lastAudibleAt?: number
 }
 
 /** A window's tab list plus its active tab. `activeId` is null only when there

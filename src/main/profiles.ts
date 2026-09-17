@@ -52,10 +52,12 @@ import type {
   MemoryUsage,
   PaletteMode,
   PanelSnapshot,
+  RevealPlan,
   ProfileInfo,
   SkillPaneState,
   TabInfo,
   TabMemoryReport,
+  AudioHistoryEntry,
   RawFrame,
   RawTab
 } from './commands'
@@ -63,6 +65,7 @@ import {
   closedSkillPane,
   formatMemory,
   nextZen,
+  planReveal,
   buildTabMemoryReport,
   TracingSession,
   parseTraceParams
@@ -2197,7 +2200,8 @@ export class ProfileManager {
         // the fact list-tabs is meant to report.
         ...(t.openedAt !== undefined ? { openedAt: t.openedAt } : {}),
         ...(t.lastActiveAt !== undefined ? { lastActiveAt: t.lastActiveAt } : {}),
-        ...(t.updatedAt !== undefined ? { updatedAt: t.updatedAt } : {})
+        ...(t.updatedAt !== undefined ? { updatedAt: t.updatedAt } : {}),
+        ...(t.lastAudibleAt !== undefined ? { lastAudibleAt: t.lastAudibleAt } : {})
       })
       // Remember which tabs were awake at quit, keyed by the fresh id, so
       // wake-all-tabs (Cmd+Shift+A) can re-open exactly that set on demand.
@@ -2791,7 +2795,15 @@ export class ProfileManager {
     // icon and the toolbar audio button track it. audible is not stored on the tab
     // (it is read live from the view in tabInfos), so this only needs to push —
     // not patch/persist. schedulePush coalesces bursts (ad start/stop, autoplay).
-    wc.on('audio-state-changed', () => this.schedulePush(owner()))
+    // Both transitions also stamp lastAudibleAt (start = sound now, stop = the last
+    // moment it made sound) for the Settings "Audio" history. updateTab gets no
+    // clock, so this never bumps updatedAt (sound is not a page change).
+    wc.on('audio-state-changed', () => {
+      const pw = owner()
+      pw.state = updateTab(pw.state, tabId, { lastAudibleAt: Date.now() })
+      this.saveSession(pw)
+      this.schedulePush(pw)
+    })
     // Main-frame load start/stop drives the toolbar reload spinner (TabInfo.loading,
     // read live in tabInfos). Push immediately (not debounced) so the spinner
     // appears the instant a reload/navigation begins and clears the instant it
@@ -3044,6 +3056,7 @@ export class ProfileManager {
       openedAt: t.openedAt ?? null,
       lastActiveAt: t.lastActiveAt ?? null,
       updatedAt: t.updatedAt ?? null,
+      lastAudibleAt: t.lastAudibleAt ?? null,
       // Live audio state read straight from the native view (like `loaded` from
       // pw.views): true while the page emits sound. An asleep tab has no view, so
       // it is never audible. Refreshed by the audio-state-changed push (wireView).
@@ -3619,7 +3632,8 @@ export class ProfileManager {
       url: tab.url,
       favicon: tab.favicon,
       ...(tab.openedAt !== undefined ? { openedAt: tab.openedAt } : {}),
-      ...(tab.updatedAt !== undefined ? { updatedAt: tab.updatedAt } : {})
+      ...(tab.updatedAt !== undefined ? { updatedAt: tab.updatedAt } : {}),
+      ...(tab.lastAudibleAt !== undefined ? { lastAudibleAt: tab.lastAudibleAt } : {})
     }
     dst.state = addTab(dst.state, moved)
     dst.state = stampActiveTab(dst.state, Date.now())
@@ -4811,11 +4825,20 @@ export class ProfileManager {
     // auto-focused input would render selected but swallow no keystroke (same
     // move as the palette and the address bar). Sent AFTER pushTabs so the
     // chrome already knows the folder when it opens the editor.
-    if (edit && !pw.window.isDestroyed()) {
-      pw.window.webContents.focus()
-      pw.window.webContents.send('mira:edit-tab-folder', { id })
-    }
+    if (edit) this.openFolderEditor(pw, id)
     return { id }
+  }
+
+  private openFolderEditor(pw: ProfileWindow, id: string): void {
+    if (pw.window.isDestroyed()) return
+    pw.window.webContents.focus()
+    pw.window.webContents.send('mira:edit-tab-folder', { id })
+  }
+
+  private editTabFolderIn(pw: ProfileWindow, id: string): { editing: boolean } {
+    if (!hasFolder(pw.folders, id)) return { editing: false }
+    this.openFolderEditor(pw, id)
+    return { editing: true }
   }
 
   private renameTabFolderIn(pw: ProfileWindow, id: string, title: string): { renamed: boolean } {
@@ -4876,6 +4899,29 @@ export class ProfileManager {
     this.pushTabs(pw)
     this.saveSession(pw)
     return { moved: true }
+  }
+
+  /** Make a tab's sidebar row findable: show the sidebar, expand the collapsed
+   * folder holding the tab, then ask the chrome to scroll the row into view and
+   * flash it. Sent after the push so the row is already rendered. */
+  private revealTabIn(
+    pw: ProfileWindow,
+    tabId?: string
+  ): { revealed: boolean; tabId: string | null } & RevealPlan {
+    const id = tabId ?? pw.state.activeId
+    const tab = id ? pw.state.tabs.find((t) => t.id === id) : undefined
+    if (!tab) return { revealed: false, tabId: null, showPanel: false, expandFolderId: null }
+    const plan = planReveal(tab, pw.folders, pw.panelCollapsed)
+    if (plan.expandFolderId) {
+      pw.folders = setFolderCollapsedPure(pw.folders, plan.expandFolderId, false)
+    }
+    if (plan.showPanel) this.toggleTabsPanelIn(pw, false)
+    else if (plan.expandFolderId) {
+      this.pushTabs(pw)
+      this.saveSession(pw)
+    }
+    if (!pw.window.isDestroyed()) pw.window.webContents.send('mira:reveal-tab', { id: tab.id })
+    return { revealed: true, tabId: tab.id, ...plan }
   }
 
   private toggleTabsPanelIn(pw: ProfileWindow, collapsed?: boolean): { collapsed: boolean } {
@@ -4970,6 +5016,30 @@ export class ProfileManager {
       })),
       focused: this.focusedId()
     }
+  }
+
+  /** Cross-profile list of every open tab that has emitted sound, unordered
+   * (list-audio-history ranks it). Walks every OPEN profile window only: a closed
+   * profile has no live strip to go back to. */
+  listAudioHistory(): AudioHistoryEntry[] {
+    const entries: AudioHistoryEntry[] = []
+    for (const pw of this.openById.values()) {
+      const label = findById(this.profiles, pw.id)?.label ?? pw.id
+      for (const tab of pw.state.tabs) {
+        if (tab.lastAudibleAt === undefined) continue
+        entries.push({
+          tabId: tab.id,
+          profileId: pw.id,
+          profileLabel: label,
+          title: tab.title || tab.url || 'Untitled',
+          url: tab.url,
+          favicon: tab.favicon,
+          lastAudibleAt: tab.lastAudibleAt,
+          audible: this.liveContents(pw, tab.id)?.isCurrentlyAudible() === true
+        })
+      }
+    }
+    return entries
   }
 
   /** Cross-profile snapshot of every loaded tab with the memory of its renderer
@@ -5768,6 +5838,7 @@ export class ProfileManager {
       getMemoryUsage: () => this.deps.getMemoryUsage(),
       // Cross-profile: independent of `target`, walks every open window.
       listTabMemory: () => this.listTabMemory(),
+      listAudioHistory: () => this.listAudioHistory(),
       getTabCounts: () => {
         if (!target) return { total: 0, loaded: 0, asleep: 0 }
         // A tab is "loaded" once it has a WebContentsView (materialized); the
@@ -6146,7 +6217,8 @@ export class ProfileManager {
           // the null — the command result must not claim a focus that did not happen.
           openedAt: tab.openedAt ?? null,
           lastActiveAt: tab.lastActiveAt ?? null,
-          updatedAt: null
+          updatedAt: null,
+          lastAudibleAt: null
         }
       },
       // Resolved across every open window (like discardTab): the id is globally
@@ -6288,9 +6360,17 @@ export class ProfileManager {
         if (!target) throw new Error('no target window')
         return this.renameTabFolderIn(target, id, title)
       },
+      editTabFolder: (id) => {
+        if (!target) throw new Error('no target window')
+        return this.editTabFolderIn(target, id)
+      },
       removeTabFolder: (id) => {
         if (!target) throw new Error('no target window')
         return this.removeTabFolderIn(target, id)
+      },
+      revealTab: (tabId) => {
+        if (!target) throw new Error('no target window')
+        return this.revealTabIn(target, tabId)
       },
       toggleTabFolder: (id, collapsed) => {
         if (!target) throw new Error('no target window')

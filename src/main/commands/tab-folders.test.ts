@@ -9,6 +9,38 @@ function tabFolderId(ctx: ReturnType<typeof makeContext>['ctx'], id: string): st
   return res.tabs.find((t) => t.id === id)?.folderId ?? null
 }
 
+describe('edit-tab-folder', () => {
+  it('opens the name field of an existing folder', () => {
+    const { ctx, folderEdits } = makeContext()
+    const registry = createCommandRegistry()
+    const { id } = registry.execute('create-tab-folder', { title: 'Work' }, ctx) as {
+      ok: true
+      id: string
+    }
+    expect(registry.execute('edit-tab-folder', { id }, ctx)).toEqual({ ok: true, editing: true })
+    expect(folderEdits).toEqual([id])
+  })
+
+  it('reports editing: false on an unknown id', () => {
+    const { ctx, folderEdits } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('edit-tab-folder', { id: 'nope' }, ctx)).toEqual({
+      ok: true,
+      editing: false
+    })
+    expect(folderEdits).toEqual([])
+  })
+
+  it('rejects a missing id', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    expect(registry.execute('edit-tab-folder', {}, ctx)).toEqual({
+      ok: false,
+      error: 'missing "id"'
+    })
+  })
+})
+
 describe('create-tab-folder', () => {
   it('creates an expanded folder and returns its id', () => {
     const { ctx, folders } = makeContext()

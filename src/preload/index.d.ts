@@ -103,6 +103,7 @@ export interface MiraAPI {
   /** Subscribe to the "open this tab folder's name field" push (a folder created
    * from the "New Folder…" menu). Returns unsubscribe. */
   onEditTabFolder: (callback: (folderId: string) => void) => () => void
+  onRevealTab: (callback: (tabId: string) => void) => () => void
   /** Subscribe to the "show the find bar" push (Cmd+F / find-open). Returns
    * unsubscribe. */
   onFindOpen: (callback: () => void) => () => void

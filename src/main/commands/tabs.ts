@@ -55,6 +55,9 @@ export interface TabInfo {
    * null if nothing changed since it was opened. Not touched by bookkeeping
    * (pinning, moving between folders), so it measures the page, not the tab. */
   updatedAt: number | null
+  /** When the tab last emitted sound (audio start or stop), epoch ms, or null if
+   * it never did. Persisted, so the Settings "Audio" history survives restarts. */
+  lastAudibleAt: number | null
   /** Whether the tab's main frame is currently loading (its WebContentsView is
    * fetching a page). A live runtime flag read from the native view, not
    * persisted: the toolbar shows a spinner beside the address bar while true.

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { AudioHistorySection } from './features/audio-history/AudioHistorySection'
 
 // The Settings surface, rendered inline as a Mira tab (App shows it when the
 // active tab is the internal Settings tab). It never mutates state directly —
@@ -35,7 +36,15 @@ async function run(name: string, params?: unknown): Promise<Record<string, unkno
   return (await window.mira.command(name, params)) as Record<string, unknown>
 }
 
-type Section = 'general' | 'ai' | 'profiles' | 'tabs' | 'extensions' | 'permissions' | 'data'
+type Section =
+  | 'general'
+  | 'ai'
+  | 'profiles'
+  | 'tabs'
+  | 'audio'
+  | 'extensions'
+  | 'permissions'
+  | 'data'
 
 type LlmProvider = 'claude-cli' | 'anthropic-api' | 'extractive'
 
@@ -1316,6 +1325,7 @@ const SECTIONS: Array<{ key: Section; label: string }> = [
   { key: 'ai', label: 'AI' },
   { key: 'profiles', label: 'Profiles' },
   { key: 'tabs', label: 'Tabs' },
+  { key: 'audio', label: 'Audio' },
   { key: 'extensions', label: 'Extensions' },
   { key: 'permissions', label: 'Permissions' },
   { key: 'data', label: 'Data' }
@@ -1354,6 +1364,7 @@ function Settings({ section: requested }: { section?: string }): React.JSX.Eleme
       {section === 'ai' && <AiSection />}
       {section === 'profiles' && <ProfilesSection />}
       {section === 'tabs' && <TabsMemorySection />}
+      {section === 'audio' && <AudioHistorySection />}
       {section === 'extensions' && <ExtensionsSection />}
       {section === 'permissions' && <PermissionsSection />}
       {section === 'data' && <DataSection />}
