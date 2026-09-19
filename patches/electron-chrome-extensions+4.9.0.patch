@@ -1,3 +1,66 @@
+diff --git a/node_modules/electron-chrome-extensions/dist/chrome-extension-api.preload.js b/node_modules/electron-chrome-extensions/dist/chrome-extension-api.preload.js
+index 67d3be4..9bdb8b4 100644
+--- a/node_modules/electron-chrome-extensions/dist/chrome-extension-api.preload.js
++++ b/node_modules/electron-chrome-extensions/dist/chrome-extension-api.preload.js
+@@ -14,18 +14,26 @@
+   var import_electron = __require("electron");
+   var formatIpcName = (name) => `crx-${name}`;
+   var listenerMap = /* @__PURE__ */ new Map();
++  var wrapperMap = /* @__PURE__ */ new Map();
+   var addExtensionListener = (extensionId, name, callback) => {
+     const listenerCount = listenerMap.get(name) || 0;
+     if (listenerCount === 0) {
+       import_electron.ipcRenderer.send("crx-add-listener", extensionId, name);
+     }
+     listenerMap.set(name, listenerCount + 1);
+-    import_electron.ipcRenderer.addListener(formatIpcName(name), function(event, ...args) {
+-      if (true) {
++    const wrapper = function(event, ...args) {
++      if (false) {
+         console.log(name, "(result)", ...args);
+       }
+       callback(...args);
+-    });
++    };
++    let wrappers = wrapperMap.get(name);
++    if (!wrappers) {
++      wrappers = /* @__PURE__ */ new WeakMap();
++      wrapperMap.set(name, wrappers);
++    }
++    wrappers.set(callback, wrapper);
++    import_electron.ipcRenderer.addListener(formatIpcName(name), wrapper);
+   };
+   var removeExtensionListener = (extensionId, name, callback) => {
+     if (listenerMap.has(name)) {
+@@ -37,14 +45,17 @@
+         listenerMap.set(name, listenerCount - 1);
+       }
+     }
+-    import_electron.ipcRenderer.removeListener(formatIpcName(name), callback);
++    const wrappers = wrapperMap.get(name);
++    const wrapper = wrappers && wrappers.get(callback);
++    if (wrapper) wrappers.delete(callback);
++    import_electron.ipcRenderer.removeListener(formatIpcName(name), wrapper || callback);
+   };
+ 
+   // src/renderer/index.ts
+   var injectExtensionAPIs = () => {
+     const invokeExtension = async function(extensionId, fnName, options = {}, ...args) {
+       const callback = typeof args[args.length - 1] === "function" ? args.pop() : void 0;
+-      if (true) {
++      if (false) {
+         console.log(fnName, args);
+       }
+       if (options.noop) {
+@@ -62,7 +73,7 @@
+         console.error(e);
+         result = void 0;
+       }
+-      if (true) {
++      if (false) {
+         console.log(fnName, "(result)", result);
+       }
+       if (callback) {
 diff --git a/node_modules/electron-chrome-extensions/dist/cjs/index.js b/node_modules/electron-chrome-extensions/dist/cjs/index.js
 index b4242b0..a26d84e 100644
 --- a/node_modules/electron-chrome-extensions/dist/cjs/index.js
