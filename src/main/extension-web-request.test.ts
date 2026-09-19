@@ -8,6 +8,8 @@ import {
   WEB_REQUEST_WORKER_PRELOAD_SOURCE,
   chromeResourceType,
   detailsFor,
+  electronFilterFor,
+  narrowableMatchPattern,
   isWebRequestEvent,
   matchesWebRequestUrl,
   readAuthResponse,
@@ -406,5 +408,76 @@ describe('the worker half, executed', () => {
       called = true
     })
     expect(called).toBe(true)
+  })
+})
+
+describe('electronFilterFor', () => {
+  const sub = (urls: string[], types: string[] = []): WebRequestSubscription => ({
+    extensionId: 'a'.repeat(32),
+    event: 'onCompleted',
+    urls,
+    types
+  })
+
+  it('is null with nothing subscribed', () => {
+    expect(electronFilterFor([])).toBeNull()
+  })
+
+  it('unions the urls and maps the types to Electron names', () => {
+    expect(
+      electronFilterFor([
+        sub(['https://a/*'], ['main_frame']),
+        sub(['https://b/*'], ['xmlhttprequest'])
+      ])
+    ).toEqual({ urls: ['https://a/*', 'https://b/*'], types: ['mainFrame', 'xhr'] })
+  })
+
+  it('keeps every type when one subscriber names none', () => {
+    expect(electronFilterFor([sub(['https://a/*'], ['script']), sub(['https://b/*'])])).toEqual({
+      urls: ['https://a/*', 'https://b/*']
+    })
+  })
+
+  it('keeps every type when one has no Electron name', () => {
+    // Electron's filter table has no 'other', and throws on an unknown name.
+    expect(electronFilterFor([sub(['https://a/*'], ['other'])])).toEqual({ urls: ['https://a/*'] })
+  })
+})
+
+describe('narrowableMatchPattern', () => {
+  it('vouches for the ordinary patterns', () => {
+    for (const p of ['<all_urls>', '*://*/*', 'https://example.com/*', 'https://*.example.com/x'])
+      expect(narrowableMatchPattern(p)).toBe(true)
+  })
+
+  it('does not vouch for what a regex cannot settle', () => {
+    // All four are refused here; Electron accepts the first two and refuses the
+    // last two. Being wrong in this direction only costs narrowing.
+    for (const p of ['http://localhost:8080/*', 'file:///*', 'https://x.com:99999/*', 'https:///*'])
+      expect(narrowableMatchPattern(p)).toBe(false)
+  })
+
+  it('does not vouch for outright garbage', () => {
+    for (const p of ['not a url pattern', 'https://example.com', '://x/*'])
+      expect(narrowableMatchPattern(p)).toBe(false)
+  })
+
+  it('keeps an unvouched pattern in the subscription', () => {
+    const subs = readSubscriptions('a'.repeat(32), [
+      { event: 'onCompleted', urls: ['http://localhost:8080/*'] }
+    ])
+    expect(subs[0].urls).toEqual(['http://localhost:8080/*'])
+  })
+
+  it('widens the urls of a filter rather than dropping the pattern', () => {
+    const sub = (urls: string[]): WebRequestSubscription => ({
+      extensionId: 'a'.repeat(32),
+      event: 'onCompleted',
+      urls,
+      types: ['script']
+    })
+    expect(
+      electronFilterFor([sub(['https://ok.example/*']), sub(['http://localhost:*/*'])])
+    ).toEqual({ urls: ['<all_urls>'], types: ['script'] })
   })
 })
