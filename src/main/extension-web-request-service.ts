@@ -29,6 +29,7 @@ import {
   WEB_REQUEST_SUBSCRIBE_CHANNEL,
   WEB_REQUEST_WORKER_PRELOAD_SOURCE,
   detailsFor,
+  electronFilterFor,
   isWebRequestEvent,
   readAuthResponse,
   readSubscriptions,
@@ -67,7 +68,21 @@ interface SessionState {
    * must not wipe what the new one just published (measured: a reloaded
    * extension went silent until the profile was closed and reopened). */
   currentVersion: Map<string, number>
+  /** The free session.webRequest events currently registered with Electron,
+   * mapped to the filter they were registered with (JSON, '' for none). Both
+   * follow the live subscriptions (syncFreeSessionEvents). */
+  hooked: Map<WebRequestEventName, string>
 }
+
+/** The five session.webRequest events this file owns outright. The other three
+ * belong to the DNR handler in extensions.ts and arrive through emit(). */
+const FREE_EVENTS = [
+  'onSendHeaders',
+  'onResponseStarted',
+  'onBeforeRedirect',
+  'onCompleted',
+  'onErrorOccurred'
+] as const satisfies readonly WebRequestEventName[]
 
 /** One blocking auth delivery waiting on an extension. */
 interface PendingAuth {
@@ -83,6 +98,7 @@ export class WebRequestBridgeService {
   private readonly pendingAuth = new Map<string, PendingAuth>()
   private preloadPath: string | null = null
   private authHooked = false
+  private slotsChanged: ((ses: Session) => void) | null = null
   private seq = 0
 
   constructor(private readonly userDataDir: string) {}
@@ -98,7 +114,8 @@ export class WebRequestBridgeService {
       subscriptions: new Map(),
       workers: new Map(),
       workerIds: new Map(),
-      currentVersion: new Map()
+      currentVersion: new Map(),
+      hooked: new Map()
     })
     try {
       ses.registerPreloadScript({
@@ -110,7 +127,6 @@ export class WebRequestBridgeService {
       console.warn('[mira-webrequest] failed to register the worker preload:', error)
     }
     this.hookWorkers(ses)
-    this.hookFreeSessionEvents(ses)
     this.hookAuth()
     ses.extensions.on('extension-unloaded', (_event, extension) => {
       // A reload unloads the OLD version, and by then the new one may already
@@ -122,6 +138,7 @@ export class WebRequestBridgeService {
       state.subscriptions.delete(extension.id)
       state.workers.delete(extension.id)
       state.currentVersion.delete(extension.id)
+      this.syncFreeSessionEvents(ses)
     })
   }
 
@@ -131,6 +148,20 @@ export class WebRequestBridgeService {
   emit(ses: Session, event: WebRequestEventName, details: unknown): void {
     if (!this.wants(ses, event)) return
     this.deliver(ses, event, this.rawFrom(details))
+  }
+
+  /** Does any extension subscribe to `event` on `ses`? The DNR handler in
+   * extensions.ts owns three of the eight slots (Electron allows one listener
+   * per event), so it is the one that must keep them open while an extension
+   * is listening — and close them again when none is. */
+  wantsEvent(ses: Session, event: WebRequestEventName): boolean {
+    return this.wants(ses, event)
+  }
+
+  /** Called after every subscription change, so the owner of the three DNR
+   * slots can re-decide whether they must stay registered. */
+  setSlotsChangedListener(listener: (ses: Session) => void): void {
+    this.slotsChanged = listener
   }
 
   /** Does anything at all listen to this event on this session? The cheap gate
@@ -163,6 +194,7 @@ export class WebRequestBridgeService {
           state.workers.delete(extensionId)
           state.subscriptions.delete(extensionId)
           state.currentVersion.delete(extensionId)
+          this.syncFreeSessionEvents(ses)
         }
         return
       }
@@ -180,6 +212,7 @@ export class WebRequestBridgeService {
       // declared so a dead subscription can never keep traffic flowing. Its own
       // addListener calls republish within the same startup.
       state.subscriptions.delete(extensionId)
+      this.syncFreeSessionEvents(ses)
       const ipc = worker.ipc
       if (this.wiredWorkerIpc.has(ipc)) return
       const isCurrent = (): boolean => state.workers.get(extensionId)?.ipc === ipc
@@ -214,6 +247,7 @@ export class WebRequestBridgeService {
     else byEvent.set(event, parsed)
     if (byEvent.size === 0) state.subscriptions.delete(extensionId)
     else state.subscriptions.set(extensionId, byEvent)
+    this.syncFreeSessionEvents(ses)
     // Rare (one line per addListener/removeListener) and the only way to see,
     // after the fact, that an extension asked for an event it never received.
     console.log(`[mira-webrequest] ${extensionId} subscribes ${event} x${parsed.length}`)
@@ -233,14 +267,48 @@ export class WebRequestBridgeService {
 
   // --- request delivery -----------------------------------------------------
 
-  /** The five session.webRequest events nothing else in Mira listens to. The
-   * other three arrive through emit(). */
-  private hookFreeSessionEvents(ses: Session): void {
-    ses.webRequest.onSendHeaders((details) => this.emit(ses, 'onSendHeaders', details))
-    ses.webRequest.onResponseStarted((details) => this.emit(ses, 'onResponseStarted', details))
-    ses.webRequest.onBeforeRedirect((details) => this.emit(ses, 'onBeforeRedirect', details))
-    ses.webRequest.onCompleted((details) => this.emit(ses, 'onCompleted', details))
-    ses.webRequest.onErrorOccurred((details) => this.emit(ses, 'onErrorOccurred', details))
+  /** Register the five free session.webRequest events ONLY while an extension
+   * subscribes to them, and drop them again when the last one goes away.
+   *
+   * Gating inside the callback is too late: Electron builds the whole details
+   * object in C++ before it calls into JS, and building it for a request whose
+   * body is a data pipe races the network service, which serialises the SAME
+   * shared body on the IO thread at the same moment — CloneDataPipeGetter has
+   * no lock, and the loser dereferences an unbound remote
+   * (DataPipeHolder::Create -> DataPipeGetterProxy::Clone, null + 8). Three
+   * identical crashes on 2026-09-17/18/19 came through onSendHeaders, which no
+   * extension had ever subscribed to. A slot with no listener never enters the
+   * race. */
+  private syncFreeSessionEvents(ses: Session): void {
+    const state = this.states.get(ses)
+    if (!state) return
+    const webRequest = ses.webRequest as unknown as Record<string, (...args: unknown[]) => void>
+    for (const event of FREE_EVENTS) {
+      const filter = electronFilterFor(this.subscriptionsFor(ses, event))
+      const wanted = filter ? JSON.stringify(filter) : null
+      if (wanted === (state.hooked.get(event) ?? null)) continue
+      const listener = (details: unknown): void => this.emit(ses, event, details)
+      try {
+        if (!filter) webRequest[event](null)
+        else webRequest[event](filter, listener)
+      } catch (error) {
+        // electronFilterFor only hands over patterns Electron is certain to
+        // parse, so this should be unreachable. If it refuses anyway, CLOSE the
+        // slot: re-registering without a filter would reopen it on the whole
+        // traffic, which is the exposure this function exists to remove.
+        console.warn(`[mira-webrequest] ${event} refused, closing the slot:`, error)
+        try {
+          webRequest[event](null)
+        } catch {
+          // Nothing left to try; the slot is whatever Electron made of it.
+        }
+        state.hooked.delete(event)
+        continue
+      }
+      if (wanted) state.hooked.set(event, wanted)
+      else state.hooked.delete(event)
+    }
+    this.slotsChanged?.(ses)
   }
 
   /** Push one request to every extension that asked for it. Non-blocking: the

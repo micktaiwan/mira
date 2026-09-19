@@ -667,6 +667,35 @@ const lower = (s: unknown): string => (typeof s === 'string' ? s.toLowerCase() :
  * to a static url, modifyHeaders set/remove); anything else — redirect via
  * regexSubstitution/transform, extensionPath redirects, unknown ops — becomes an
  * 'unsupported' entry with a reason rather than a wrong enforcement. Pure. */
+/** Which of the three blocking webRequest slots the DNR translation actually
+ * needs on a session. A slot nothing needs must be left EMPTY, not registered
+ * with a body that returns early: Electron serialises the whole request into
+ * `details` before it calls into JS, and a data-pipe upload body is what
+ * segfaults the browser process. The race is only DEMONSTRATED on the five
+ * observational events (the IO thread serialises the same shared body for Mojo
+ * while the UI thread converts it for V8); whether these three proxied events
+ * can reach the same window is unverified, so they are kept closed on principle,
+ * not on proof. Pure, so the decision is testable without Electron.
+ *
+ * `hasExtensions` keeps onHeadersReceived open on its own, because that slot
+ * also carries the Permissions-Policy relaxing for extension frames. */
+export function dnrSlotsNeeded(
+  mods: readonly DnrModification[],
+  hasExtensions: boolean
+): { onBeforeRequest: boolean; onBeforeSendHeaders: boolean; onHeadersReceived: boolean } {
+  return {
+    onBeforeRequest: mods.some(
+      (mod) => mod.action === 'block' || mod.action === 'allow' || mod.action === 'redirect'
+    ),
+    onBeforeSendHeaders: mods.some(
+      (mod) => mod.removeRequestHeaders.length > 0 || mod.setRequestHeaders.length > 0
+    ),
+    onHeadersReceived:
+      hasExtensions ||
+      mods.some((mod) => mod.removeResponseHeaders.length > 0 || mod.setResponseHeaders.length > 0)
+  }
+}
+
 export function translateDnrRules(rules: readonly DnrRule[]): DnrModification[] {
   const out: DnrModification[] = []
   for (const rule of rules) {

@@ -165,6 +165,69 @@ export function chromeResourceType(electronType: string): string {
   return CHROME_RESOURCE_TYPES[String(electronType).toLowerCase()] ?? 'other'
 }
 
+/** Chrome resource type -> the name Electron's webRequest FILTER accepts.
+ * Electron parses filter types against a closed table and THROWS on anything
+ * else; notably it has no 'other', so a subscription that can match 'other'
+ * cannot be narrowed by type at all. */
+const ELECTRON_FILTER_TYPES: Record<string, string> = {
+  main_frame: 'mainFrame',
+  sub_frame: 'subFrame',
+  stylesheet: 'stylesheet',
+  script: 'script',
+  image: 'image',
+  font: 'font',
+  object: 'object',
+  xmlhttprequest: 'xhr',
+  ping: 'ping',
+  csp_report: 'cspReport',
+  media: 'media',
+  websocket: 'webSocket'
+}
+
+export interface ElectronWebRequestFilter {
+  urls: string[]
+  types?: string[]
+}
+
+/** The narrowest filter Electron can be given that still delivers everything
+ * `subs` asked for. Null when there is nothing to narrow (no subscription).
+ *
+ * This is a crash guard, not an optimisation. Electron checks the filter FIRST
+ * and only then serialises the request into `details` — and serialising a
+ * request whose upload body is a data pipe races the network service doing the
+ * same thing on the IO thread, which segfaults the browser process
+ * (CloneDataPipeGetter moves the getter out, clones, then puts it back, with no
+ * lock; the other thread lands in that window and dereferences an unbound
+ * remote). A request the filter drops is never serialised, so every pattern and
+ * type we can hand over is one less request that can take Mira down.
+ *
+ * Both halves degrade the same way: types are narrowed only when EVERY
+ * subscription names types and every one of them has an Electron name, and
+ * urls only when every pattern is one Electron certainly parses
+ * (narrowableMatchPattern). Anything else widens that half back to everything
+ * rather than risk a registration Electron throws out of. Pure. */
+export function electronFilterFor(
+  subs: readonly WebRequestSubscription[]
+): ElectronWebRequestFilter | null {
+  if (subs.length === 0) return null
+  const patterns = [...new Set(subs.flatMap((sub) => sub.urls))]
+  if (patterns.length === 0) return null
+  // One pattern we cannot vouch for costs the URL narrowing of the whole slot,
+  // and nothing else: every subscription keeps being honoured by the JS matcher.
+  const urls = patterns.every(narrowableMatchPattern) ? patterns : ['<all_urls>']
+  const types = new Set<string>()
+  let byType = true
+  for (const sub of subs) {
+    if (sub.types.length === 0) byType = false
+    for (const type of sub.types) {
+      const mapped = ELECTRON_FILTER_TYPES[type.toLowerCase()]
+      if (!mapped) byType = false
+      else types.add(mapped)
+    }
+  }
+  return byType && types.size > 0 ? { urls, types: [...types] } : { urls }
+}
+
 /** Chrome sends headers as an ordered list of {name, value}; Electron gives a
  * record, with response headers holding one entry per repeated header. Pure. */
 export function toChromeHeaders(
@@ -258,6 +321,31 @@ export function detailsFor(
  *     `ws://*` filter would need a matcher of its own. */
 export function matchesWebRequestUrl(patterns: readonly string[], url: string): boolean {
   return patterns.some((pattern) => matchesOnePattern(pattern, url))
+}
+
+/** Is this pattern one we are CERTAIN Electron's URLPattern parser accepts?
+ *
+ * Deliberately conservative, and deliberately not authoritative. Electron's
+ * grammar has corners a regex does not reach — a host may carry a port, which
+ * is then validated (a wildcard port parses, port 99999 does not), an empty
+ * host is refused, and `file://` may omit its host — so any regex here is both
+ * too strict and too loose somewhere.
+ *
+ * That is why this answers only "can it go into the filter", never "is it a
+ * valid subscription". A pattern it does not recognise is still honoured, by
+ * the JS matcher below; it just costs the slot its narrowing. Getting that
+ * backwards is what would hurt: Electron takes ONE listener per event for the
+ * whole session, so a pattern it refuses throws the registration for every
+ * extension at once, and one extension's typo would cut the event for all the
+ * others. Pure, tested. */
+const NARROWABLE = /^(\*|https?|wss?|ftp):\/\/([^/]*)(\/.*)$/i
+const NARROWABLE_HOST =
+  /^(\*|(\*\.)?[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*)$/i
+
+export function narrowableMatchPattern(pattern: string): boolean {
+  if (pattern === '<all_urls>') return true
+  const parts = NARROWABLE.exec(pattern)
+  return parts ? NARROWABLE_HOST.test(parts[2]) : false
 }
 
 /** Host part of a match pattern written as exactly `*`. */

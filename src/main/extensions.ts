@@ -66,6 +66,7 @@ import {
   translateDnrRules,
   WORKER_RESTART_WINDOW_MS,
   type CapabilityGap,
+  dnrSlotsNeeded,
   type DnrModification,
   type DnrRule
 } from './extension-capabilities'
@@ -128,6 +129,10 @@ export interface ExtensionsServiceDeps {
   extensionsDirFor: (profileId: string) => string
 }
 
+/** The three webRequest events the DNR translation owns. */
+const DNR_SLOTS = ['onBeforeRequest', 'onBeforeSendHeaders', 'onHeadersReceived'] as const
+type DnrSlot = (typeof DNR_SLOTS)[number]
+
 export class ExtensionsService {
   /** One lib instance per Session (see the file header for why the key is the
    * Session object itself). */
@@ -153,9 +158,11 @@ export class ExtensionsService {
    * (extension-capabilities.ts, Tier B). Rebuilt from the live extension set on
    * every load/enable/update/uninstall; the installed handlers read it live. */
   private readonly dnrBySession = new Map<Session, DnrModification[]>()
-  /** Sessions where the webRequest handlers backing DNR are already installed
-   * (only one listener per event per session — install once, update the map). */
-  private readonly dnrHooked = new Set<Session>()
+  /** The DNR-backed webRequest slots currently registered, per session. A slot
+   * is opened only while something needs it and closed again when nothing does
+   * (syncWebRequest) — an empty slot is the only way to keep Electron from
+   * serialising a request Mira does not care about. */
+  private readonly dnrHooked = new Map<Session, Set<DnrSlot>>()
   /** Path of the on-disk chrome.alarms polyfill (Tier A), written once and
    * registered as a service-worker preload per session. */
   private alarmsShimPath: string | null = null
@@ -245,7 +252,12 @@ export class ExtensionsService {
     // Also after the lib, and for the same reason: its worker preload rebuilds
     // chrome.webRequest from the (never-fired) native one, so the real events
     // have to be installed on top of that object, not before it.
-    this.webRequestBridge ??= new WebRequestBridgeService(app.getPath('userData'))
+    if (!this.webRequestBridge) {
+      this.webRequestBridge = new WebRequestBridgeService(app.getPath('userData'))
+      // An extension that starts or stops listening changes which of the three
+      // DNR slots must stay open — the bridge cannot register them itself.
+      this.webRequestBridge.setSlotsChangedListener((changed) => this.syncWebRequest(changed))
+    }
     this.webRequestBridge.attach(ses)
     // Same story a third time: Electron dispatches chrome.storage.onChanged to
     // renderers only, never to a service worker, so the worker's onChanged has
@@ -700,8 +712,7 @@ export class ExtensionsService {
     // the Permissions-Policy relaxing (Chrome exempts extension frames from
     // the page's policy; Blink under Electron does not — Claap's webcam bubble
     // on app.claap.io, extensions-plan.md §9).
-    if (mods.length === 0 && !this.dnrHooked.has(ses) && !this.hasExtensions(ses)) return
-    this.installWebRequest(ses)
+    this.syncWebRequest(ses)
   }
 
   /** Any extension currently loaded in `ses`? */
@@ -709,23 +720,56 @@ export class ExtensionsService {
     return ses.extensions.getAllExtensions().length > 0
   }
 
-  /** Install the three webRequest listeners that enforce this session's DNR mods
-   * and the extension-frame Permissions-Policy relaxing. Once per session (only
-   * one listener per event is allowed); they read the live state, so a later
-   * applyDnr / extension load just updates it.
+  /** Open or close the three webRequest slots that enforce this session's DNR
+   * mods and the extension-frame Permissions-Policy relaxing. Called on every
+   * change to the loaded set and to the extensions' subscriptions; the handlers
+   * themselves read the live state, so nothing is re-registered for a rule
+   * change alone.
    *
    * These three slots are also the only way an extension can ever see these
    * events: Electron allows a single listener per event, so the webRequest
    * bridge cannot register its own and is fed from here instead
    * (extension-web-request.ts). Delivery is a side effect of the DNR pass, and
-   * never influences what this handler answers. */
-  private installWebRequest(ses: Session): void {
-    if (this.dnrHooked.has(ses)) return
-    this.dnrHooked.add(ses)
-    // Each body RETURNS its verdict and the callback is called exactly once, from
-    // inside guardedVerdict: a throw anywhere in the bridge, the DNR match or the
-    // header rewrite then answers neutral instead of leaving Chromium waiting on
-    // that request forever (web-request-guard.ts).
+   * never influences what this handler answers.
+   *
+   * A slot nothing needs is CLOSED, never left registered with a body that
+   * returns early: Electron builds the whole `details` object — the upload body
+   * included — before it calls into JS, and building a data-pipe upload body is
+   * what segfaults the browser process. The three crashes of 2026-09-17/18/19
+   * all came through the OBSERVED path, where the race is demonstrated; whether
+   * these three proxied events can reach the same window is unverified, so they
+   * are closed on principle, not on proof. */
+  private syncWebRequest(ses: Session): void {
+    const mods = this.dnrBySession.get(ses) ?? []
+    const needed = dnrSlotsNeeded(mods, this.hasExtensions(ses))
+    const open = this.dnrHooked.get(ses) ?? new Set<DnrSlot>()
+    this.dnrHooked.set(ses, open)
+    for (const slot of DNR_SLOTS) {
+      const wanted = needed[slot] || this.webRequestBridge?.wantsEvent(ses, slot) === true
+      if (wanted === open.has(slot)) continue
+      try {
+        if (wanted) this.hookDnrSlot(ses, slot)
+        else (ses.webRequest[slot] as (listener: null) => void)(null)
+      } catch (error) {
+        console.warn(`[mira-dnr] cannot ${wanted ? 'open' : 'close'} ${slot}:`, error)
+        continue
+      }
+      if (wanted) open.add(slot)
+      else open.delete(slot)
+    }
+  }
+
+  /** Register one DNR slot. Each body RETURNS its verdict and the callback is
+   * called exactly once, from inside guardedVerdict: a throw anywhere in the
+   * bridge, the DNR match or the header rewrite then answers neutral instead of
+   * leaving Chromium waiting on that request forever (web-request-guard.ts). */
+  private hookDnrSlot(ses: Session, slot: DnrSlot): void {
+    if (slot === 'onBeforeRequest') this.hookOnBeforeRequest(ses)
+    else if (slot === 'onBeforeSendHeaders') this.hookOnBeforeSendHeaders(ses)
+    else this.hookOnHeadersReceived(ses)
+  }
+
+  private hookOnBeforeRequest(ses: Session): void {
     ses.webRequest.onBeforeRequest((details, cb) => {
       cb(
         guardedVerdict('onBeforeRequest', details.url, {}, () => {
@@ -737,6 +781,9 @@ export class ExtensionsService {
         })
       )
     })
+  }
+
+  private hookOnBeforeSendHeaders(ses: Session): void {
     ses.webRequest.onBeforeSendHeaders((details, cb) => {
       cb(
         guardedVerdict(
@@ -755,6 +802,9 @@ export class ExtensionsService {
         )
       )
     })
+  }
+
+  private hookOnHeadersReceived(ses: Session): void {
     ses.webRequest.onHeadersReceived((details, cb) => {
       cb(
         guardedVerdict('onHeadersReceived', details.url, {}, () => {

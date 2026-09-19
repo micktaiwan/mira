@@ -26,6 +26,7 @@ import {
   recordWorkerRestart,
   stripUnsupportedPermissions,
   type DnrRule,
+  dnrSlotsNeeded,
   type DnrModification
 } from './extension-capabilities'
 
@@ -887,5 +888,51 @@ describe('detectCapabilityGaps', () => {
     expect(
       detectCapabilityGaps({ permissions: ['storage', 'tabs', 'alarms', 'activeTab'] })
     ).toEqual([])
+  })
+})
+
+describe('dnrSlotsNeeded', () => {
+  const mod = (over: Partial<DnrModification>): DnrModification => ({
+    ruleId: 1,
+    priority: 1,
+    caseSensitive: false,
+    methods: [],
+    resourceTypes: [],
+    excludedResourceTypes: [],
+    domains: [],
+    action: 'block',
+    removeRequestHeaders: [],
+    setRequestHeaders: [],
+    removeResponseHeaders: [],
+    setResponseHeaders: [],
+    ...over
+  })
+
+  it('needs no slot at all with no rule and no extension', () => {
+    expect(dnrSlotsNeeded([], false)).toEqual({
+      onBeforeRequest: false,
+      onBeforeSendHeaders: false,
+      onHeadersReceived: false
+    })
+  })
+
+  it('needs onBeforeRequest only for a blocking rule', () => {
+    expect(dnrSlotsNeeded([mod({ action: 'block' })], false).onBeforeRequest).toBe(true)
+    expect(
+      dnrSlotsNeeded([mod({ action: 'modifyHeaders', removeResponseHeaders: ['x'] })], false)
+        .onBeforeRequest
+    ).toBe(false)
+  })
+
+  it('needs onBeforeSendHeaders only for a request-header rule', () => {
+    expect(
+      dnrSlotsNeeded([mod({ action: 'modifyHeaders', removeRequestHeaders: ['cookie'] })], false)
+        .onBeforeSendHeaders
+    ).toBe(true)
+  })
+
+  it('keeps onHeadersReceived open for any loaded extension (permissions policy)', () => {
+    expect(dnrSlotsNeeded([], true).onHeadersReceived).toBe(true)
+    expect(dnrSlotsNeeded([], true).onBeforeRequest).toBe(false)
   })
 })
