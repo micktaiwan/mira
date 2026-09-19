@@ -39,7 +39,6 @@ const NAMED: Record<string, { code: string; keyCode: number }> = {
   Escape: { code: 'Escape', keyCode: 27 },
   Backspace: { code: 'Backspace', keyCode: 8 },
   Delete: { code: 'Delete', keyCode: 46 },
-  ' ': { code: 'Space', keyCode: 32 },
   ArrowUp: { code: 'ArrowUp', keyCode: 38 },
   ArrowDown: { code: 'ArrowDown', keyCode: 40 },
   ArrowLeft: { code: 'ArrowLeft', keyCode: 37 },
@@ -60,6 +59,11 @@ const NAMED: Record<string, { code: string; keyCode: number }> = {
 // Shifted characters share their key's code and virtual key code, because that
 // is what a real keyboard sends: `?` is Slash with shift held.
 const PUNCTUATION: Record<string, { code: string; keyCode: number }> = {
+  // Space lives here, not in NAMED: it has a `code` like a shortcut key, but it
+  // also INSERTS a character. Sitting in NAMED made it `printable: false`, so
+  // the keyDown went out with no `text` and typed nothing while `press-key`
+  // still answered ok — the same silent shape as the Cmd+, bug above.
+  ' ': { code: 'Space', keyCode: 32 },
   ';': { code: 'Semicolon', keyCode: 186 },
   ':': { code: 'Semicolon', keyCode: 186 },
   '=': { code: 'Equal', keyCode: 187 },
@@ -203,29 +207,41 @@ export function nativeVirtualKey(code: string, keyCode: number, platform: string
   return MAC_VIRTUAL_KEYS[code] ?? keyCode
 }
 
-/** Resolve a key name into its DOM `code`, virtual key code, and whether it
- * produces text. Throws on an empty or unsupported key. */
-export function resolveKey(key: string): { code: string; keyCode: number; printable: boolean } {
+/** Resolve a key name into its DOM `code`, virtual key code, whether it
+ * produces text, and the CHARACTER it stands for. Throws on an empty or
+ * unsupported key.
+ *
+ * `char` exists because of the spelled-out aliases: `press Comma` used to
+ * resolve to the right code and `printable: true`, and then the dispatcher put
+ * the RAW name in `text` — CDP got `text: 'Comma'` and inserted nothing, while
+ * press-key answered ok. Every alias in PUNCTUATION_ALIASES was silently
+ * un-typeable. The resolved character has to travel with the code. */
+export function resolveKey(key: string): {
+  code: string
+  keyCode: number
+  printable: boolean
+  char: string
+} {
   if (typeof key !== 'string' || key.length === 0) throw new Error('missing key')
   const aliased = PUNCTUATION_ALIASES[key]
   if (aliased !== undefined) return resolveKey(aliased)
   const named = NAMED[key]
-  if (named) return { code: named.code, keyCode: named.keyCode, printable: false }
+  if (named) return { code: named.code, keyCode: named.keyCode, printable: false, char: key }
   if (key.length === 1) {
     const upper = key.toUpperCase()
     if (upper >= 'A' && upper <= 'Z') {
-      return { code: `Key${upper}`, keyCode: upper.charCodeAt(0), printable: true }
+      return { code: `Key${upper}`, keyCode: upper.charCodeAt(0), printable: true, char: key }
     }
     if (key >= '0' && key <= '9') {
-      return { code: `Digit${key}`, keyCode: key.charCodeAt(0), printable: true }
+      return { code: `Digit${key}`, keyCode: key.charCodeAt(0), printable: true, char: key }
     }
     const punct = PUNCTUATION[key]
-    if (punct) return { code: punct.code, keyCode: punct.keyCode, printable: true }
+    if (punct) return { code: punct.code, keyCode: punct.keyCode, printable: true, char: key }
     // An unmapped single character (accented letter, emoji, non-US layout): it
     // can still be typed through `text`, so keep it working rather than refuse.
     // A shortcut built on it will not fire, and that is a layout question, not
     // a missing mapping.
-    return { code: '', keyCode: upper.charCodeAt(0), printable: true }
+    return { code: '', keyCode: upper.charCodeAt(0), printable: true, char: key }
   }
   throw new Error(`unsupported key: ${key}`)
 }
@@ -244,12 +260,14 @@ export function keyToDispatchEvents(
   modifiers: readonly CdpModifier[] = [],
   platform: string = process.platform
 ): CdpKeyEvent[] {
-  const { code, keyCode, printable } = resolveKey(key)
+  const { code, keyCode, printable, char } = resolveKey(key)
   const mask = modifierMask(modifiers)
   const suppressed = MODIFIER_BITS.ctrl | MODIFIER_BITS.meta | MODIFIER_BITS.alt
   const producesText = printable && (mask & suppressed) === 0
   const base = {
-    key,
+    // `char`, not `key`: a spelled-out alias must reach the page as the
+    // character it names, never as its own name (see resolveKey).
+    key: char,
     code,
     windowsVirtualKeyCode: keyCode,
     nativeVirtualKeyCode: nativeVirtualKey(code, keyCode, platform),
@@ -260,7 +278,7 @@ export function keyToDispatchEvents(
   // `unmodifiedText` is what the character would have been without ctrl/meta/alt,
   // and macOS matches menu key equivalents on exactly that: leaving it out made a
   // Cmd+<key> event look character-less to the menu (see MAC_VIRTUAL_KEYS).
-  if (printable) down.unmodifiedText = key
-  if (producesText) down.text = key
+  if (printable) down.unmodifiedText = char
+  if (producesText) down.text = char
   return [down, { type: 'keyUp', ...base }]
 }

@@ -3764,18 +3764,50 @@ export class ProfileManager {
     if (id) {
       const pw = this.ownerOf(id)
       if (!pw || pw.window.isDestroyed()) return false
-      if (pw.state.activeId !== id) {
+      const switched = pw.state.activeId !== id
+      if (switched) {
         try {
           this.activateTabById(id)
         } catch {
           return false
         }
       }
-      if (pw.state.activeId === id && !wc.getBackgroundThrottling()) return true
+      if (pw.state.activeId === id && !wc.getBackgroundThrottling()) {
+        if (switched) await this.waitForFrame(wc)
+        return true
+      }
     }
     if (await this.isPageVisible(wc)) return true
     // Layout + compositor need a beat after a tab switch.
     return this.pollPageVisible(wc, 10)
+  }
+
+  /** Wait for the tab's renderer to actually produce a frame, after we just
+   * made it the active one.
+   *
+   * The fast path above returns `true` in the same tick as `activateTabById`,
+   * and a renderer that has not been shown yet DROPS the CDP input we are about
+   * to send — press-key still answering ok, the false success this method exists
+   * to prevent. Measured 2026-09-19 on a tab opened with `open -b`: all 8
+   * keystrokes lost, the tab left empty; the same 8 landed once it was warm.
+   *
+   * `requestAnimationFrame` is the signal rather than a fixed delay, because it
+   * fires exactly when the compositor starts serving this renderer — which is
+   * the condition being waited on. `document.visibilityState` cannot be used
+   * here: a covered Mira window reports `hidden` whatever we do (see above).
+   * The timeout keeps a renderer that never paints from hanging the dispatch;
+   * input then goes out as it did before, so this can only improve matters. */
+  private async waitForFrame(wc: WebContents): Promise<void> {
+    try {
+      await evalInWebContents(
+        wc,
+        'new Promise((r) => { const t = setTimeout(() => r(0), 400);' +
+          ' requestAnimationFrame(() => { clearTimeout(t); r(1) }) })'
+      )
+    } catch {
+      // A renderer that cannot even be evaluated will not take input either;
+      // the dispatch below reports that on its own.
+    }
   }
 
   /** Poll `isPageVisible` up to `tries` times, 50 ms apart (layout + compositor
