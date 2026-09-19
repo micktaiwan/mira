@@ -506,6 +506,32 @@ function Sidebar({
     aimAtSlot(target)
   }
 
+  // dragOver on the sidebar itself: the last-resort resolver for every surface no
+  // section claimed — the New tab button, the nav's own padding, the gaps between
+  // sections, the pinned grid under a regular drag. Those were dead zones where a
+  // drop did nothing at all, and that is what broke "drop a tab first": the only
+  // surface meaning "before the first row" was the top half of that row, with the
+  // button and the padding (44px of dead chrome) right above it, so aiming a
+  // little high silently cancelled the drag. Aiming second never had the problem.
+  // Every section stops propagation when it claims a pointer, so this only fires
+  // for what they leave.
+  const sidebarDragOver = (e: DragEvent<HTMLElement>): void => {
+    const dragged = draggingId ? tabs.find((t) => t.id === draggingId) : null
+    if (!dragged) return
+    const section = e.currentTarget.querySelector<HTMLElement>(
+      dragged.pinned ? '.pinned-grid' : '.tab-list'
+    )
+    if (!section) return
+    const boxes = tabBoxesIn(section)
+    const target = dragged.pinned
+      ? nearestGridTarget(boxes, e.clientX, e.clientY)
+      : nearestVerticalTarget(boxes, e.clientY)
+    if (!target) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    aimAtSlot(target)
+  }
+
   // One tab row, wired to the shared drag state — reused for loose tabs and for
   // the tabs inside each folder, so both sections share one reorder gesture.
   const renderRow = (t: TabInfo): React.JSX.Element => (
@@ -526,7 +552,14 @@ function Sidebar({
   )
 
   return (
-    <nav className="sidebar">
+    <nav
+      className="sidebar"
+      onDragOver={sidebarDragOver}
+      onDrop={(e) => {
+        e.preventDefault()
+        commitDrop()
+      }}
+    >
       <button type="button" className="sidebar-new" onClick={onNew} title="New tab (⌘T)">
         <span className="sidebar-new-plus">+</span> New tab
       </button>
@@ -545,11 +578,14 @@ function Sidebar({
             const target = nearestGridTarget(tabBoxesIn(e.currentTarget), e.clientX, e.clientY)
             if (!target) return
             e.preventDefault()
+            // Claimed: keep the sidebar-level resolver from re-aiming this pointer.
+            e.stopPropagation()
             e.dataTransfer.dropEffect = 'move'
             aimAtSlot(target)
           }}
           onDrop={(e) => {
             e.preventDefault()
+            e.stopPropagation()
             commitDrop()
           }}
         >
@@ -592,11 +628,15 @@ function Sidebar({
                 // highlight the folder as a drop target for one.
                 if (!draggedRegularTab()) return
                 e.preventDefault()
+                // Claimed: keep the sidebar-level resolver from re-aiming this
+                // pointer at the loose list behind the folder's own intent.
+                e.stopPropagation()
                 e.dataTransfer.dropEffect = 'move'
                 aimAtFolder(f.id)
               }}
               onDrop={(e) => {
                 e.preventDefault()
+                e.stopPropagation()
                 commitFolderDrop(f.id)
               }}
             >

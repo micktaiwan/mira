@@ -5,6 +5,7 @@ import {
   planDrop,
   planFolderDrop,
   sameDropZone,
+  type DropTarget,
   type TabBox,
   type TabZone
 } from './sidebar-drag'
@@ -155,6 +156,19 @@ describe('nearestVerticalTarget', () => {
 
   it('is null for an empty list', () => {
     expect(nearestVerticalTarget([], 12)).toBeNull()
+  })
+
+  // The gesture that used to fail: dragging a tab ABOVE the list (over the New
+  // tab button / the sidebar padding) to make it first. Resolving that pointer
+  // to "before the first row" is what the sidebar-level handler feeds planDrop.
+  it('sends a tab dropped above the list to the first position', () => {
+    const target = nearestVerticalTarget(ROWS, -30)
+    expect(target).toEqual({ id: 'a', pos: 'before' })
+    const strip: TabZone[] = [tab('a'), tab('b'), tab('c')]
+    expect(planDrop(strip, 'c', target as DropTarget)).toEqual({
+      moveToFolder: null,
+      move: { id: 'c', toIndex: 0 }
+    })
   })
 })
 
