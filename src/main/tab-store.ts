@@ -28,7 +28,7 @@ export interface TabMeta {
   folderId?: string
   /** Keep-awake tabs never sleep: they are woken in the background at session
    * restore (instead of the default metadata-only, wake-on-select) and are immune
-   * to discard (Cmd+S / discard-tab is a no-op on them). Like `pinned`, the flag
+   * to discard (Cmd+Alt+S / discard-tab is a no-op on them). Like `pinned`, the flag
    * lives ON the tab and is persisted; absent means not kept awake — always test
    * with `=== true`. Independent of `pinned` (a tab can be either, both, neither).
    * This is lifecycle, not presentation: it adds no visual marker to the tab. */

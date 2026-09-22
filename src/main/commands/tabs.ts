@@ -94,7 +94,7 @@ export interface TabsContext {
    * keeping the tab in the strip, asleep. Discarding the active tab moves focus
    * like closeActiveTab's neighbor pick. Throws on an unknown id. */
   discardTab: (id: string) => { discarded: boolean; id: string }
-  /** Discard the currently active tab (the Cmd+S target): free its RAM, keep the
+  /** Discard the currently active tab (the Cmd+Alt+S target): free its RAM, keep the
    * tab, and move focus to the nearest OTHER already-loaded tab — never waking a
    * sleeping one (that would reload a page). If no other tab is loaded, a fresh
    * tab is opened to land on. Returns the discarded id, or null if none active. */
@@ -297,7 +297,7 @@ export const tabsCommands: CommandMap<CommandContext> = {
     }
   },
 
-  // The Cmd+S target: put the active tab's page to sleep to reclaim its RAM, keep
+  // The Cmd+Alt+S target: put the active tab's page to sleep to reclaim its RAM, keep
   // the tab, and move to the next tab. Unlike close-active-tab, the tab stays.
   'discard-active-tab': (ctx) => {
     try {

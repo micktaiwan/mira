@@ -91,7 +91,7 @@ export interface AppMenuHandlers {
   /** Reopen the most recently closed tab (Cmd+Shift+T) in the focused window.
    * Wired to the reopen-closed-tab command; a no-op when nothing was closed. */
   reopenTab: () => void
-  /** Discard the active tab's page (Cmd+S): free its RAM, keep the tab, and move
+  /** Discard the active tab's page (Cmd+Alt+S): free its RAM, keep the tab, and move
    * to the next tab. Wired to the discard-active-tab command. */
   discardTab: () => void
   /** Wake every tab that was awake at the previous quit (Cmd+Shift+A): restore
@@ -255,10 +255,10 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         accelerator: 'CmdOrCtrl+Shift+T',
         click: () => handlers.reopenTab()
       },
-      // Cmd+S discards the active tab's page to reclaim RAM but keeps the tab
+      // Cmd+Alt+S discards the active tab's page to reclaim RAM but keeps the tab
       // (asleep) and moves to the nearest already-loaded tab (never waking a
       // sleeping one) — not the browser's "Save Page As".
-      { label: 'Discard Tab', accelerator: 'CmdOrCtrl+S', click: () => handlers.discardTab() },
+      { label: 'Discard Tab', accelerator: 'CmdOrCtrl+Alt+S', click: () => handlers.discardTab() },
       // Cmd+Shift+A: re-open every tab that was awake when Mira last quit (restore
       // only wakes the active one, the rest come back asleep). Was Cmd+Shift+R,
       // moved so that reflex maps to Hard Reload (History menu) like a browser.

@@ -1183,7 +1183,7 @@ function TabsMemorySection(): React.JSX.Element {
     }
   }
 
-  // Put a tab to sleep (Cmd+S): frees its renderer process, keeps the tab. Reuses
+  // Put a tab to sleep (Cmd+Alt+S): frees its renderer process, keeps the tab. Reuses
   // the existing discard-tab command (resolves the tab by its global id, any
   // window). The tab then drops out of this list (only loaded tabs appear), so
   // refetch after.
@@ -1287,7 +1287,7 @@ function TabsMemorySection(): React.JSX.Element {
                     title={
                       e.keepAwake
                         ? "Keep-awake tab can't sleep"
-                        : 'Put this tab to sleep (Cmd+S): frees its memory, keeps the tab'
+                        : 'Put this tab to sleep (Cmd+Alt+S): frees its memory, keeps the tab'
                     }
                   >
                     Sleep

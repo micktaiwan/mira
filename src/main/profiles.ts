@@ -4250,7 +4250,7 @@ export class ProfileManager {
     return { discarded: true, id }
   }
 
-  /** Discard the active tab's page (Cmd+S): tear down its view to reclaim RAM,
+  /** Discard the active tab's page (Cmd+Alt+S): tear down its view to reclaim RAM,
    * keep the tab in the strip (asleep), and move focus to the nearest OTHER
    * already-loaded tab — never waking a sleeping one, else discarding would just
    * reload a page. If no other tab is loaded, a fresh home tab is opened to land
@@ -4259,7 +4259,7 @@ export class ProfileManager {
   private discardActiveTabIn(pw: ProfileWindow): { discarded: boolean; id: string | null } {
     const id = pw.state.activeId
     if (!id) return { discarded: false, id: null }
-    // Keep-awake tabs never sleep: Cmd+S leaves a kept-awake active tab alone.
+    // Keep-awake tabs never sleep: Cmd+Alt+S leaves a kept-awake active tab alone.
     if (pw.state.tabs.find((t) => t.id === id)?.keepAwake === true) {
       return { discarded: false, id }
     }
