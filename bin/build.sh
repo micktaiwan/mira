@@ -41,8 +41,13 @@ npm run build:mac
 
 # Install: replace the bundle in place with a real copy. ditto preserves the code
 # signature and extended attributes, which codesign validation needs.
+# electron-builder writes dist/mac-arm64 on Apple Silicon and dist/mac on Intel
+# (it builds for the host arch). Pick the one matching this machine, and fail before
+# deleting the installed app if the build is not there.
+if [ "$(uname -m)" = "arm64" ]; then app=dist/mac-arm64/Mira.app; else app=dist/mac/Mira.app; fi
+[ -d "$app" ] || { echo "build.sh: $app not found, installed app left untouched" >&2; exit 1; }
 rm -rf /Applications/Mira.app
-ditto dist/mac-arm64/Mira.app /Applications/Mira.app
+ditto "$app" /Applications/Mira.app
 
 # `open -a`, never `open <bundle>`: a .app is a directory, and a plain `open` on a
 # bundle that LaunchServices has not re-registered yet (which is exactly the state
