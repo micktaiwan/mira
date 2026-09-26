@@ -67,4 +67,24 @@ describe('move-window-to-space', () => {
     const res = createCommandRegistry().execute('move-window-to-space', { spaceIndex: 1 }, ctx)
     expect(res.ok).toBe(false)
   })
+
+  it('moves a window named by windowId, even with no focused window', () => {
+    const fake = makeContext(null)
+    const res = createCommandRegistry().execute(
+      'move-window-to-space',
+      { spaceIndex: 1, windowId: 'fake-window' },
+      fake.ctx
+    )
+    expect(res).toEqual({ ok: true, spaceIndex: 1, moved: true })
+    expect(fake.spaceMoves).toEqual([1])
+  })
+
+  it('fails cleanly on an unknown or empty windowId', () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    for (const windowId of ['nope', '', 3]) {
+      const res = registry.execute('move-window-to-space', { spaceIndex: 1, windowId }, ctx)
+      expect(res.ok).toBe(false)
+    }
+  })
 })

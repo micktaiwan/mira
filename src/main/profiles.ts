@@ -5837,14 +5837,15 @@ export class ProfileManager {
         }
         return { displays, window: windowLocation }
       },
-      moveTargetWindowToSpace: (spaceIndex: number) => {
-        if (!target || target.window.isDestroyed()) throw new Error('no target window')
+      moveTargetWindowToSpace: (spaceIndex: number, windowId?: string) => {
+        const pw = this.windowFor(target, windowId)
+        if (pw.window.isDestroyed()) throw new Error('no target window')
         const layout = spacesLayout()
         if (layout.length === 0) throw new Error('Spaces unavailable on this system')
-        const wid = parseWindowNumber(target.window.getMediaSourceId())
+        const wid = parseWindowNumber(pw.window.getMediaSourceId())
         if (wid === undefined) throw new Error('window has no window-server id')
         // Address the desktops of the display the window is on right now.
-        const displayId = screen.getDisplayMatching(target.window.getBounds()).id
+        const displayId = screen.getDisplayMatching(pw.window.getBounds()).id
         const display = layout.find((d) => d.displayId === displayId) ?? layout[0]
         const desktops = userSpaceIds(display)
         if (spaceIndex >= desktops.length) {
@@ -5862,8 +5863,8 @@ export class ProfileManager {
         // Persist right away so a relaunch honors the new desktop even without
         // any further window event. The window server may still report the OLD
         // Space if re-read immediately, so stamp the index we know to be true.
-        this.saveSession(target)
-        const saved = this.savedEntry(target)
+        this.saveSession(pw)
+        const saved = this.savedEntry(pw)
         if (saved?.bounds) saved.bounds.spaceIndex = spaceIndex
         return 'moved'
       },
