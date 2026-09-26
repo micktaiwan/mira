@@ -6,13 +6,13 @@ page says what that costs and how to sign your own build.
 
 ## Two kinds of build
 
-| | Published build (`bin/release.sh`) | Local build (`bin/build.sh`, `npm run build:mac`) |
-|---|---|---|
-| Signature | ad-hoc | your Apple Development certificate + provisioning profile |
-| Runs on | any Apple Silicon Mac, after allowing it once | only the Macs listed in your profile |
-| Touch ID passkeys (WebAuthn) | no | yes |
-| Updates itself | yes | no, rebuild from source |
-| Unsigned notice at launch | yes, until dismissed | no |
+|                              | Published build (`bin/release.sh`)                         | Local build (`bin/build.sh`, `npm run build:mac`)         |
+| ---------------------------- | ---------------------------------------------------------- | --------------------------------------------------------- |
+| Signature                    | ad-hoc                                                     | your Apple Development certificate + provisioning profile |
+| Runs on                      | any Mac of that zip's architecture, after allowing it once | only the Macs listed in your profile                      |
+| Touch ID passkeys (WebAuthn) | no                                                         | yes                                                       |
+| Updates itself               | yes                                                        | no, rebuild from source                                   |
+| Unsigned notice at launch    | yes, until dismissed                                       | no                                                        |
 
 The published build carries `"miraDistribution": "release"` in its packaged `package.json`
 (`bin/release-build.cjs`). That stamp alone turns on the notice and the self-update
@@ -35,6 +35,29 @@ Before signing, it refuses to go on if `app.asar` holds anything besides `out/`,
 `node_modules/` and `package.json`. `electron-builder.yml`'s `files` is an allow-list for the same
 reason: the 1.1.0 zip, built when it was still a deny-list, carried every file lying at the repo
 root (older builds in `dist/`, local notes, scratch scripts) and its assets were deleted.
+
+It builds for the architecture it runs on, so a fresh release carries one zip.
+
+## Adding the other architecture
+
+The native addons (`native/mira-*`) are compiled for the host by node-gyp, so an Apple Silicon Mac
+cannot produce the Intel app, and the other way round. A release therefore gets its second zip
+from a second machine:
+
+```bash
+git checkout v1.1.1        # the tag the release was cut from
+bin/release-asset.sh       # or bin/release-asset.sh v1.1.1
+```
+
+On a Mac of the missing kind, it runs the typecheck and the tests, builds and ad-hoc signs the same
+release app, and uploads `Mira-<version>-mac-<arch>.zip` and its `.sha256` to the existing release.
+It creates nothing and bumps nothing, refuses a tree that is not clean or not checked out at the
+tag, checks `package.json` against the tag (the self-update compares the downloaded bundle's
+version), and exits quietly if that architecture is already there.
+
+Until it has run, a Mira of that architecture finds no asset to update itself with: `prepareUpdate`
+looks for `Mira-<version>-mac-<process.arch>.zip` and a missing one reads as "no update", with
+nothing said.
 
 ## How the self-update works
 
@@ -60,7 +83,8 @@ Limits:
   replace itself: the update fails with a message saying to move Mira first.
 - The daily check announces each version once. If its download fails, **Check for Updates** in the
   app menu retries it.
-- Apple Silicon only: the release is built on the publishing machine's architecture.
+- One architecture at a time: a release only holds what its publishing machine built, until
+  `bin/release-asset.sh` adds the other (above).
 
 ## What an unsigned build cannot do
 
