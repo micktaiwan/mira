@@ -12,6 +12,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { createRequire } from 'module'
 import type { DisplaySpaces } from './spaces'
+import type { OnScreenWindow } from './window-order'
 
 // A real require (not the bundler's) so the dynamic .node path is resolved at
 // runtime, and never rewritten by electron-vite/rollup.
@@ -21,6 +22,8 @@ interface MiraSpacesAddon {
   spacesLayout(): DisplaySpaces[]
   windowSpaces(windowNumber: number): number[]
   moveWindowToSpace(windowNumber: number, spaceId: number): boolean
+  onScreenWindows(): OnScreenWindow[]
+  orderWindowBelow(windowNumber: number, anchorNumber: number): boolean
 }
 
 let addon: MiraSpacesAddon | null = null
@@ -81,6 +84,34 @@ export function moveWindowToSpace(windowNumber: number, spaceId: number): boolea
     return a.moveWindowToSpace(windowNumber, spaceId)
   } catch (error) {
     console.error('[mira] moveWindowToSpace failed:', error)
+    return false
+  }
+}
+
+/** Every on-screen window of the current Space, front to back; [] when
+ * unavailable. Numbers and layers only (no owner names, which would need the
+ * Screen Recording permission). */
+export function onScreenWindows(): OnScreenWindow[] {
+  const a = loadAddon()
+  if (!a) return []
+  try {
+    return a.onScreenWindows()
+  } catch (error) {
+    console.error('[mira] onScreenWindows failed:', error)
+    return []
+  }
+}
+
+/** Order one of Mira's own windows in directly below another window, without
+ * activating the app. Returns whether the window ended up visible; false when
+ * the addon is unavailable or the window is not ours. */
+export function orderWindowBelow(windowNumber: number, anchorNumber: number): boolean {
+  const a = loadAddon()
+  if (!a) return false
+  try {
+    return a.orderWindowBelow(windowNumber, anchorNumber)
+  } catch (error) {
+    console.error('[mira] orderWindowBelow failed:', error)
     return false
   }
 }

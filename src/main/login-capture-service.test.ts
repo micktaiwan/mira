@@ -8,13 +8,13 @@ import type { CardVault } from './bitwarden'
 import type { FragmentSource } from './card-capture-service'
 import type { LoginMatch, VaultLogin } from './bitwarden-login'
 
-const PERSO: CardVault = { appDataDir: '/tmp/bw-perso', email: 'faivrem@gmail.com' }
+const PERSO: CardVault = { appDataDir: '/tmp/bw-perso', email: 'owner@example.com' }
 const NOW = new Date('2026-08-21T12:00:00Z')
 
 const source = (over: Partial<FragmentSource> = {}): FragmentSource => ({
   profileId: 'perso',
   tabKey: 'tab-1',
-  pageUrl: 'https://banco.mickaelfm.me/login',
+  pageUrl: 'https://bank.example.net/login',
   ...over
 })
 
@@ -24,7 +24,7 @@ const frag = (over: Partial<LoginFragment> = {}): LoginFragment => ({
   kind: 'current',
   hasUsernameField: true,
   submitted: false,
-  url: 'https://banco.mickaelfm.me/login',
+  url: 'https://bank.example.net/login',
   ...over
 })
 
@@ -34,10 +34,10 @@ const typed = (over: Partial<LoginFragment> = {}): LoginFragment =>
 
 const existingItem = (over: Partial<VaultLogin> = {}): VaultLogin => ({
   id: 'item-1',
-  name: 'mickaelfm.me',
+  name: 'example.net',
   username: 'me@example.com',
   password: 'hunter22',
-  hosts: ['banco.mickaelfm.me'],
+  hosts: ['bank.example.net'],
   raw: { id: 'item-1' },
   ...over
 })
@@ -118,8 +118,8 @@ describe('LoginCaptureService.handleFragment', () => {
     expect(await service.handleFragment(typed(), source())).toBe('saved')
     expect(prompts[0]).toMatchObject({
       mode: 'save',
-      loginLabel: 'me@example.com on banco.mickaelfm.me',
-      account: 'faivrem@gmail.com'
+      loginLabel: 'me@example.com on bank.example.net',
+      account: 'owner@example.com'
     })
     expect(saveLogin).toHaveBeenCalledOnce()
     expect(toasts).toEqual(['Login saved to Bitwarden'])
@@ -142,7 +142,7 @@ describe('LoginCaptureService.handleFragment', () => {
     expect(saveLogin.mock.calls[0][1]).toMatchObject({
       username: 'me@example.com',
       password: 'hunter22',
-      host: 'banco.mickaelfm.me'
+      host: 'bank.example.net'
     })
   })
 
@@ -280,12 +280,12 @@ describe('LoginCaptureService.handleFragment', () => {
       )
     ).toBe('saved')
     // The username is gone with the draft: what is saved is the password alone.
-    expect(prompts[0].loginLabel).toBe('banco.mickaelfm.me')
+    expect(prompts[0].loginLabel).toBe('bank.example.net')
   })
 
   it('links the address to the item holding the same credential, without asking', async () => {
     const { service, prompts, linkLogin, saveLogin, toasts } = makeService({
-      sameCredential: existingItem({ hosts: ['mail.mickaelfm.me'] })
+      sameCredential: existingItem({ hosts: ['mail.example.net'] })
     })
     expect(await service.handleFragment(typed(), source())).toBe('linked')
     // Nothing to decide: the very same password is already in the vault.
@@ -294,7 +294,7 @@ describe('LoginCaptureService.handleFragment', () => {
     expect(linkLogin).toHaveBeenCalledWith(
       PERSO,
       expect.objectContaining({ id: 'item-1' }),
-      'https://banco.mickaelfm.me/login'
+      'https://bank.example.net/login'
     )
     expect(toasts).toEqual(['Login already in Bitwarden — added this address'])
   })
@@ -304,7 +304,7 @@ describe('LoginCaptureService.handleFragment', () => {
       hasSession: false,
       vaultState: 'locked',
       answer: { action: 'unlock', password: 'master' },
-      sameCredential: existingItem({ hosts: ['mail.mickaelfm.me'] })
+      sameCredential: existingItem({ hosts: ['mail.example.net'] })
     })
     expect(await service.handleFragment(typed(), source())).toBe('linked')
     expect(prompts[0].mode).toBe('unlock')
@@ -314,7 +314,7 @@ describe('LoginCaptureService.handleFragment', () => {
 
   it('stays silent when the link fails: the password is in the vault either way', async () => {
     const { service, toasts } = makeService({
-      sameCredential: existingItem({ hosts: ['mail.mickaelfm.me'] }),
+      sameCredential: existingItem({ hosts: ['mail.example.net'] }),
       linkLogin: async () => {
         throw new Error('bw said no')
       }

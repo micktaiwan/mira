@@ -104,8 +104,8 @@ describe('importAtlasTree', () => {
       },
       {
         id: 9,
-        uuid: 'f-lempire',
-        title: 'lempire',
+        uuid: 'f-acme',
+        title: 'acme',
         type: { folder: {} },
         parentUUID: 'root',
         children: [
@@ -114,9 +114,9 @@ describe('importAtlasTree', () => {
             uuid: 'u-11',
             title: 'Privacy',
             type: { url: {} },
-            url: 'https://lemlist.com/privacy-policy',
+            url: 'https://acme.com/privacy-policy',
             children: [],
-            parentUUID: 'f-lempire'
+            parentUUID: 'f-acme'
           }
         ]
       }
@@ -127,12 +127,12 @@ describe('importAtlasTree', () => {
     const tree = importAtlasTree(atlas)
     expect(tree.map((n) => ({ id: n.id, kind: n.kind, title: n.title }))).toEqual([
       { id: 'u-5', kind: 'url', title: 'Ingram' },
-      { id: 'f-lempire', kind: 'folder', title: 'lempire' }
+      { id: 'f-acme', kind: 'folder', title: 'acme' }
     ])
     // The root itself is unwrapped; its children become the top level.
     expect(flatten(tree).map((n) => n.url)).toEqual([
       'https://ingrammicro.com',
-      'https://lemlist.com/privacy-policy'
+      'https://acme.com/privacy-policy'
     ])
   })
 

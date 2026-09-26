@@ -191,6 +191,8 @@ function setup(): {
       maximized: maximized ?? false
     }),
     closeWindow: () => ({ windowId: 'w1', closed: true }),
+    sessionWindow: async () => ({ windowId: 'w1', tabId: null, created: false }),
+    closeSessionWindow: () => ({ windowIds: [], closed: false }),
     pinTab: (id: string) => ({ id, pinned: true }),
     unpinTab: (id: string) => ({ id, pinned: false }),
     setTabKeepAwake: (id: string, keepAwake: boolean) => ({ id, keepAwake }),

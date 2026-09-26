@@ -148,7 +148,7 @@ describe('validateCapture', () => {
   const good = {
     number: '4242 4242 4242 4242',
     expiry: '12/28',
-    holder: 'Mickael F',
+    holder: 'Jane Doe',
     origin: 'https://shop.example.com'
   }
 
@@ -157,7 +157,7 @@ describe('validateCapture', () => {
       number: '4242424242424242',
       expMonth: '12',
       expYear: '2028',
-      holder: 'Mickael F',
+      holder: 'Jane Doe',
       brand: 'visa',
       origin: 'https://shop.example.com'
     })

@@ -140,6 +140,88 @@ export function resolveTabId({ flagTab, envTab } = {}) {
   return pick(flagTab) ?? pick(envTab) ?? null
 }
 
+/** CLI verbs whose target is "a tab", and so land in the agent session's own
+ * window when nothing else names one (see sessionTarget). `tabs` and `use` are
+ * NOT in it on purpose: they are how a session finds the pages the USER has
+ * open ("look at the page I have open"), so they keep reading the focused one. */
+export const SESSION_VERBS = new Set([
+  'exec',
+  'click',
+  'wait',
+  'batch',
+  'press',
+  'reload',
+  'shot',
+  'screenshot',
+  'console',
+  'nav',
+  'navigate',
+  'open'
+])
+
+/**
+ * The agent session whose own window this call should land in, or null to keep
+ * the old targeting. Claude Code runs every shell command in a fresh shell, so a
+ * `$MIRA_TAB` pin is gone by the next call and parallel sessions all fell back to
+ * the focused window — the user's, and the same one for everybody. What survives
+ * between calls is CLAUDE_CODE_SESSION_ID (and CLAUDE_PID, the agent's process),
+ * which Claude Code sets in each command's environment. Mira keeps one window
+ * per session id (src/main/session-windows.ts).
+ *
+ * An explicit tab or window always wins (--tab, $MIRA_TAB, --window), and
+ * MIRA_NO_SESSION_WINDOW=1 opts out. --profile does NOT opt out: it picks which
+ * profile the session's window lives in (one window per profile), returned as
+ * `profileFlag` for the caller to resolve with matchProfileId. `call` / a bare registry name only counts
+ * when that command takes a tab (TAB_BOUND): `mira call list-profiles` must not
+ * open a window as a side effect.
+ *
+ * @param {{ command: string|null, positionals?: string[], flags?: Record<string, string|boolean>, tabId?: string|null, env?: Record<string, string|undefined> }} src
+ * @returns {{ sessionId: string, pid?: number, profileFlag?: string } | null}
+ */
+export function sessionTarget({ command, positionals = [], flags = {}, tabId, env = {} }) {
+  const sessionId = (env.CLAUDE_CODE_SESSION_ID ?? '').trim()
+  if (!sessionId || env.MIRA_NO_SESSION_WINDOW === '1') return null
+  if (tabId || typeof flags.window === 'string') return null
+  if (!command) return null
+  const registryName = command === 'call' ? positionals[0] : command
+  const wantsTab = SESSION_VERBS.has(command) || TAB_BOUND.has(registryName ?? '')
+  if (!wantsTab) return null
+  const out = { sessionId }
+  const pid = Number(env.CLAUDE_PID)
+  if (Number.isInteger(pid) && pid > 0) out.pid = pid
+  if (typeof flags.profile === 'string' && flags.profile.trim() !== '') {
+    out.profileFlag = flags.profile.trim()
+  }
+  return out
+}
+
+/**
+ * Resolve a `--profile` value to ONE profile id, open or not: an id prefix or a
+ * piece of the label (`--profile perso`). Zero or several matches is an error —
+ * a page must never load under a guessed identity.
+ *
+ * @param {Array<{id:string,label?:string}>} profiles
+ * @param {string} flag
+ * @returns {{ id: string } | { error: string }}
+ */
+export function matchProfileId(profiles, flag) {
+  const needle = String(flag ?? '')
+    .trim()
+    .toLowerCase()
+  if (!needle) return { error: 'empty --profile' }
+  const hits = (profiles ?? []).filter(
+    (p) =>
+      (p.id ?? '').toLowerCase().startsWith(needle) ||
+      (p.label ?? '').toLowerCase().includes(needle)
+  )
+  if (hits.length === 1) return { id: hits[0].id }
+  if (hits.length === 0) return { error: `no profile matches: ${flag}` }
+  const exact = hits.filter((p) => (p.label ?? '').toLowerCase() === needle)
+  if (exact.length === 1) return { id: exact[0].id }
+  const lines = hits.map((p) => `  ${p.label ?? ''} [${p.id}]`).join('\n')
+  return { error: `"${flag}" matches several profiles; be more specific:\n${lines}` }
+}
+
 /**
  * Find the single tab whose URL contains `needle`. Returns the match, or a
  * typed error so the caller can fail loudly on 0 or >1 (never guess).
@@ -494,10 +576,10 @@ export function formatScreenshot(res) {
  * So: when the open windows span more than one profile and the caller named no
  * target, we fail loudly instead of picking. A single profile stays frictionless.
  *
- * `labels` maps profile id -> human label ("perso: …", "pro: lempire"). It is
+ * `labels` maps profile id -> human label ("perso: …", "pro: acme"). It is
  * what makes both the matching and the error message usable: profile ids are
  * opaque UUIDs, so `--profile perso` matches the label, and the refusal names
- * the profiles the way Mickael names them rather than printing three UUIDs.
+ * the profiles the way the user names them rather than printing three UUIDs.
  *
  * @param {Array<{windowId:string,profileId:string,tabCount:number,focused:boolean}>} windows
  * @param {{ tabId?: string|null, windowFlag?: string|boolean, profileFlag?: string|boolean }} opts

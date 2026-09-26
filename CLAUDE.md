@@ -102,7 +102,7 @@ vérifier deux fichiers en reformate des dizaines d'autres — 54 fichiers, +748
 après un fix de trois fichiers. Aucun changement sémantique, mais le working tree devient
 illisible, ça écrase le travail en cours des autres sessions, et **je n'ai pas le droit de
 l'annuler** (`git checkout`/`restore` interdits par le CLAUDE.md global) : la réparation retombe sur
-Mickael. Donc formater un fichier précis (`npx prettier --write <fichier>`), et vérifier avec
+l'utilisateur. Donc formater un fichier précis (`npx prettier --write <fichier>`), et vérifier avec
 `npx eslint <fichier>`, jamais les scripts qui balaient le repo.
 
 Détails packaging / build packagé : rule `.claude/rules/packaging.md`.
@@ -115,10 +115,12 @@ Détails packaging / build packagé : rule `.claude/rules/packaging.md`.
 
 ## Le skill `mira` est la surface publique de cet outil
 
-`~/.claude/skills/mira/SKILL.md` — le vrai fichier est
-`~/projects/perso/dotfiles/claude/skills/mira/SKILL.md`, le symlink n'est que la façon dont Claude
-Code le voit — décrit comment une session, depuis n'importe où sur ce Mac, se sert de mira : les
-commandes, les chemins, les ports, ce qu'elle n'a pas le droit de faire. Rien ne le synchronise
+`skill/SKILL.md` de ce repo — `~/.claude/skills/mira` n'est qu'un lien vers `skill/` — décrit
+comment une session, depuis n'importe où sur ce Mac, se sert de mira : les commandes, les chemins,
+les ports, ce qu'elle n'a pas le droit de faire. Il est **public** (le repo l'est) : rien de
+personnel dedans. Ce qui est propre à l'utilisateur (ses profils, ses chemins, ses règles de
+travail, les incidents qui expliquent les règles) va dans `skill/LOCAL.md`, exclu de git (sa cible
+est dans `CLAUDE.local.md`), que le skill lit s'il existe. Rien ne synchronise le skill
 automatiquement.
 
 **Un changement ici qui touche ce que le skill promet se répercute dans le skill dans la foulée** :

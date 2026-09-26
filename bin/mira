@@ -13,6 +13,12 @@
 // so parallel sessions never clobber each other's target. `mira use` prints an
 // `export MIRA_TAB=<id>` line to pin a tab for the rest of the shell session.
 //
+// Inside a Claude Code session (CLAUDE_CODE_SESSION_ID set) and with no explicit
+// target, tab verbs land in that SESSION's own window instead of the focused one:
+// Mira opens it on first use, below the window you are working in, and closes it
+// on `mira done` or when the session's process exits. MIRA_NO_SESSION_WINDOW=1
+// turns this off.
+//
 // Usage:
 //   mira tabs [--window <id>]       list tabs (id / title / url), * = active, z = asleep, ♪ = playing sound
 //                                   (--window: any window from `mira windows`, else the focused one)
@@ -41,6 +47,7 @@
 // No command here ever brings Mira to the foreground; `mira focus` is the explicit way.
 //   mira focus [--window <id>]      bring one window to the front (default: Mira's last-focused one)
 //   mira windows                    list open windows (id / profile / tabs), * = focused
+//   mira done                       close this Claude session's own window (see above)
 //   mira watch                      follow the focused tab live (profile / folder / title / url), until Ctrl-C
 //                                   (--json: one raw event per line, for a program)
 //   mira quit                       quit Mira entirely (close-profile never quits; this is the explicit exit)
@@ -59,6 +66,8 @@ import { dirname, resolve } from 'node:path'
 import {
   parseArgs,
   resolveTabId,
+  sessionTarget,
+  matchProfileId,
   pickTabByUrl,
   buildExec,
   buildReload,
@@ -258,7 +267,7 @@ async function main() {
     process.env.MIRA_SOCKET ||
     '/tmp/mira.sock'
   const json = flags.json === true
-  const tabId = resolveTabId({ flagTab: flags.tab, envTab: process.env.MIRA_TAB })
+  let tabId = resolveTabId({ flagTab: flags.tab, envTab: process.env.MIRA_TAB })
 
   if (!command || command === 'help' || flags.help) {
     process.stdout.write(
@@ -274,6 +283,34 @@ async function main() {
   // --timeout <seconds>: some commands wait on a human (the card vault unlock
   // bubble asks for a master password), and 30 s is not a human timeout.
   const timeoutMs = resolveTimeoutMs(flags)
+
+  // An agent session with no explicit target works in its OWN window (see the
+  // header): ask Mira for it (created on first use) and aim at its active tab.
+  const agentSession = sessionTarget({ command, positionals, flags, tabId, env: process.env })
+  if (agentSession) {
+    const { profileFlag, ...params } = agentSession
+    if (profileFlag) {
+      const profs = await call({ command: 'list-profiles' }, socketPath, timeoutMs).catch((e) =>
+        die(e.message, 2)
+      )
+      if (!profs.ok) return die(JSON.stringify(profs), 1)
+      const match = matchProfileId(profs.profiles, profileFlag)
+      if ('error' in match) return die(match.error, 2)
+      params.profileId = match.id
+    }
+    const res = await call({ command: 'session-window', params }, socketPath, timeoutMs).catch(
+      (e) => die(e.message, 2)
+    )
+    if (res.ok) {
+      if (res.tabId) tabId = res.tabId
+    } else if (/Unknown command/.test(String(res.error ?? ''))) {
+      process.stderr.write(
+        'mira: the running Mira has no session windows (older build); using the focused window\n'
+      )
+    } else {
+      return die(JSON.stringify(res), 1)
+    }
+  }
 
   const send = (req, opts) =>
     call(req, socketPath, timeoutMs)
@@ -497,6 +534,20 @@ async function main() {
 
     case 'windows':
       return send({ command: 'list-windows' }, { json, pretty: (r) => formatWindows(r.windows) })
+
+    case 'done': {
+      // Close this Claude session's own window. Nothing to do outside a session.
+      const sessionId = (process.env.CLAUDE_CODE_SESSION_ID ?? '').trim()
+      if (!sessionId)
+        return die('done: not inside a Claude Code session (no CLAUDE_CODE_SESSION_ID)', 2)
+      return send(
+        { command: 'close-session-window', params: { sessionId } },
+        {
+          json,
+          pretty: (r) => (r.closed ? `closed ${r.windowIds.join(', ')}` : 'no session window open')
+        }
+      )
+    }
 
     case 'nav':
     case 'navigate': {

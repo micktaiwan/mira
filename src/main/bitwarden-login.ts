@@ -100,7 +100,7 @@ export function uriHost(uri: string): string {
 }
 
 /** Two-label public suffixes: under one of these, a real domain needs THREE
- * labels (`lempire.co.uk` is a site, `co.uk` is not). Not the full public suffix
+ * labels (`acme.co.uk` is a site, `co.uk` is not). Not the full public suffix
  * list — the ones a French/anglo browsing history actually hits. Getting one
  * wrong only ever costs a MISSED link (a duplicate item, the status quo), never
  * a wrong one, because linking also demands the same username AND the same
@@ -187,7 +187,7 @@ export function redactLogins(items: VaultLogin[]): StoredLogin[] {
 /** The vault item that already holds this account, or null.
  *
  * Matching is by EXACT host plus username (case-insensitive): a login saved for
- * mickaelfm.me is NOT the login for banco.mickaelfm.me, and updating the wrong
+ * example.net is NOT the login for bank.example.net, and updating the wrong
  * item would silently destroy a password. When the host matches but the vault
  * item has no username at all, it counts as the same account only if the login
  * being saved has no username either. Pure. */
@@ -234,7 +234,7 @@ export interface LoginMatch {
  * WHY sameCredential EXISTS: matching on the exact host means a password saved
  * on go.tiime.fr is not found again on apps.tiime.fr, and a second item is
  * created for the same account (that happened, 2026-08-28). Widening `account`
- * to the site would fix that and break something worse: `lempire.com` + username
+ * to the site would fix that and break something worse: `acme.com` + username
  * `admin` covers five different machines with five different passwords in the
  * pro vault, and matching them would OVERWRITE one password with another.
  *

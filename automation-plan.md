@@ -160,7 +160,7 @@ présente comme un succès.
 
 ⚠️ **Ce correctif n'est pas dans le build qui tourne.** Il faut un rebuild
 (`./bin/build.sh`) pour le vérifier en vrai — et **un rebuild se demande à
-Mickael**, il quitte Mira, donc les autres sessions qui s'en servent.
+l'utilisateur**, il quitte Mira, donc les autres sessions qui s'en servent.
 
 ## Contraintes à respecter (elles viennent du repo, pas de moi)
 
@@ -174,7 +174,7 @@ Mickael**, il quitte Mira, donc les autres sessions qui s'en servent.
 - **Une feature = un test** (Vitest, `npm test`). Si une commande est trop
   couplée à Electron, extraire sa logique pure et ne laisser que l'appel natif.
 - **Ne jamais appeler `focus-app` ni `mira focus`** pour se débloquer. C'est le
-  navigateur de tous les jours de Mickael, ouvert derrière son éditeur : chaque
+  navigateur de tous les jours de l'utilisateur, ouvert derrière son éditeur : chaque
   remontée lui coupe ce qu'il tape. Si une commande échoue parce que la fenêtre
   est cachée, le dire.
 - **Tester sur un onglet en `--background`, dans un profil isolé**, pas sur ses

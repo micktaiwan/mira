@@ -38,12 +38,12 @@ describe('isValidVaultDir', () => {
 describe('parseVaultMap', () => {
   it('reads a well-formed file', () => {
     const map = parseVaultMap(
-      { perso: { appDataDir: '~/.config/bw-perso', email: 'faivrem@gmail.com' } },
+      { perso: { appDataDir: '~/.config/bw-perso', email: 'owner@example.com' } },
       HOME
     )
     expect(map.perso).toEqual({
       appDataDir: '/Users/mick/.config/bw-perso',
-      email: 'faivrem@gmail.com'
+      email: 'owner@example.com'
     })
   })
 

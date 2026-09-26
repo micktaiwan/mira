@@ -72,6 +72,6 @@ Quand on ouvre Settings dans la fenêtre du profil A : éditer **A uniquement**
 
 ## Décision
 
-**Aucune.** Mickael n'a pas tranché. On ne code rien pour l'instant. Ce fichier
+**Aucune.** L'utilisateur n'a pas tranché. On ne code rien pour l'instant. Ce fichier
 et sa ligne de track existent seulement pour retrouver l'analyse le jour où la
 décision sera prise.

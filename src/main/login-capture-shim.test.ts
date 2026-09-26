@@ -59,7 +59,7 @@ function runShim(
     querySelector: () => null,
     querySelectorAll: () => fields
   }
-  const location = { protocol, href: 'https://banco.mickaelfm.me/login' }
+  const location = { protocol, href: 'https://bank.example.net/login' }
   const CSS = { escape: (s: string) => s }
   new Function('require', 'document', 'location', 'CSS', LOGIN_CAPTURE_PRELOAD_SOURCE)(
     fakeRequire,
@@ -88,7 +88,7 @@ describe('login capture preload source', () => {
       kind: 'current',
       hasUsernameField: true,
       submitted: false,
-      url: 'https://banco.mickaelfm.me/login'
+      url: 'https://bank.example.net/login'
     })
   })
 

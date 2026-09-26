@@ -12,6 +12,7 @@
             "OTHER_CFLAGS": [ "-ObjC++" ],
             "OTHER_LDFLAGS": [
               "-framework Foundation",
+              "-framework AppKit",
               "-framework CoreGraphics",
               "-F/System/Library/PrivateFrameworks",
               "-framework SkyLight"

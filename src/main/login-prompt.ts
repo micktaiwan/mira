@@ -4,7 +4,7 @@
 // this file only writes the document and picks the size.
 //
 // It never shows the password, not even masked: the bubble names the ACCOUNT
-// ("mickael@x.com on banco.mickaelfm.me"), which is what a human needs to decide,
+// ("me@x.com on bank.example.net"), which is what a human needs to decide,
 // and the password stays in the main process until `bw` takes it.
 //
 // The 'update' mode is what makes this a password manager rather than a
@@ -28,7 +28,7 @@ export type LoginPromptMode = 'save' | 'unlock' | 'update'
 
 export interface LoginPromptRequest {
   mode: LoginPromptMode
-  /** "mickael@x.com on banco.mickaelfm.me" — never the password. */
+  /** "me@x.com on bank.example.net" — never the password. */
   loginLabel: string
   /** The Bitwarden account it would be written to, for the "which vault?" line. */
   account: string

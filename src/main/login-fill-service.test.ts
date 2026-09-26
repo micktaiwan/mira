@@ -5,7 +5,7 @@ import type { VaultLogin } from './bitwarden-login'
 import type { CardVault } from './bitwarden'
 import type { WebContents, WebFrameMain } from 'electron'
 
-const PERSO: CardVault = { appDataDir: '/tmp/bw-perso', email: 'faivrem@gmail.com' }
+const PERSO: CardVault = { appDataDir: '/tmp/bw-perso', email: 'owner@example.com' }
 
 const item = (over: Partial<VaultLogin> = {}): VaultLogin => ({
   id: 'item-1',

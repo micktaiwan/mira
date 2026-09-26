@@ -4,7 +4,7 @@ import { FocusFeed, sameFocus, type TabFocus } from './focus-feed'
 const focus = (over: Partial<TabFocus> = {}): TabFocus => ({
   windowId: 'w1',
   profileId: 'default',
-  profileLabel: 'pro: lempire',
+  profileLabel: 'pro: acme',
   tabId: 't1',
   url: 'https://app.trykondo.com/',
   title: 'Kondo',

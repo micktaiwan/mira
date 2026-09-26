@@ -2,7 +2,7 @@
 // Console (console.* calls AND browser-emitted lines like failed loads / CORS /
 // CSP / uncaught exceptions), tailed into a per-tab ring buffer by profiles.ts
 // (see page-console.ts). This is the "what did the page log" primitive over the
-// socket/MCP: it lets an agent (or Mickael) see, AFTER THE FACT, why a page
+// socket/MCP: it lets an agent (or the user) see, AFTER THE FACT, why a page
 // misbehaved without having had DevTools open — the sibling of exec-js (which
 // probes the page live) and extension-console (which tails a SW's console).
 

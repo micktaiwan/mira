@@ -38,7 +38,7 @@ describe('fillHost', () => {
   it('refuses anything that is not http(s) — nothing to fill there', () => {
     expect(fillHost('about:blank')).toBe('')
     expect(fillHost('chrome-extension://abc/popup.html')).toBe('')
-    expect(fillHost('file:///Users/mickaelfm/x.html')).toBe('')
+    expect(fillHost('file:///Users/me/x.html')).toBe('')
     expect(fillHost('not a url')).toBe('')
     expect(fillHost('')).toBe('')
   })
@@ -59,8 +59,8 @@ describe('candidatesForHost', () => {
   })
 
   it('never crosses to another site, however similar the name', () => {
-    const items = [item({ id: 'fr', hosts: ['lempire.fr'] })]
-    expect(candidatesForHost(items, 'lempire.com')).toEqual([])
+    const items = [item({ id: 'fr', hosts: ['acme.fr'] })]
+    expect(candidatesForHost(items, 'acme.com')).toEqual([])
   })
 
   it('sorts within a rank by username then name, so the list is stable', () => {

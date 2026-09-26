@@ -35,14 +35,14 @@ describe('renderCardPromptHtml', () => {
     mode: 'save' as const,
     cardLabel: 'Visa 4242',
     host: 'shop.example.com',
-    account: 'faivrem@gmail.com'
+    account: 'owner@example.com'
   }
 
   it('shows the card, the site and the target vault', () => {
     const html = renderCardPromptHtml(base)
     expect(html).toContain('Visa 4242')
     expect(html).toContain('shop.example.com')
-    expect(html).toContain('faivrem@gmail.com')
+    expect(html).toContain('owner@example.com')
   })
 
   it('asks for the master password only in unlock mode', () => {
@@ -110,7 +110,7 @@ describe('the bubble page', () => {
     mode: 'unlock' as const,
     cardLabel: 'Visa 4242',
     host: 'shop.example.com',
-    account: 'faivrem@gmail.com'
+    account: 'owner@example.com'
   }
 
   it('carries a progress line and the hook main drives', () => {
@@ -129,7 +129,7 @@ describe('unlock-vault mode (reading the cards back)', () => {
     mode: 'unlock-vault' as const,
     cardLabel: '',
     host: '',
-    account: 'faivrem@gmail.com'
+    account: 'owner@example.com'
   }
 
   it('asks about the vault, not about a card', () => {

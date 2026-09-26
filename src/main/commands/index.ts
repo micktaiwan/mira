@@ -49,6 +49,7 @@ import { spacesCommands } from './spaces'
 import { statusCommands } from './status'
 import { tabFoldersCommands } from './tab-folders'
 import { tabDetachCommands } from './tab-detach'
+import { sessionWindowCommands } from './session-window'
 import { tabMemoryCommands } from './tab-memory'
 import { tabMenuCommands } from './tab-menu'
 import { tabTidyCommands } from './tab-tidy'
@@ -242,6 +243,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...tabMemoryCommands,
     ...audioHistoryCommands,
     ...tabDetachCommands,
+    ...sessionWindowCommands,
     ...tabMenuCommands,
     ...tabTidyCommands,
     ...tabsCommands,

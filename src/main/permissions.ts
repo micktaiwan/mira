@@ -9,7 +9,7 @@
 // This is the PURE decision layer (tested here); profiles.ts wires it onto each
 // profile session (both handlers, so the check and the request agree).
 //
-// Policy (decided by Mickael): a personal browser trusted by its single user —
+// Policy (decided by the user): a personal browser trusted by its single user —
 // grant EVERYTHING by default, no per-site prompt. What was actually granted is
 // recorded (permission-store) and shown in Settings so the trust stays visible.
 

@@ -25,9 +25,9 @@ describe('screenshot command', () => {
   })
 
   it('writes where the caller asked', async () => {
-    const res = await shoot({ path: '/tmp/cgm.png' })
+    const res = await shoot({ path: '/tmp/page.png' })
     expect(res.ok).toBe(true)
-    expect(res.path).toBe('/tmp/cgm.png')
+    expect(res.path).toBe('/tmp/page.png')
   })
 
   it('passes the target tab and the fullPage flag through', async () => {

@@ -156,7 +156,7 @@ export function buildClaudeCliArgs(config: LlmConfig): string[] {
 
 /** The built-in tools the non-agent chat is allowed to use. WebSearch + WebFetch
  * are pure lookups (they read the web, they don't touch the machine or the
- * browser), so a plain page chat can still look things up — the floor Mickael
+ * browser), so a plain page chat can still look things up — the floor the user
  * wants. Everything else (Bash, Edit, MCP…) stays off unless the user flips the
  * Agent toggle (loadMcp). */
 export const CHAT_WEB_TOOLS = 'WebSearch,WebFetch'

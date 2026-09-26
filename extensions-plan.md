@@ -1,7 +1,7 @@
 # Plan — Extensions Chrome dans Mira (compat large)
 
 Posé le 2026-07-09, passé au crible (revue adversariale multi-agents) le 2026-07-10.
-Objectif confirmé par Mickael : viser la **compatibilité large** avec les extensions Chrome
+Objectif confirmé par l'utilisateur : viser la **compatibilité large** avec les extensions Chrome
 (pas juste 2-3 extensions perso). Ce doc est le plan d'implémentation ; l'état d'avancement
 vit dans `track.md`, l'archi générale dans `CLAUDE.md`.
 
@@ -277,7 +277,7 @@ tout investissement UI. Si E2 casse, on le sait au plus tôt.
 - **Packaging du preload lib** — à valider en E6 (précédent : on a déjà un patch figé
   electron-builder, cf. CLAUDE.md Notes).
 
-## 7. Décisions (toutes tranchées avec Mickael, 2026-07-10)
+## 7. Décisions (toutes tranchées avec l'utilisateur, 2026-07-10)
 
 - **D1 — Licence.** `license: 'GPL-3.0'` : gratuit, impose de fournir les sources **si on
   distribue** Mira (pas de distribution prévue aujourd'hui = pas un problème). Alternative :
@@ -411,7 +411,7 @@ Statut par tier :
 
 ### 8.6 Boîte à outils de debug (comment reprendre — LIRE EN PREMIER)
 
-- **Mira tourne en `npm run dev`** (process long-running — NE PAS lancer/tuer sans accord de Mickael ;
+- **Mira tourne en `npm run dev`** (process long-running — NE PAS lancer/tuer sans accord de l'utilisateur ;
   une modif du main relance le main automatiquement). Socket de contrôle : `/tmp/mira.sock`,
   une requête JSON par ligne : `printf '%s\n' '{"command":"...","params":{...}}' | nc -U /tmp/mira.sock`.
 - **`exec-js` PREND UN `tabId`** (`src/main/commands/devtools.ts`) — **TOUJOURS le passer** pour viser
@@ -510,7 +510,7 @@ en vrai** (il faut un restart de `npm run dev`).
 temporaire encore en place pour la validation : `sw-debug.ts` (+ appel dans `ensureFor`) et le switch
 `vmodule` dans `index.ts` — **à retirer après validation**.
 
-#### Validation (bloquée sur un restart de `npm run dev` — accord Mickael requis)
+#### Validation (bloquée sur un restart de `npm run dev` — accord de l'utilisateur requis)
 
 `electron-vite dev` sans `-w` ne watche PAS le main (vérifié dans le CLI installé : l'option watch
 existe mais n'est pas passée) — la note §8.6 « une modif du main relance le main » était fausse.
@@ -556,7 +556,7 @@ iterable`** : **PAS notre bug, upstream, bénin.** Apparaît uniquement une fois
 
 ### 8.8 Session 2026-07-11 fin d'aprem — Kondo semble CONVERGER, exec-js reste le blocage
 
-**Journal en cours, à compléter.** Deux builds redémarrés par Mickael cet aprem (14:57, puis 15:26
+**Journal en cours, à compléter.** Deux builds redémarrés par l'utilisateur cet aprem (14:57, puis 15:26
 avec le fix exec-js CDP). Faits nouveaux VÉRIFIÉS (logs lus) :
 
 - **Kondo ne boucle plus — il converge.** Build 15:26 (`chromium-2026-07-11T15-26-22.log`) : la web
@@ -856,7 +856,7 @@ _(Nettoyage fait à la résolution, cf. §8.12 : `sw-debug.ts` supprimé, switch
 
 ### 8.12 ✅ RÉSOLUTION (2026-07-11 soir) — le shim était juste, son preload ne s'exécutait jamais
 
-**Kondo fonctionne** (confirmé par Mickael après restart : plus de dialog « Browser extension
+**Kondo fonctionne** (confirmé par l'utilisateur après restart : plus de dialog « Browser extension
 stopped »). L'Option 1 de §8.11-G (shim `navigator.serviceWorker ↔ chrome.runtime`) est la voie
 retenue et VALIDÉE. Récit de la résolution, pour mémoire :
 
@@ -938,11 +938,11 @@ d'`index.ts`. **Gardé en durcissement** : `cdp-eval.ts` (+ tests) — route `ex
 
 ## 9. E8 — Claap : crash SIGTRAP natif + shims offscreen / desktopCapture / tabCapture (2026-07-13)
 
-**✅ VALIDÉ EN VRAI le 2026-07-13** (restart dev par Mickael) : plus de crash au boot avec Claap
+**✅ VALIDÉ EN VRAI le 2026-07-13** (restart dev par l'utilisateur) : plus de crash au boot avec Claap
 installée, strip appliqué (Claap ET Bitwarden — qui déclare aussi `offscreen`), host offscreen
 monté (`[mira-offscreen] hosting …`), `enumerateDevices` du doc offscreen exécuté sans SIGTRAP,
 idempotence de createDocument confirmée au cycle keepalive du SW, et **enregistrement Claap testé
-par Mickael : « ça marche très bien »**. Limite cosmétique repérée : la bulle webcam injectée
+par l'utilisateur : « ça marche très bien »**. Limite cosmétique repérée : la bulle webcam injectée
 (`camera.bundle.js` en iframe) est bloquée par la permissions policy Blink (« camera is not
 allowed in this document ») — Chrome exempte les iframes d'extension, pas Electron. À creuser si
 un jour la vignette manque vraiment.
@@ -1030,12 +1030,12 @@ retries` dans le log) → toute énumération de devices meurt → l'enregistrem
 Le crash existait DÉJÀ pendant la session « ça marche » du matin (rapport de 12:45) mais restait
 sous la limite de retries ; le fix permissions-policy a augmenté la pression caméra (la bulle
 tente un vrai getUserMedia vidéo) et la limite a été atteinte. **Fix** : `NSCameraUsageDescription`
-ajoutée à `~/projects/perso/kova/Info.plist` — effective au prochain build+relaunch de Kova
-(décision Mickael ; ne PAS re-signer l'app installée pendant qu'elle tourne, risque de SIGKILL
+ajoutée à l'`Info.plist` de Kova — effective au prochain build+relaunch de Kova
+(décision de l'utilisateur ; ne PAS re-signer l'app installée pendant qu'elle tourne, risque de SIGKILL
 kernel). En attendant : un restart de `npm run dev` remet le compteur de retries à zéro,
 l'enregistrement remarche (surtout caméra coupée côté Claap).
 
-**À valider au restart** (Mickael relance `npm run dev`) : (1) boot sans SIGTRAP avec Claap
+**À valider au restart** (l'utilisateur relance `npm run dev`) : (1) boot sans SIGTRAP avec Claap
 installée (le strip passe au boot via `sanitizeStoreDir`) ; (2) log `[mira-offscreen] hosting …`
 et plus d'erreur « Failed to start service worker » Claap ; (3) popup Claap fonctionnel ;
 (4) un enregistrement de test — mic + écran via le shim desktopCapture ; l'audio d'onglet passe

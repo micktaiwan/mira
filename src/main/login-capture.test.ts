@@ -21,13 +21,13 @@ const fragment = (over: Partial<LoginFragment> = {}): LoginFragment => ({
   kind: 'current',
   hasUsernameField: false,
   submitted: false,
-  url: 'https://banco.mickaelfm.me/login',
+  url: 'https://bank.example.net/login',
   ...over
 })
 
 const draft = (over: Partial<LoginDraft> = {}): LoginDraft => ({
   ...EMPTY_LOGIN_DRAFT,
-  url: 'https://banco.mickaelfm.me/login',
+  url: 'https://bank.example.net/login',
   ...over
 })
 
@@ -169,14 +169,14 @@ describe('validateLogin', () => {
       draft({
         username: 'me@example.com',
         password: 'hunter22',
-        url: 'https://banco.mickaelfm.me/login?token=abc'
+        url: 'https://bank.example.net/login?token=abc'
       })
     )
     expect(login).toEqual({
       username: 'me@example.com',
       password: 'hunter22',
-      host: 'banco.mickaelfm.me',
-      url: 'https://banco.mickaelfm.me/login',
+      host: 'bank.example.net',
+      url: 'https://bank.example.net/login',
       isNew: false
     })
   })
@@ -197,14 +197,14 @@ describe('validateLogin', () => {
 
 describe('labels and fingerprints', () => {
   it('names the item after the registrable domain', () => {
-    expect(loginItemName('banco.mickaelfm.me')).toBe('mickaelfm.me')
+    expect(loginItemName('bank.example.net')).toBe('example.net')
   })
 
   it('labels a login by account and host, never by password', () => {
-    expect(loginLabel({ username: 'me@example.com', host: 'banco.mickaelfm.me' })).toBe(
-      'me@example.com on banco.mickaelfm.me'
+    expect(loginLabel({ username: 'me@example.com', host: 'bank.example.net' })).toBe(
+      'me@example.com on bank.example.net'
     )
-    expect(loginLabel({ username: '', host: 'banco.mickaelfm.me' })).toBe('banco.mickaelfm.me')
+    expect(loginLabel({ username: '', host: 'bank.example.net' })).toBe('bank.example.net')
   })
 
   it('fingerprints without carrying the password itself', () => {

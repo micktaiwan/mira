@@ -54,12 +54,12 @@ describe('resolveScreenshotPath', () => {
   })
 
   it('keeps an absolute .png path as it is', () => {
-    expect(resolveScreenshotPath('/tmp/cgm.png', { dir, at })).toBe('/tmp/cgm.png')
-    expect(resolveScreenshotPath('/tmp/CGM.PNG', { dir, at })).toBe('/tmp/CGM.PNG')
+    expect(resolveScreenshotPath('/tmp/page.png', { dir, at })).toBe('/tmp/page.png')
+    expect(resolveScreenshotPath('/tmp/PAGE.PNG', { dir, at })).toBe('/tmp/PAGE.PNG')
   })
 
   it('appends .png when the name has no extension', () => {
-    expect(resolveScreenshotPath('/tmp/cgm', { dir, at })).toBe('/tmp/cgm.png')
+    expect(resolveScreenshotPath('/tmp/page', { dir, at })).toBe('/tmp/page.png')
   })
 
   it('does not mistake a dot in a directory for an extension', () => {
@@ -67,7 +67,7 @@ describe('resolveScreenshotPath', () => {
   })
 
   it('refuses another extension rather than writing PNG bytes under it', () => {
-    expect(() => resolveScreenshotPath('/tmp/cgm.jpg', { dir, at })).toThrow(/\.png/)
+    expect(() => resolveScreenshotPath('/tmp/page.jpg', { dir, at })).toThrow(/\.png/)
   })
 
   it('refuses a relative path — Mira’s cwd is not the caller’s', () => {

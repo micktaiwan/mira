@@ -16,7 +16,7 @@ const card: ValidatedCard = {
   number: '4242424242424242',
   expMonth: '12',
   expYear: '2028',
-  holder: 'Mickael F',
+  holder: 'Jane Doe',
   brand: 'visa',
   origin: 'https://shop.example.com/checkout'
 }
@@ -30,7 +30,7 @@ describe('cardItem', () => {
     expect(item.card.brand).toBe('Visa')
     expect(item.card.expMonth).toBe('12')
     expect(item.card.expYear).toBe('2028')
-    expect(item.card.cardholderName).toBe('Mickael F')
+    expect(item.card.cardholderName).toBe('Jane Doe')
   })
 
   it('names the item without the full number', () => {
@@ -86,8 +86,8 @@ describe('bwEnv', () => {
 describe('parseStatus', () => {
   it('reads a real bw status line', () => {
     const out =
-      '{"serverUrl":null,"lastSync":"2026-07-13T14:19:00.274Z","userEmail":"faivrem@gmail.com","userId":"aa7","status":"locked"}'
-    expect(parseStatus(out)).toEqual({ state: 'locked', email: 'faivrem@gmail.com' })
+      '{"serverUrl":null,"lastSync":"2026-07-13T14:19:00.274Z","userEmail":"owner@example.com","userId":"aa7","status":"locked"}'
+    expect(parseStatus(out)).toEqual({ state: 'locked', email: 'owner@example.com' })
   })
 
   it('tolerates a banner before the json', () => {
@@ -152,7 +152,7 @@ describe('parseCardItems', () => {
       name: 'Visa 4242',
       type: 3,
       card: {
-        cardholderName: 'Mickael F',
+        cardholderName: 'Jane Doe',
         brand: 'Visa',
         number: '4242424242424242',
         expMonth: '12',

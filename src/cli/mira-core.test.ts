@@ -3,6 +3,8 @@ import {
   formatFocus,
   parseArgs,
   resolveTabId,
+  sessionTarget,
+  matchProfileId,
   pickTabByUrl,
   buildExec,
   buildReload,
@@ -411,25 +413,25 @@ describe('resolveCode', () => {
 })
 
 describe("absolutePath — resolved in the caller's shell, never in Mira", () => {
-  const env = { cwd: '/work/self/files/cgm', home: '/Users/mickaelfm' }
+  const env = { cwd: '/work/shots', home: '/Users/me' }
 
   it('leaves an absolute path alone', () => {
-    expect(absolutePath('/tmp/cgm.png', env)).toBe('/tmp/cgm.png')
+    expect(absolutePath('/tmp/page.png', env)).toBe('/tmp/page.png')
   })
 
   it('expands a leading ~ (a quoted one survives the shell)', () => {
-    expect(absolutePath('~/Downloads/cgm.png', env)).toBe('/Users/mickaelfm/Downloads/cgm.png')
-    expect(absolutePath('~', env)).toBe('/Users/mickaelfm')
+    expect(absolutePath('~/Downloads/page.png', env)).toBe('/Users/me/Downloads/page.png')
+    expect(absolutePath('~', env)).toBe('/Users/me')
   })
 
   it("hangs a relative path off the calling shell's cwd", () => {
-    expect(absolutePath('cgm.png', env)).toBe('/work/self/files/cgm/cgm.png')
-    expect(absolutePath('./cgm.png', env)).toBe('/work/self/files/cgm/cgm.png')
+    expect(absolutePath('page.png', env)).toBe('/work/shots/page.png')
+    expect(absolutePath('./page.png', env)).toBe('/work/shots/page.png')
   })
 })
 
 describe('buildScreenshot', () => {
-  const env = { cwd: '/work', home: '/Users/mickaelfm' }
+  const env = { cwd: '/work', home: '/Users/me' }
 
   it('sends no path at all when none was given (the daemon defaults it)', () => {
     expect(buildScreenshot(undefined, null, env)).toEqual({
@@ -484,7 +486,7 @@ describe('formatFocus', () => {
   const tab = {
     windowId: 'w1',
     profileId: 'default',
-    profileLabel: 'pro: lempire',
+    profileLabel: 'pro: acme',
     tabId: 't1',
     url: 'https://app.trykondo.com/',
     title: 'Kondo',
@@ -494,14 +496,14 @@ describe('formatFocus', () => {
 
   it('shows the profile, the title and the url', () => {
     const line = formatFocus(tab)
-    expect(line).toContain('[pro: lempire]')
+    expect(line).toContain('[pro: acme]')
     expect(line).toContain('Kondo')
     expect(line).toContain('https://app.trykondo.com/')
   })
 
   it('adds the folder when the tab is in one', () => {
     expect(formatFocus({ ...tab, folderId: 'f1', folderTitle: 'Prod' })).toContain(
-      '[pro: lempire / Prod]'
+      '[pro: acme / Prod]'
     )
   })
 
@@ -565,17 +567,17 @@ describe('resolveNavTarget — nav/open never guess a window across profiles', (
   })
 
   it('resolves --profile by label, so no one has to carry a UUID', () => {
-    const labels = { 'p-perso': 'perso: faivrem@gmail.com', 'p-pro': 'pro: lempire' }
+    const labels = { 'p-perso': 'perso: owner@example.com', 'p-pro': 'pro: acme' }
     expect(resolveNavTarget([pro, perso], { profileFlag: 'perso' }, labels)).toEqual({
       windowId: 'w-perso'
     })
   })
 
   it('names profiles by label in the refusal, not by UUID', () => {
-    const labels = { 'p-perso': 'perso: faivrem@gmail.com', 'p-pro': 'pro: lempire' }
+    const labels = { 'p-perso': 'perso: owner@example.com', 'p-pro': 'pro: acme' }
     const r = resolveNavTarget([pro, perso], {}, labels)
-    expect(r.error).toContain('pro: lempire')
-    expect(r.error).toContain('perso: faivrem@gmail.com')
+    expect(r.error).toContain('pro: acme')
+    expect(r.error).toContain('perso: owner@example.com')
   })
 
   it('reports an unknown profile', () => {
@@ -592,8 +594,86 @@ describe('resolveNavTarget — nav/open never guess a window across profiles', (
   })
 
   it('refuses an ambiguous --profile that spans two profiles', () => {
-    const labels = { 'p-perso': 'perso: mail', 'p-pro': 'pro: lempire' }
+    const labels = { 'p-perso': 'perso: mail', 'p-pro': 'pro: acme' }
     const r = resolveNavTarget([pro, perso], { profileFlag: 'p-' }, labels)
     expect(r.error).toMatch(/matches several profiles/)
+  })
+})
+
+describe('sessionTarget', () => {
+  const env = { CLAUDE_CODE_SESSION_ID: 'sess-1', CLAUDE_PID: '4242' }
+
+  it('sends the session id and pid for a tab verb', () => {
+    expect(sessionTarget({ command: 'exec', env })).toEqual({ sessionId: 'sess-1', pid: 4242 })
+    expect(sessionTarget({ command: 'open', env })).toEqual({ sessionId: 'sess-1', pid: 4242 })
+  })
+
+  it('stays out outside a Claude Code session or when opted out', () => {
+    expect(sessionTarget({ command: 'exec', env: {} })).toBeNull()
+    expect(
+      sessionTarget({ command: 'exec', env: { ...env, MIRA_NO_SESSION_WINDOW: '1' } })
+    ).toBeNull()
+  })
+
+  it('lets an explicit target win', () => {
+    expect(sessionTarget({ command: 'exec', tabId: 't1', env })).toBeNull()
+    expect(sessionTarget({ command: 'open', flags: { window: 'w1' }, env })).toBeNull()
+  })
+
+  it('never opens a window for a verb that does not target a tab', () => {
+    expect(sessionTarget({ command: 'windows', env })).toBeNull()
+    // tabs / use find the USER's pages: they keep reading the focused window.
+    expect(sessionTarget({ command: 'tabs', env })).toBeNull()
+    expect(sessionTarget({ command: 'use', env })).toBeNull()
+    expect(sessionTarget({ command: 'done', env })).toBeNull()
+    expect(sessionTarget({ command: 'call', positionals: ['list-profiles'], env })).toBeNull()
+    expect(sessionTarget({ command: 'list-profiles', env })).toBeNull()
+  })
+
+  it('counts call / a bare registry name only when the command takes a tab', () => {
+    expect(sessionTarget({ command: 'call', positionals: ['exec-js'], env })).toMatchObject({
+      sessionId: 'sess-1'
+    })
+    expect(sessionTarget({ command: 'screenshot', env })).toMatchObject({ sessionId: 'sess-1' })
+  })
+
+  it('drops a junk pid rather than sending it', () => {
+    expect(
+      sessionTarget({ command: 'exec', env: { CLAUDE_CODE_SESSION_ID: 's', CLAUDE_PID: 'x' } })
+    ).toEqual({
+      sessionId: 's'
+    })
+  })
+})
+
+describe('sessionTarget with --profile', () => {
+  it('keeps the session window and carries the profile to resolve', () => {
+    const env = { CLAUDE_CODE_SESSION_ID: 's' }
+    expect(sessionTarget({ command: 'open', flags: { profile: 'perso' }, env })).toEqual({
+      sessionId: 's',
+      profileFlag: 'perso'
+    })
+  })
+})
+
+describe('matchProfileId', () => {
+  const profiles = [
+    { id: 'default', label: 'pro: acme' },
+    { id: '9454-aaaa', label: 'perso: owner@example.com' },
+    { id: '9cfa-bbbb', label: 'pro: Globex' }
+  ]
+
+  it('matches a label piece or an id prefix', () => {
+    expect(matchProfileId(profiles, 'perso')).toEqual({ id: '9454-aaaa' })
+    expect(matchProfileId(profiles, '9cfa')).toEqual({ id: '9cfa-bbbb' })
+  })
+
+  it('refuses zero or several matches', () => {
+    expect(matchProfileId(profiles, 'nope')).toMatchObject({
+      error: expect.stringContaining('no profile')
+    })
+    expect(matchProfileId(profiles, 'pro')).toMatchObject({
+      error: expect.stringContaining('several')
+    })
   })
 })

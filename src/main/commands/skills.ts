@@ -71,7 +71,7 @@ export const skillsCommands: CommandMap<CommandContext> = {
     const skill = resolveSkills(url ?? '').find((s) => s.id === id)
     if (!skill) return { ok: false, error: `skill not applicable here: ${id}` }
     // The sink decides where the result surfaces AND whether a surface opens at all
-    // (Mickael: "l'ouverture dépend du type de skill"). Today only 'pane': it adds
+    // (the user's call: "whether it opens depends on the kind of skill"). Today only 'pane': it adds
     // a turn to the pane conversation (the skill name as the question, its summary
     // as the answer). Other sinks (page write, external) branch here later.
     const usePane = skill.sink.kind === 'pane'

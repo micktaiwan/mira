@@ -5,7 +5,7 @@
 // Cmd+Alt+Right can walk it like a browser's page back/forward — but between
 // tabs, per window.
 //
-// It is a classic back/forward stack with two twists Mickael asked for:
+// It is a classic back/forward stack with two twists the user asked for:
 //  - Deduplicated: a tab id appears at most once. Re-viewing a tab moves it to
 //    the newest end rather than adding a second entry.
 //  - Forward branch is dropped on a fresh visit (standard back/forward): after

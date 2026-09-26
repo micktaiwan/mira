@@ -57,6 +57,17 @@ all day, and every raise cuts what they were typing. Call it only when they aske
 for Mira in front. Same for relaunching the app (`open -a Mira`, any script
 ending in `open`), which raises it just the same.
 
+Not activating is not enough on its own: Electron's `showInactive()` keeps the
+keyboard where it was but still orders a new window in ON TOP of every app. So a
+window created by an external command (`open-profile` on a closed profile,
+`detach-tab` into a fresh window) is ordered in directly BELOW the frontmost
+window instead, through the native `orderWindowBelow` of `native/mira-spaces`;
+the choice of that window is `belowAnchor` in `src/main/window-order.ts`. It falls
+back to `showInactive()` when the addon is missing or there is no window to slip
+under. A covered window stays fully drivable: measured 2026-09-26, a page edited
+and captured with `screenshot` while another window covered it came out with the
+edit, and `requestAnimationFrame` still fired.
+
 The same commands issued from Mira's own UI (a click, Cmd+T, a menu item) behave
 as they always did — the user is already looking at Mira there. The rule and its
 one knob live in `src/main/foreground-policy.ts`; the origin is decided by which
@@ -99,6 +110,41 @@ commands that can take an explicit target id should be preferred:
   Page-bound commands fail on it (`tab is asleep: <id>`); `select-tab` wakes it.
   `navigate {tabId}` is the exception: it points an asleep tab at the destination and
   wakes it there, so the tab performs the requested load and no other.
+
+## One window per agent session: `session-window`
+
+Several Claude Code sessions drive Mira at once, and with no explicit target
+they all landed on the focused window's active tab: the user's own window, and the
+same one for everybody. The CLI's `$MIRA_TAB` pin could not fix it, because
+Claude Code runs every shell command in a fresh shell and the export is gone by
+the next call.
+
+So Mira keeps one window per agent session, per profile:
+
+- `session-window {sessionId, pid?, profileId?}` returns
+  `{windowId, tabId, created}`: the session's window in `profileId` (else its only
+  one) and that window's active tab. It is created on first use, with a fresh home
+  tab, ordered in BELOW the user's frontmost window (see Foreground above), and
+  never written to the saved session, so a quit does not resurrect it.
+  Without `profileId`, a new window opens in the only profile that has a window
+  open (the default one when Mira has none); several open profiles and none named
+  is refused, never guessed. A session that already has windows in several
+  profiles must name one.
+- `close-session-window {sessionId}` closes every window of the session
+  (`{windowIds, closed}`); it never quits Mira.
+- `pid` is the agent's process. Every 30 s while a session window exists, Mira
+  closes the windows of sessions whose process has exited.
+
+The `mira` CLI does this by itself: inside Claude Code (`CLAUDE_CODE_SESSION_ID`
+set, `CLAUDE_PID` sent as `pid`) and with no `--tab`/`$MIRA_TAB`/`--window`, the tab
+verbs (`exec`, `click`, `wait`, `press`, `reload`, `shot`, `console`, `nav`, `open`,
+`batch`, and `call` of a tab-bound command) aim at the session's window;
+`--profile` picks its profile. `tabs` and `use` are left out on purpose: they are
+how a session finds the pages the USER has open. `mira done` closes the session's
+windows. `MIRA_NO_SESSION_WINDOW=1` turns it off. Against a build without the
+command, the CLI says so on stderr and falls back to the old targeting. Pure
+logic: `src/main/session-windows.ts`, `sessionTarget` / `matchProfileId` in
+`src/cli/mira-core.mjs`.
 
 ## Tab ages
 

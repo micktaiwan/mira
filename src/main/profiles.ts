@@ -237,7 +237,15 @@ import {
   userSpaceIds,
   type SpaceLocation
 } from './spaces'
-import { spacesLayout, windowSpaces, moveWindowToSpace } from './mac-spaces'
+import {
+  spacesLayout,
+  windowSpaces,
+  moveWindowToSpace,
+  onScreenWindows,
+  orderWindowBelow
+} from './mac-spaces'
+import { belowAnchor } from './window-order'
+import { SessionWindowRegistry, sessionWindowProfile } from './session-windows'
 import { locationAuthStatus, requestLocationAuthorization } from './mac-location'
 import { extractionScript, type SkillSource } from './skills'
 import { allowQuitNow, suppressQuitPrompt } from './quit'
@@ -554,7 +562,7 @@ export interface ProfileManagerDeps {
   /** Called when the set of profiles, their labels, or the focused one changes,
    * so the app menu can be rebuilt. */
   onChange?: () => void
-  /** Push channel for "which tab is Mickael looking at", consumed by socket
+  /** Push channel for "which tab is the user looking at", consumed by socket
    * subscribers (see focus-feed.ts). Owned by index.ts, which also hands it to
    * the control socket. Absent in tests and in any build with no socket. */
   focusFeed?: FocusFeed
@@ -659,6 +667,12 @@ export class ProfileManager {
    * the explicit `quit` command instead. Entries are dropped as each window's
    * 'close' fires (WeakSet also GC-clears them). */
   private readonly scriptClosingWindows = new WeakSet<BrowserWindow>()
+  /** One window per agent session (session-windows.ts): which window belongs to
+   * which CLAUDE_CODE_SESSION_ID, and the timer that closes the window of a
+   * session whose process has exited. */
+  private readonly sessionWindowRegistry = new SessionWindowRegistry()
+  private sessionReaper: ReturnType<typeof setInterval> | null = null
+  private static readonly SESSION_REAP_MS = 30_000
   /** yt-dlp video downloads in flight, keyed by a unique id, with when each
    * started. A download runs in a background process (independent of any UI), so
    * this lets the status bar show one is running and how long it has taken. */
@@ -1172,6 +1186,86 @@ export class ProfileManager {
     return { windowId: pw.windowId, closed: true }
   }
 
+  /** The agent session's own window in a profile, and its active tab
+   * (session-windows.ts). Created on first use with a fresh home tab, ordered in
+   * below the user's frontmost window (inactive → showBehind), never written to
+   * the saved session. The profile is the one named, else the only one open —
+   * never a guess between identities. */
+  private async sessionWindowFor(
+    sessionId: string,
+    opts: { pid?: number; profileId?: string }
+  ): Promise<{ windowId: string; tabId: string | null; created: boolean }> {
+    const found = this.sessionWindowRegistry.lookup(sessionId, opts.profileId, (id) =>
+      this.isWindowOpen(id)
+    )
+    if ('ambiguous' in found) {
+      const list = found.ambiguous.map((w) => `${w.windowId} (${w.profileId})`).join(', ')
+      throw new Error(`this session has a window in several profiles (${list}); name one with --profile`)
+    }
+    const live = 'windowId' in found ? this.openById.get(found.windowId) : undefined
+    if (live) return { windowId: live.windowId, tabId: live.state.activeId, created: false }
+    const choice = sessionWindowProfile({
+      requested: opts.profileId,
+      openProfiles: [...this.openById.values()].map((pw) => pw.id),
+      fallback: DEFAULT_PROFILE_ID
+    })
+    if ('error' in choice) throw new Error(choice.error)
+    const profile = findById(this.profiles, choice.profileId)
+    if (!profile) throw new Error(`unknown profile: ${choice.profileId}`)
+    if (needsUnlock(profile, new Set(this.unlockedVaults.keys()))) {
+      throw new Error(`profile is locked: unlock it first (unlock-profile)`)
+    }
+    const pw = this.create(profile, { content: 'home', inactive: true })
+    this.sessionWindowRegistry.bind(sessionId, profile.id, pw.windowId, opts.pid)
+    // create() may already have snapshotted the window before it was bound.
+    this.removeSessionEntry(pw)
+    this.ensureSessionReaper()
+    this.deps.onChange?.()
+    await pw.ready
+    if (pw.window.isDestroyed()) throw new Error('session window was closed while opening')
+    return { windowId: pw.windowId, tabId: pw.state.activeId, created: true }
+  }
+
+  /** Close every window of a session (script close: never quits Mira). */
+  private closeSessionWindowsOf(sessionId: string): { windowIds: string[]; closed: boolean } {
+    const windowIds = this.sessionWindowRegistry
+      .unbind(sessionId)
+      .filter((id) => this.isWindowOpen(id))
+    for (const id of windowIds) this.closeWindowById(id, true)
+    return { windowIds, closed: windowIds.length > 0 }
+  }
+
+  private isWindowOpen(windowId: string): boolean {
+    const pw = this.openById.get(windowId)
+    return !!pw && !pw.window.isDestroyed()
+  }
+
+  /** Close the windows of sessions whose agent process has exited, every
+   * SESSION_REAP_MS while at least one session window exists. */
+  private ensureSessionReaper(): void {
+    if (this.sessionReaper) return
+    this.sessionReaper = setInterval(() => {
+      const isAlive = (pid: number): boolean => {
+        try {
+          process.kill(pid, 0)
+          return true
+        } catch (error) {
+          // EPERM: the process exists but belongs to someone else — alive.
+          return (error as NodeJS.ErrnoException).code === 'EPERM'
+        }
+      }
+      for (const windowId of this.sessionWindowRegistry.reap(isAlive, (id) =>
+        this.isWindowOpen(id)
+      )) {
+        this.closeWindowById(windowId, true)
+      }
+      if (this.sessionWindowRegistry.size === 0 && this.sessionReaper) {
+        clearInterval(this.sessionReaper)
+        this.sessionReaper = null
+      }
+    }, ProfileManager.SESSION_REAP_MS)
+  }
+
   /** Open an external URL (a link/file handed to Mira as the system default
    * browser) in a new tab. Targets the focused window, else the LAST focused
    * profile window, else any open one; if Mira was launched by the click and has
@@ -1594,10 +1688,10 @@ export class ProfileManager {
     // move — especially of a maximized window, whose close-time getNormalBounds
     // is a stale rectangle on the OLD display — was lost across sessions.
     window.on('moved', () => this.saveSession(profileWindow))
-    // showInactive orders the window in without activating the app: a window born
-    // of a scripted command appears where it belongs but never takes the keyboard
-    // away from what the user is doing (foreground-policy.ts).
-    window.on('ready-to-show', () => (opts.inactive ? window.showInactive() : window.show()))
+    // A window born of a scripted command must not take the keyboard NOR cover
+    // what the user is looking at (foreground-policy.ts): it is ordered in below
+    // the frontmost window, showInactive being only the fallback (window-order.ts).
+    window.on('ready-to-show', () => (opts.inactive ? this.showBehind(window) : window.show()))
     // Track focus so the menu's active-profile checkmark stays in sync — but only
     // rebuild when focus moves to a DIFFERENT profile (skip plain re-focus).
     // Leaving Mira (for Kova, Slack, anything) is as much a fact for a focus
@@ -1933,7 +2027,7 @@ export class ProfileManager {
       // `document.visibilityState === 'hidden'` when the window is covered: the
       // docs promise otherwise, but not for a WebContentsView
       // (electron/electron#44590). Measured 2026-09-10: 4 real keystrokes typed
-      // into a hidden tab of a covered, unfocused window landed. Mickael drives
+      // into a hidden tab of a covered, unfocused window landed. The user drives
       // Mira from scripts while other apps are in front, so this is required.
       // ensurePageVisibleForInput relies on it.
       webPreferences: {
@@ -2337,7 +2431,7 @@ export class ProfileManager {
 
   /** Hook a profile's session for file downloads, once per partition. Chromium
    * routes a page-triggered file save here; we set its path to ~/Downloads (so no
-   * OS save dialog appears — Mickael always saves there) and mirror the DownloadItem
+   * OS save dialog appears — the user always saves there) and mirror the DownloadItem
    * into the tracker, pushing progress to the chrome and a toast on completion.
    * partition ↔ profile id is 1:1, so the captured profileId routes the toast. */
   private ensureDownloadHandler(partition: string | undefined, profileId: string): void {
@@ -2428,9 +2522,9 @@ export class ProfileManager {
       )
       this.downloadItems.delete(id)
       this.broadcastToProfile(profileId, 'mira:downloads-changed')
-      // The point of the whole feature: tell Mickael the download finished. Only
-      // when he is IN Mira, though — a toast fired on a background window drags
-      // that window in front of what he is doing (mayShowToast in toast.ts). A
+      // The point of the whole feature: let the user know the download finished. Only
+      // when they are IN Mira, though — a toast fired on a background window drags
+      // that window in front of what they are doing (mayShowToast in toast.ts). A
       // completion he was not there to see is carried by the status-bar badge.
       if (record) {
         const host = this.aWindowForProfile(profileId)
@@ -2529,6 +2623,18 @@ export class ProfileManager {
     if (!url) return { opened: false }
     shell.openExternal(url).catch((error) => console.error('[mira] open location settings', error))
     return { opened: true }
+  }
+
+  /** Show a window without activating the app AND without covering the user's
+   * frontmost window: order it in directly below that window. Falls back to
+   * showInactive (on top, keyboard untouched) when the addon is unavailable, the
+   * window server does not know the window yet, or there is nothing to hide
+   * behind. */
+  private showBehind(window: BrowserWindow): void {
+    const wid = parseWindowNumber(window.getMediaSourceId())
+    const anchor = wid === undefined ? undefined : belowAnchor(onScreenWindows(), wid)
+    if (wid !== undefined && anchor !== undefined && orderWindowBelow(wid, anchor)) return
+    window.showInactive()
   }
 
   /** Put a restored window back on the virtual desktop it was saved on: resolve
@@ -3745,8 +3851,8 @@ export class ProfileManager {
    *
    * Two rules, both from use:
    *   - Never raise the window. A scripting command must not steal the foreground
-   *     (foreground-policy.ts), and Mickael cannot keep Mira in front while he
-   *     works (2026-09-10). The only escalation is selecting the tab in its own
+   *     (foreground-policy.ts), and the user cannot keep Mira in front while they
+   *     work (2026-09-10). The only escalation is selecting the tab in its own
    *     window.
    *   - Never report a false success. A tab whose renderer is hidden DROPS CDP
    *     input: measured 2026-09-10, 13 keystrokes into a focused login field left
@@ -5329,6 +5435,8 @@ export class ProfileManager {
   /** Insert or replace a live window's snapshot in its profile's saved list,
    * matched by windowId (so a save updates in place, never appends a duplicate). */
   private upsertSession(pw: ProfileWindow, entry: PersistedWindow): void {
+    // An agent's session window is scratch space: a quit must not resurrect it.
+    if (this.sessionWindowRegistry.owns(pw.windowId)) return
     const arr = this.sessions[pw.id] ? [...this.sessions[pw.id]] : []
     const i = arr.findIndex((w) => w.windowId === pw.windowId)
     if (i >= 0) arr[i] = entry
@@ -6319,6 +6427,8 @@ export class ProfileManager {
       // confirmation gate); a socket/MCP close never quits (foreground-policy's
       // origin, same rule as close-profile — agents use `quit` for that).
       closeWindow: (windowId) => this.closeWindowById(windowId, origin === 'external'),
+      sessionWindow: (sessionId, opts) => this.sessionWindowFor(sessionId, opts),
+      closeSessionWindow: (sessionId) => this.closeSessionWindowsOf(sessionId),
       pinTab: (id) => {
         if (!target) throw new Error('no target window')
         return this.setTabPinnedIn(target, id, true)

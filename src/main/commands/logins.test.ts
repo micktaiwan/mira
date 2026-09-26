@@ -27,13 +27,13 @@ describe('save-login', () => {
     const ctx = await ready()
     const res = await run(ctx, 'save-login', {
       profileId: 'perso',
-      url: 'https://banco.mickaelfm.me/login',
+      url: 'https://bank.example.net/login',
       username: 'me@example.com',
       password: 'hunter22'
     })
     expect(res).toMatchObject({
       ok: true,
-      label: 'me@example.com on banco.mickaelfm.me',
+      label: 'me@example.com on bank.example.net',
       updated: false
     })
     expect(JSON.stringify(res)).not.toContain('hunter22')
@@ -43,7 +43,7 @@ describe('save-login', () => {
     const ctx = await ready()
     const params = {
       profileId: 'perso',
-      url: 'https://banco.mickaelfm.me/login',
+      url: 'https://bank.example.net/login',
       username: 'me@example.com'
     }
     await run(ctx, 'save-login', { ...params, password: 'hunter22' })
@@ -73,12 +73,12 @@ describe('save-login', () => {
     const admin = { profileId: 'perso', username: 'admin' }
     await run(ctx, 'save-login', {
       ...admin,
-      url: 'https://nexus.lempire.com',
+      url: 'https://nexus.acme.com',
       password: 'nexus-pass'
     })
     const other = await run(ctx, 'save-login', {
       ...admin,
-      url: 'https://grafana.lempire.com',
+      url: 'https://grafana.acme.com',
       password: 'grafana-pass'
     })
     expect(other).toMatchObject({ ok: true, linked: false, updated: false })
@@ -134,14 +134,14 @@ describe('list-logins', () => {
     const ctx = await ready()
     await run(ctx, 'save-login', {
       profileId: 'perso',
-      url: 'https://banco.mickaelfm.me/login',
+      url: 'https://bank.example.net/login',
       username: 'me@example.com',
       password: 'hunter22'
     })
     const res = await run(ctx, 'list-logins', { profileId: 'perso' })
     expect(res).toMatchObject({
       ok: true,
-      logins: [{ name: 'mickaelfm.me', username: 'me@example.com', hosts: ['banco.mickaelfm.me'] }]
+      logins: [{ name: 'example.net', username: 'me@example.com', hosts: ['bank.example.net'] }]
     })
     expect(JSON.stringify(res)).not.toContain('hunter22')
   })
@@ -150,7 +150,7 @@ describe('list-logins', () => {
     const ctx = await ready()
     await run(ctx, 'save-login', {
       profileId: 'perso',
-      url: 'https://banco.mickaelfm.me/login',
+      url: 'https://bank.example.net/login',
       username: 'me@example.com',
       password: 'hunter22'
     })
@@ -162,10 +162,10 @@ describe('list-logins', () => {
     })
     const res = (await run(ctx, 'list-logins', {
       profileId: 'perso',
-      domain: 'mickaelfm.me'
+      domain: 'example.net'
     })) as unknown as { logins: Array<{ hosts: string[] }> }
     expect(res.logins).toHaveLength(1)
-    expect(res.logins[0].hosts).toEqual(['banco.mickaelfm.me'])
+    expect(res.logins[0].hosts).toEqual(['bank.example.net'])
   })
 
   it('fails on a locked vault rather than answering half of it', async () => {
@@ -183,13 +183,13 @@ describe('delete-login', () => {
     const ctx = await ready()
     const saved = (await run(ctx, 'save-login', {
       profileId: 'perso',
-      url: 'https://banco.mickaelfm.me/login',
+      url: 'https://bank.example.net/login',
       username: 'me@example.com',
       password: 'hunter22'
     })) as unknown as { id: string }
     expect(await run(ctx, 'delete-login', { profileId: 'perso', id: saved.id })).toMatchObject({
       ok: true,
-      name: 'mickaelfm.me'
+      name: 'example.net'
     })
     expect(await run(ctx, 'list-logins', { profileId: 'perso' })).toMatchObject({ logins: [] })
   })

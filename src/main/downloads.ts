@@ -28,7 +28,7 @@ export interface DownloadRecord {
   totalBytes: number
   /** True while a progressing download is paused. */
   paused: boolean
-  /** True once Mickael acknowledged a completed download (opened/revealed it).
+  /** True once the user acknowledged a completed download (opened/revealed it).
    * Absent means not yet seen — the status bar shows a persistent badge until
    * every completed download is seen, so an instant download (whose progress
    * indicator never gets a visible frame) still leaves a durable trace. */

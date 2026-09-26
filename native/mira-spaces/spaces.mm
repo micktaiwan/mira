@@ -16,6 +16,13 @@
 //      other processes' windows since macOS 14.5). Mira only ever moves its own
 //      windows, so no SIP change or helper injection is needed.
 //
+// Two more wrappers ride along because they share the window-number plumbing:
+// onScreenWindows / orderWindowBelow let a window born of a scripted command slip
+// in UNDER the window the user is looking at, instead of being ordered in on top
+// of every app (Electron's showInactive keeps the keyboard but not the z-order).
+// Validated 2026-09-26 on Darwin 25: an app that is not active can order its own
+// never-shown window below another app's window, and the active app stays active.
+//
 // This file is thin wrappers only (raw data in/out, no decisions): the logic —
 // indexing, display matching, restore policy — lives in src/main/spaces.ts where
 // it is unit-tested, per the "tout testable" principle.
@@ -25,6 +32,7 @@
 
 #import <node_api.h>
 #import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
 #import <CoreGraphics/CoreGraphics.h>
 
 // Private SkyLight prototypes (no public header). CGDisplayGetDisplayIDFromUUID
@@ -150,8 +158,52 @@ static napi_value MoveWindowToSpace(napi_env env, napi_callback_info info) {
   return out;
 }
 
+// onScreenWindows(): every on-screen window of the current Space, front to back.
+// -> [{ number, layer }]. layer 0 = normal app windows; menus, the Dock and the
+// menu bar sit on higher layers. Owner names are left out on purpose: reading
+// them needs the Screen Recording permission, numbers and layers do not.
+static napi_value OnScreenWindows(napi_env env, napi_callback_info info) {
+  (void)info;
+  napi_value result;
+  napi_create_array(env, &result);
+  CFArrayRef listRef = CGWindowListCopyWindowInfo(
+      kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements, kCGNullWindowID);
+  if (listRef == NULL) return result;
+  NSArray *list = (__bridge NSArray *)listRef;
+  uint32_t outIndex = 0;
+  for (NSDictionary *w in list) {
+    if (![w isKindOfClass:[NSDictionary class]]) continue;
+    NSNumber *number = w[(__bridge NSString *)kCGWindowNumber];
+    NSNumber *layer = w[(__bridge NSString *)kCGWindowLayer];
+    if (number == nil) continue;
+    napi_value entry;
+    napi_create_object(env, &entry);
+    napi_set_named_property(env, entry, "number", MakeDouble(env, number.doubleValue));
+    napi_set_named_property(env, entry, "layer", MakeDouble(env, layer ? layer.doubleValue : 0));
+    napi_set_element(env, result, outIndex++, entry);
+  }
+  CFRelease(listRef);
+  return result;
+}
+
+// orderWindowBelow(windowNumber, anchorNumber): order one of OUR windows in
+// directly below another window (any app's). Never activates the app. Returns
+// whether our window ended up visible — false when the number is not ours.
+static napi_value OrderWindowBelow(napi_env env, napi_callback_info info) {
+  double wid = NumberArg(env, info, 0, 2);
+  double anchor = NumberArg(env, info, 1, 2);
+  napi_value out;
+  napi_get_boolean(env, false, &out);
+  if (wid <= 0 || anchor <= 0) return out;
+  NSWindow *window = [NSApp windowWithWindowNumber:(NSInteger)wid];
+  if (window == nil) return out;
+  [window orderWindow:NSWindowBelow relativeTo:(NSInteger)anchor];
+  napi_get_boolean(env, [window isVisible], &out);
+  return out;
+}
+
 static napi_value Init(napi_env env, napi_value exports) {
-  napi_value fnLayout, fnWindowSpaces, fnMove;
+  napi_value fnLayout, fnWindowSpaces, fnMove, fnOnScreen, fnOrderBelow;
   napi_create_function(env, "spacesLayout", NAPI_AUTO_LENGTH, SpacesLayout, NULL, &fnLayout);
   napi_set_named_property(env, exports, "spacesLayout", fnLayout);
   napi_create_function(env, "windowSpaces", NAPI_AUTO_LENGTH, WindowSpaces, NULL, &fnWindowSpaces);
@@ -159,6 +211,12 @@ static napi_value Init(napi_env env, napi_value exports) {
   napi_create_function(env, "moveWindowToSpace", NAPI_AUTO_LENGTH, MoveWindowToSpace, NULL,
                        &fnMove);
   napi_set_named_property(env, exports, "moveWindowToSpace", fnMove);
+  napi_create_function(env, "onScreenWindows", NAPI_AUTO_LENGTH, OnScreenWindows, NULL,
+                       &fnOnScreen);
+  napi_set_named_property(env, exports, "onScreenWindows", fnOnScreen);
+  napi_create_function(env, "orderWindowBelow", NAPI_AUTO_LENGTH, OrderWindowBelow, NULL,
+                       &fnOrderBelow);
+  napi_set_named_property(env, exports, "orderWindowBelow", fnOrderBelow);
   return exports;
 }
 

@@ -2,7 +2,7 @@
 // external subscribers instead of polled.
 //
 // Everything else on the socket is one request, one response (see socket.ts).
-// That shape cannot answer "what is Mickael looking at right now" — a poller
+// That shape cannot answer "what is the user looking at right now" — a poller
 // either misses short visits or burns CPU asking every second, and the browsing
 // history is no help after the fact (recordVisit dedups by url, so it keeps a
 // visit count and a last-visited stamp, never a duration; see history-store.ts).

@@ -5,7 +5,7 @@ import type { CardFragment } from './card-capture'
 import type { CardPromptAnswer, CardPromptRequest } from './card-prompt'
 import type { CardVault } from './bitwarden'
 
-const PERSO: CardVault = { appDataDir: '/tmp/bw-perso', email: 'faivrem@gmail.com' }
+const PERSO: CardVault = { appDataDir: '/tmp/bw-perso', email: 'owner@example.com' }
 const NOW = new Date('2026-08-13T12:00:00Z')
 
 const source = (over: Partial<FragmentSource> = {}): FragmentSource => ({
@@ -107,7 +107,7 @@ describe('CardCaptureService.handleFragment', () => {
     expect(prompts[0]).toMatchObject({
       host: 'shop.example.com',
       cardLabel: 'Visa 4242',
-      account: 'faivrem@gmail.com',
+      account: 'owner@example.com',
       mode: 'save'
     })
   })

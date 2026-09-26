@@ -99,7 +99,7 @@ describe('save-card', () => {
       profileId: 'perso',
       number: '4242 4242 4242 4242',
       expiry: '12/28',
-      holder: 'Mickael F'
+      holder: 'Jane Doe'
     })
     expect(res).toMatchObject({ ok: true, label: 'Visa 4242' })
     expect(String(res.id)).toMatch(/^item-/)

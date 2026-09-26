@@ -207,7 +207,7 @@ export function draftComplete(draft: LoginDraft): boolean {
 export interface ValidatedLogin {
   username: string
   password: string
-  /** The host it belongs to ("banco.mickaelfm.me") — logins are per host, not
+  /** The host it belongs to ("bank.example.net") — logins are per host, not
    * per registrable domain: two apps on two subdomains are two accounts. */
   host: string
   /** The full page url, stored as the item's uri so Bitwarden matches it back. */
@@ -267,12 +267,12 @@ export function loginFingerprint(login: {
 }
 
 /** What the vault item is called: the site's registrable domain, the way a human
- * names a login ("mickaelfm.me"), never the password. Pure. */
+ * names a login ("example.net"), never the password. Pure. */
 export function loginItemName(host: string): string {
   return registrableDomain(host) || host
 }
 
-/** "mickael@x.com on banco.mickaelfm.me" — what the bubble shows. A login with
+/** "me@x.com on bank.example.net" — what the bubble shows. A login with
  * no username degrades to the host alone. Pure. */
 export function loginLabel(login: { username: string; host: string }): string {
   return login.username ? `${login.username} on ${login.host}` : login.host

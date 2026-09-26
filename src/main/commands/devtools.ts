@@ -1,5 +1,5 @@
 // Devtools domain: run JavaScript inside the active tab's page and get its result
-// back. This is the page-introspection primitive — it lets an agent (or Mickael via
+// back. This is the page-introspection primitive — it lets an agent (or the user via
 // the socket / MCP) SEE and probe the live page, which is:
 //   1. how we debug a site (read the DOM, console state, what a button does), and
 //   2. the foundation of the skills engine (extract page content to feed the AI —

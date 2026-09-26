@@ -68,7 +68,7 @@ describe('the picker document', () => {
   it('draws one clickable row per account, carrying its vault id', () => {
     const html = renderLoginPickHtml({
       host: 'eu.holistics.io',
-      account: 'faivrem@gmail.com',
+      account: 'owner@example.com',
       options: [
         option({ id: 'a', username: 'ana@x.com' }),
         option({ id: 'b', username: 'bob@x.com' })
@@ -83,10 +83,10 @@ describe('the picker document', () => {
   it('names the vault the accounts come from', () => {
     const html = renderLoginPickHtml({
       host: 'eu.holistics.io',
-      account: 'faivrem@gmail.com',
+      account: 'owner@example.com',
       options: [option()]
     })
-    expect(html).toContain('Vault: faivrem@gmail.com')
+    expect(html).toContain('Vault: owner@example.com')
   })
 
   it('cuts the list at the cap and says how many are left', () => {
@@ -112,7 +112,7 @@ describe('the picker document', () => {
   it('never carries a password: there is no field for one on this bubble', () => {
     const html = renderLoginPickHtml({
       host: 'eu.holistics.io',
-      account: 'faivrem@gmail.com',
+      account: 'owner@example.com',
       options: [option()]
     })
     expect(html).not.toContain('type="password"')

@@ -271,6 +271,8 @@ export interface FakeContext {
   openedDownloads: string[]
   /** Ids passed to revealDownload that actually revealed (downloads spy). */
   revealedDownloads: string[]
+  /** Session windows created through session-window, in order (with their pid). */
+  sessionWindows: Array<{ sessionId: string; pid?: number }>
 }
 
 /** Options to shape the fake's native edges for a specific test. */
@@ -287,6 +289,8 @@ export function makeContext(
   const tabLoads: Array<{ url: string; tabId: string }> = []
   const tabReloads: Array<{ tabId: string; ignoreCache: boolean }> = []
   const windowsClosed: string[] = []
+  const sessionWindows: Array<{ sessionId: string; pid?: number }> = []
+  const openSessions = new Set<string>()
   // Geometry mode of the fake's single window (set-window-fullscreen /
   // set-window-maximized), reported back by listWindows.
   const windowState = { fullScreen: false, maximized: false }
@@ -1457,6 +1461,18 @@ export function makeContext(
       state.tabs = selectTabPure(state.tabs, id)
       return { windowId: 'fake-window', id }
     },
+    // One synthetic window per session id ('session-<id>'), created on first use.
+    sessionWindow: async (sessionId: string, opts: { pid?: number }) => {
+      const windowId = `session-${sessionId}`
+      if (openSessions.has(sessionId)) return { windowId, tabId: null, created: false }
+      openSessions.add(sessionId)
+      sessionWindows.push({ sessionId, ...(opts.pid ? { pid: opts.pid } : {}) })
+      return { windowId, tabId: null, created: true }
+    },
+    closeSessionWindow: (sessionId: string) => {
+      if (!openSessions.delete(sessionId)) return { windowIds: [], closed: false }
+      return { windowIds: [`session-${sessionId}`], closed: true }
+    },
     closeWindow: (windowId?: string) => {
       const id = windowId ?? 'fake-window'
       if (id !== 'fake-window') throw new Error(`unknown window: ${id}`)
@@ -2205,6 +2221,7 @@ export function makeContext(
     downloadsList: () => downloads.list(),
     cancelledDownloads,
     openedDownloads,
-    revealedDownloads
+    revealedDownloads,
+    sessionWindows
   }
 }

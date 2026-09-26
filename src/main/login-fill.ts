@@ -8,7 +8,7 @@
 // hands a secret to a page. So the rules here are deliberately narrower than
 // Bitwarden's own matching:
 //   - a candidate must share the page's SITE (registrable domain), never just a
-//     word in its name. `lempire.com` never offers itself on `lempire.fr`.
+//     word in its name. `acme.com` never offers itself on `acme.fr`.
 //   - an exact host beats a sibling subdomain, always. Two accounts on
 //     `go.tiime.fr` and `apps.tiime.fr` stay two accounts.
 //   - when more than one candidate survives and nothing says which, NOTHING is
