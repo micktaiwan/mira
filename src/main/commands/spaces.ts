@@ -25,10 +25,11 @@ export interface SpacesState {
  * command context so it stays mockable. */
 export interface SpacesContext {
   getSpacesState: () => SpacesState
-  /** Move the target window onto the given desktop of its display. Returns
-   * 'moved', or 'noop' when the window already is there. Throws when it cannot
-   * (no target window, no Spaces support, index out of range). */
-  moveTargetWindowToSpace: (spaceIndex: number) => 'moved' | 'noop'
+  /** Move a window onto the given desktop of its display: the one named by
+   * `windowId`, else the target window. Returns 'moved', or 'noop' when the
+   * window already is there. Throws when it cannot (no target / unknown window,
+   * no Spaces support, index out of range). */
+  moveTargetWindowToSpace: (spaceIndex: number, windowId?: string) => 'moved' | 'noop'
 }
 
 export const spacesCommands: CommandMap<CommandContext> = {
@@ -42,12 +43,17 @@ export const spacesCommands: CommandMap<CommandContext> = {
   },
 
   'move-window-to-space': (ctx, params) => {
-    const { spaceIndex } = (params ?? {}) as { spaceIndex?: unknown }
+    const { spaceIndex, windowId } = (params ?? {}) as { spaceIndex?: unknown; windowId?: unknown }
     if (typeof spaceIndex !== 'number' || !Number.isInteger(spaceIndex) || spaceIndex < 0) {
       return { ok: false, error: '"spaceIndex" must be a non-negative integer' }
     }
+    // Optional: address a specific window (an agent's own window) instead of the
+    // focused one, which from the socket is the user's window.
+    if (windowId !== undefined && (typeof windowId !== 'string' || windowId.trim() === '')) {
+      return { ok: false, error: '"windowId" must be a non-empty string' }
+    }
     try {
-      const outcome = ctx.moveTargetWindowToSpace(spaceIndex)
+      const outcome = ctx.moveTargetWindowToSpace(spaceIndex, windowId)
       return { ok: true, spaceIndex, moved: outcome === 'moved' }
     } catch (error) {
       return fail(error)
