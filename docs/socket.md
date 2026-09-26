@@ -378,7 +378,7 @@ Every file a page triggers is saved straight to `~/Downloads` (no OS save dialog
 | `focus-app`            | `windowId?`     | bring Mira to the foreground. **The only command that does** — every other one leaves the user's foreground app alone (see **Foreground** above). `windowId` (from `list-windows`) picks WHICH window comes up; without it, the last-focused one. Errors: `unknown window: <id>` |
 | `quit`                 | —               | quit Mira entirely (graceful: flushes sessions, re-locks any unlocked vault). Skips the Cmd+Q confirmation dialog — no modal, it just quits. The only explicit programmatic exit — `close-profile` never quits, and a user closing the last window does                          |
 | `list-spaces`          | —               | macOS virtual desktops per display, in Mission Control order, plus where the target window sits (`window: {displayId, spaceIndex}`, null when unknown). `displays: []` = no Spaces support (non-mac / addon not built)                                                           |
-| `move-window-to-space` | `spaceIndex`    | move the target window onto that desktop (0-based index on its display). `moved:false` = was already there. Persisted: the window reopens on that desktop next launch                                                                                                            |
+| `move-window-to-space` | `spaceIndex`, `windowId?` | move the window (`windowId`, else the target window) onto that desktop (0-based index on its display). `moved:false` = was already there. Persisted: the window reopens on that desktop next launch                                                                                                            |
 
 ### Themes (chrome appearance)
 

@@ -634,8 +634,11 @@ export function makeContext(
       ],
       window: state.focused ? { displayId: 1, spaceIndex: windowSpace } : null
     }),
-    moveTargetWindowToSpace: (spaceIndex: number) => {
-      if (!state.focused) throw new Error('no target window')
+    moveTargetWindowToSpace: (spaceIndex: number, windowId?: string) => {
+      if (windowId !== undefined && windowId !== 'fake-window') {
+        throw new Error(`unknown window: ${windowId}`)
+      }
+      if (windowId === undefined && !state.focused) throw new Error('no target window')
       if (spaceIndex >= fakeSpaceIds.length) {
         throw new Error(`no desktop at index ${spaceIndex} (display has ${fakeSpaceIds.length})`)
       }
