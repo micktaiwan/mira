@@ -44,6 +44,7 @@ import {
   QUIT_CONFIRM
 } from './quit'
 import { installTouchIdWebAuthn } from './webauthn'
+import { applyStagedUpdateOnQuit, maybeShowUnsignedNotice } from './self-update-service'
 import { aboutPanelOptions } from './about'
 
 // External control socket (see CLAUDE.md, "tout pilotable"). Override with the
@@ -723,12 +724,18 @@ app.whenReady().then(async () => {
   // Session writes are debounced in the ProfileManager; flush any pending one on
   // quit so the last changes always land (see flushPendingSaves).
   app.on('will-quit', () => profiles.flushPendingSaves())
+  // A published build installs a staged update once it has quit (the swap runs
+  // in a detached script that waits for this process to exit). No-op otherwise.
+  app.on('will-quit', () => applyStagedUpdateOnQuit())
 
   // Reopen exactly the profile windows that were open when Mira last quit (one
   // per open profile), or the default profile on a first launch / fresh install.
   // A `--profile <id>` flag / MIRA_PROFILE env var forces booting into that one
   // profile alone (a dedicated test profile), bypassing the last-open restore.
   profiles.openSavedProfiles(parseProfileArg(process.argv, process.env))
+
+  // A published build is unsigned: say once what that costs (self-update.ts).
+  maybeShowUnsignedNotice().catch((error) => console.error('[mira] unsigned notice', error))
 
   // The manager now exists and has a window: route default-browser link handoffs
   // to it, and flush any links that arrived during a cold launch (see above).

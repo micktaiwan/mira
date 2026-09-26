@@ -7,3 +7,4 @@ out
 *.tsbuildinfo
 native/**/build/
 chrome-extension-api.preload.js
+dist-release

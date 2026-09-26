@@ -17,6 +17,7 @@ import {
   type Outcome,
   type UpdateState
 } from './update-check'
+import { distribution, prepareLatestUpdate, restartToUpdate } from './self-update-service'
 
 /** How often the timer asks the checker whether the daily check is due. The
  * check itself is rate-limited by the checker, so this only decides how soon
@@ -89,7 +90,51 @@ export function noticeFor(
   }
 }
 
+/** A published (unsigned, self-updating) build does not just announce a new
+ * release: it downloads, verifies and stages it (self-update-service.ts), then
+ * says it is ready. The swap happens when Mira quits; clicking restarts now.
+ * A failure falls back to the release page. The daily check announces a version
+ * once, so after a failed download "Check for Updates" is what retries it. */
+function stageAndAnnounce(): void {
+  prepareLatestUpdate(LATEST_RELEASE_URL)
+    .then((version) => {
+      notifyWith(
+        {
+          title: `Mira ${formatVersion(version)} is ready`,
+          body: 'It will be installed when you quit Mira. Click to restart now.'
+        },
+        restartToUpdate
+      )
+    })
+    .catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('[mira] update download failed:', message)
+      notifyWith(
+        { title: 'Mira update failed', body: `${message}. Click to see the releases.` },
+        () => {
+          shell
+            .openExternal('https://github.com/micktaiwan/mira/releases')
+            .catch((e) => console.error('[mira] open releases', e))
+        }
+      )
+    })
+}
+
+function notifyWith(notice: { title: string; body: string }, onClick: () => void): void {
+  if (!Notification.isSupported()) {
+    console.log(`[mira] ${notice.title} — ${notice.body}`)
+    return
+  }
+  const notification = new Notification({ title: notice.title, body: notice.body, silent: true })
+  notification.on('click', onClick)
+  notification.show()
+}
+
 function show(outcome: Outcome): void {
+  if (outcome.kind === 'newer' && distribution() === 'release') {
+    stageAndAnnounce()
+    return
+  }
   const notice = noticeFor(outcome, app.getVersion())
   if (!Notification.isSupported()) {
     console.log(`[mira] ${notice.title} — ${notice.body}`)

@@ -94,6 +94,7 @@ npm run typecheck  # tsc, sans build
 npm test           # Vitest
 npm run lint / format
 ./bin/build.sh     # build packagé + réinstalle l'app (quit par le socket → build:mac → relance en arrière-plan)
+./bin/release.sh patch  # PUBLIE une release GitHub non signée, qui se met à jour seule (docs/releases.md)
 ```
 
 **`npm run format` réécrit TOUT le repo, pas les fichiers que tu viens de toucher.** Le repo n'est

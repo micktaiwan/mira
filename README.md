@@ -58,6 +58,15 @@ docs/socket.md  the external control protocol: every command, its params and its
 Key files: `src/main/commands/` (the registry, one file per domain), `src/main/socket.ts` (external
 transport), `src/main/profiles.ts` (window/profile lifecycle), `src/main/index.ts` (wiring).
 
+## Install
+
+Download the latest `Mira-<version>-mac-arm64.zip` from
+[Releases](https://github.com/micktaiwan/mira/releases), unzip it and move `Mira.app` to
+`/Applications`. The published build is **not signed** with an Apple Developer certificate: macOS
+blocks it the first time (allow it in System Settings → Privacy & Security, or run
+`xattr -dr com.apple.quarantine /Applications/Mira.app`). It then updates itself. Touch ID
+passkeys need a build signed with your own certificate: see [`docs/releases.md`](./docs/releases.md).
+
 ## Development
 
 ```bash
