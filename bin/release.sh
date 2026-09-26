@@ -10,9 +10,14 @@
 #
 # The published app is ad-hoc signed, not with an Apple Developer certificate:
 # see docs/releases.md for what that costs and how to sign your own build.
+#
+# It builds for the architecture it runs on. To add the other one, run
+# bin/release-asset.sh on a Mac of that kind once this release exists.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+# shellcheck source=bin/release-app.sh
+. bin/release-app.sh
 
 bump="${1:-}"
 case "$bump" in
@@ -34,35 +39,9 @@ prev="$(git describe --tags --abbrev=0 2>/dev/null || true)"
 version="$(npm version "$bump" --no-git-tag-version | sed 's/^v//')"
 arch="$(node -p process.arch)"
 out="dist-release"
-rm -rf "$out"
 
-npm run build:addon
-npx electron-vite build
-node bin/release-build.cjs "$out"
-
-app="$(find "$out" -maxdepth 2 -name Mira.app -type d | head -1)"
-[ -n "$app" ] || { echo "no Mira.app under $out" >&2; exit 1; }
-
-# Nothing but the app goes public. The 1.1.0 zip carried private files lying at
-# the repo root (electron-builder's `files` was a deny-list then): refuse any
-# asar entry outside the allow-list, whatever electron-builder.yml says.
-node -e '
-const asar = require("@electron/asar")
-const allowed = /^\/(out|resources|node_modules)(\/|$)|^\/package\.json$/
-const leaked = asar.listPackage(process.argv[1]).filter((f) => !allowed.test(f))
-const dirs = new Set(leaked.map((f) => f.split("/").slice(0, 2).join("/")))
-if (dirs.size) { console.error("refusing to publish, unexpected files in app.asar:\n" + [...dirs].join("\n")); process.exit(1) }
-' "$app/Contents/Resources/app.asar"
-
-# Ad-hoc signature: required for the app to run at all on Apple Silicon, and what
-# the self-update's `codesign --verify` checks. Not a Developer ID: Gatekeeper
-# still blocks a downloaded copy until the user allows it once.
-codesign --force --deep --sign - "$app"
-codesign --verify --deep --strict "$app"
-
-zip_name="Mira-$version-mac-$arch.zip"
-ditto -c -k --sequesterRsrc --keepParent "$app" "$out/$zip_name"
-(cd "$out" && shasum -a 256 "$zip_name" >"$zip_name.sha256")
+build_release_zip "$out" "$version"
+zip_name="$RELEASE_ZIP"
 
 changes="$(git log --no-merges --format='- %s' ${prev:+"$prev"..}HEAD)"
 notes="$(
@@ -71,9 +50,11 @@ notes="$(
 
 $changes
 
-## Install (macOS, Apple Silicon)
+## Install (macOS)
 
-1. Download \`$zip_name\`, unzip it, move \`Mira.app\` to \`/Applications\`.
+1. Download the zip for your Mac (\`-mac-arm64\` for Apple Silicon, \`-mac-x64\` for Intel),
+   unzip it, move \`Mira.app\` to \`/Applications\`. This release was cut on $arch; the other
+   architecture is uploaded from a Mac of that kind, so it may land a little later.
 2. This build is not signed with an Apple Developer certificate, so macOS blocks it the first
    time. Run \`xattr -dr com.apple.quarantine /Applications/Mira.app\`, or open it once and allow
    it in System Settings → Privacy & Security.
