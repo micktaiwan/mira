@@ -6,16 +6,16 @@ appId: com.mickaelfm.mira
 productName: Mira
 directories:
   buildResources: build
+# An ALLOW-list, never a deny-list: the app only needs the compiled code (out/)
+# and the icon (resources/). electron-builder adds package.json and the
+# production node_modules by itself. The old deny-list packed everything else
+# lying at the repo root — the 1.1.0 release zip carried dist/ (847 MB of older
+# builds), CLAUDE.local.md, skill/LOCAL.md and scratchpad/ (2026-09-26). The
+# native addons ship through extraResources below, not the asar.
+# bin/release.sh re-checks the asar against the same allow-list before publishing.
 files:
-  - '!**/.vscode/*'
-  - '!src/*'
-  - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
-  # The native location addon ships as a resource (extraResources), not in the
-  # asar — keep its whole source/build tree out of the app bundle.
-  - '!native'
+  - 'out/**/*'
+  - 'resources/**/*'
 # Ship the compiled macOS location addon into Contents/Resources so the main
 # process loads it by absolute path (see src/main/mac-location.ts). It is a signed
 # nested Mach-O; electron-builder re-signs it with the app's certificate.

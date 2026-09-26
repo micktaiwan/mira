@@ -31,6 +31,11 @@ it (`codesign --sign -`), zips it with `ditto`, writes `Mira-<version>-mac-<arch
 commits `release: v<version>`, tags, pushes, and creates the GitHub release with both files and
 install notes. It publishes: run it only when a release is wanted.
 
+Before signing, it refuses to go on if `app.asar` holds anything besides `out/`, `resources/`,
+`node_modules/` and `package.json`. `electron-builder.yml`'s `files` is an allow-list for the same
+reason: the 1.1.0 zip, built when it was still a deny-list, carried every file lying at the repo
+root (older builds in `dist/`, local notes, scratch scripts) and its assets were deleted.
+
 ## How the self-update works
 
 1. The daily update check (`src/main/update-service.ts`) asks GitHub for the latest release. On a

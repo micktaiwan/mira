@@ -43,6 +43,17 @@ node bin/release-build.cjs "$out"
 app="$(find "$out" -maxdepth 2 -name Mira.app -type d | head -1)"
 [ -n "$app" ] || { echo "no Mira.app under $out" >&2; exit 1; }
 
+# Nothing but the app goes public. The 1.1.0 zip carried private files lying at
+# the repo root (electron-builder's `files` was a deny-list then): refuse any
+# asar entry outside the allow-list, whatever electron-builder.yml says.
+node -e '
+const asar = require("@electron/asar")
+const allowed = /^\/(out|resources|node_modules)(\/|$)|^\/package\.json$/
+const leaked = asar.listPackage(process.argv[1]).filter((f) => !allowed.test(f))
+const dirs = new Set(leaked.map((f) => f.split("/").slice(0, 2).join("/")))
+if (dirs.size) { console.error("refusing to publish, unexpected files in app.asar:\n" + [...dirs].join("\n")); process.exit(1) }
+' "$app/Contents/Resources/app.asar"
+
 # Ad-hoc signature: required for the app to run at all on Apple Silicon, and what
 # the self-update's `codesign --verify` checks. Not a Developer ID: Gatekeeper
 # still blocks a downloaded copy until the user allows it once.
