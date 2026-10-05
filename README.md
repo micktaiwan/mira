@@ -60,7 +60,8 @@ transport), `src/main/profiles.ts` (window/profile lifecycle), `src/main/index.t
 
 ## Install
 
-Download the latest `Mira-<version>-mac-arm64.zip` from
+Download the latest `Mira-<version>-mac-<arch>.zip` for your Mac (`arm64` for Apple Silicon, `x64`
+for Intel) from
 [Releases](https://github.com/micktaiwan/mira/releases), unzip it and move `Mira.app` to
 `/Applications`. The published build is **not signed** with an Apple Developer certificate: macOS
 blocks it the first time (allow it in System Settings → Privacy & Security, or run
