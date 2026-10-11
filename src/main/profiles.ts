@@ -85,7 +85,7 @@ import {
   type DownloadState
 } from './downloads'
 import { homePageUrl, isMiraHomeUrl, type HomeStats } from './home-doc'
-import { errorPageUrl, isMiraErrorUrl, isRetryUrl } from './error-doc'
+import { errorPageUrl, failedEntryIndexToDrop, isMiraErrorUrl, isRetryUrl } from './error-doc'
 import {
   downloadPageUrl,
   isMiraDownloadUrl,
@@ -189,6 +189,7 @@ import { buildPageMenu, imageUnderPointSource, needsImageProbe } from './page-me
 import { buildTabMenu, type TabMenuItem } from './tab-menu'
 import { formatTabCloseLog, type TabCloseReason } from './tab-close-log'
 import { buildAudioMenu, type AudioMenuItem } from './audio-menu'
+import { buildNavHistoryMenu, type NavDirection } from './nav-history-menu'
 import { buildFolderMenu, type FolderMenuItem } from './folder-menu'
 import {
   addFolder as addFolderPure,
@@ -2962,6 +2963,20 @@ export class ProfileManager {
           ...(errProfile ? { theme: this.resolveTheme(errProfile) } : {})
         })
       )
+        .then(() => {
+          // Drop the dead entry behind the error page so Back reaches the page
+          // before it instead of re-failing in a loop (failedEntryIndexToDrop).
+          if (wc.isDestroyed()) return
+          const nav = wc.navigationHistory
+          const index = failedEntryIndexToDrop(
+            nav.getAllEntries(),
+            nav.getActiveIndex(),
+            validatedURL
+          )
+          if (index >= 0) nav.removeEntryAtIndex(index)
+          this.pushTabs(owner())
+        })
+        .catch(() => {})
     })
     wc.on('did-navigate-in-page', (_e, navUrl, isMainFrame) => {
       if (isMainFrame) patch({ url: mirrorUrl(navUrl) })
@@ -5015,6 +5030,38 @@ export class ProfileManager {
     Menu.buildFromTemplate(template).popup({ window: pw.window })
   }
 
+  /** The active tab's live webContents, or null (Settings tab, asleep, gone). */
+  private activeLiveContents(pw: ProfileWindow): WebContents | null {
+    const activeId = pw.state.activeId
+    return activeId ? this.liveContents(pw, activeId) : null
+  }
+
+  /** Pop the native Back / Forward drop-down: the active tab's session history in
+   * that direction, click one to jump there. Item list from the pure, tested
+   * buildNavHistoryMenu; the popup is the thin native part (like the audio menu).
+   * Items route through deps.runCommand (go-to-history-index). */
+  private showNavHistoryMenuIn(pw: ProfileWindow, direction: NavDirection): void {
+    if (pw.window.isDestroyed()) return
+    const wc = this.activeLiveContents(pw)
+    const chrome = pw.window.webContents
+    const items = wc
+      ? buildNavHistoryMenu(
+          wc.navigationHistory.getAllEntries(),
+          wc.navigationHistory.getActiveIndex(),
+          direction
+        )
+      : buildNavHistoryMenu([], -1, direction)
+    const template: MenuItemConstructorOptions[] = items.map((item) =>
+      item.type === 'disabled'
+        ? { label: item.label, enabled: false }
+        : {
+            label: item.label,
+            click: () => this.deps.runCommand?.(chrome, item.command, item.params)
+          }
+    )
+    Menu.buildFromTemplate(template).popup({ window: pw.window })
+  }
+
   /** Convert one pure AudioMenuItem to a native menu item. Command items fire on
    * the registry bus (select-tab); the `disabled` placeholder is a greyed, inert
    * entry. `chrome` is captured for the click handlers. */
@@ -6809,6 +6856,25 @@ export class ProfileManager {
       showAudioMenu: () => {
         if (!target) throw new Error('no target window')
         this.showAudioMenuIn(target)
+      },
+      listNavHistory: () => {
+        if (!target) throw new Error('no target window')
+        const wc = this.activeLiveContents(target)
+        if (!wc) return { entries: [], activeIndex: -1 }
+        return {
+          entries: wc.navigationHistory.getAllEntries().map((e) => ({ url: e.url, title: e.title })),
+          activeIndex: wc.navigationHistory.getActiveIndex()
+        }
+      },
+      goToHistoryIndex: (index) => {
+        if (!target) throw new Error('no target window')
+        const wc = this.activeLiveContents(target)
+        if (!wc) throw new Error('no active tab')
+        wc.navigationHistory.goToIndex(index)
+      },
+      showNavHistoryMenu: (direction) => {
+        if (!target) throw new Error('no target window')
+        this.showNavHistoryMenuIn(target, direction)
       },
       listTabFolders: () => ({ folders: target ? target.folders : [] }),
       createTabFolder: (title, tabId, edit) => {

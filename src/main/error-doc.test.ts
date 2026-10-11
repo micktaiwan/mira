@@ -3,6 +3,7 @@ import {
   buildErrorPage,
   describeLoadError,
   errorPageUrl,
+  failedEntryIndexToDrop,
   isMiraErrorUrl,
   isRetryUrl,
   RETRY_URL,
@@ -89,5 +90,31 @@ describe('isRetryUrl', () => {
     expect(isRetryUrl('https://example.com')).toBe(false)
     expect(isRetryUrl('mira-retry:something')).toBe(false)
     expect(isRetryUrl('')).toBe(false)
+  })
+})
+
+describe('failedEntryIndexToDrop', () => {
+  const err = errorPageUrl(dnsError)
+  const failed = dnsError.url
+
+  it('drops the failed entry sitting just behind the error page', () => {
+    const entries = [{ url: 'https://a.com/' }, { url: failed }, { url: err }]
+    expect(failedEntryIndexToDrop(entries, 2, failed)).toBe(1)
+  })
+
+  it('drops it when the tab was born on the failed URL', () => {
+    expect(failedEntryIndexToDrop([{ url: failed }, { url: err }], 1, failed)).toBe(0)
+  })
+
+  it('keeps history alone when the active entry is not the error page', () => {
+    expect(failedEntryIndexToDrop([{ url: failed }, { url: 'https://b.com/' }], 1, failed)).toBe(-1)
+  })
+
+  it('keeps a previous entry that is a different URL', () => {
+    expect(failedEntryIndexToDrop([{ url: 'https://a.com/' }, { url: err }], 1, failed)).toBe(-1)
+  })
+
+  it('does nothing when the error page is the only entry', () => {
+    expect(failedEntryIndexToDrop([{ url: err }], 0, failed)).toBe(-1)
   })
 })

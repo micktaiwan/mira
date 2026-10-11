@@ -11,6 +11,7 @@ import MediaGallery from './features/media/MediaGallery'
 import { ReloadSpinner } from './features/loading/ReloadSpinner'
 import { WakingSpinner } from './features/loading/WakingSpinner'
 import { useRevealTab } from './features/reveal-tab/useRevealTab'
+import { useNavButton } from './features/nav-history/useNavButton'
 import { applyTheme, initialTheme } from './features/profile-theme/profile-theme'
 import type { SkillPaneState, TabFolder } from '../../preload/index.d'
 
@@ -81,6 +82,8 @@ function App(): React.JSX.Element {
   // The chrome holds no tab state of its own: main pushes the strip, we render
   // it, and every action is a command back to the registry (CLAUDE.md).
   const [tabs, setTabs] = useState<TabInfo[]>([])
+  const backButton = useNavButton('back')
+  const forwardButton = useNavButton('forward')
   const [activeId, setActiveId] = useState<string | null>(null)
   const [panelCollapsed, setPanelCollapsed] = useState(false)
   // Tab folders (metadata). Main owns them (per window, persisted); they ride the
@@ -431,18 +434,18 @@ function App(): React.JSX.Element {
           <button
             type="button"
             className="nav-button"
-            title="Back (⌘←)"
+            title="Back (⌘←) — hold for history"
             aria-label="Back"
-            onClick={() => window.mira.command('back')}
+            {...backButton}
           >
             ‹
           </button>
           <button
             type="button"
             className="nav-button"
-            title="Forward (⌘→)"
+            title="Forward (⌘→) — hold for history"
             aria-label="Forward"
-            onClick={() => window.mira.command('forward')}
+            {...forwardButton}
           >
             ›
           </button>

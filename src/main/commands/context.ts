@@ -8,6 +8,7 @@
 
 import type { AppContext } from './app'
 import type { AudioContext } from './audio'
+import type { NavHistoryContext } from './nav-history'
 import type { AudioHistoryContext } from './audio-history'
 import type { BookmarkContext } from './bookmarks'
 import type { CardsContext } from './cards'
@@ -60,6 +61,7 @@ import type { ZenContext } from './zen'
 
 export type CommandContext = AppContext &
   AudioContext &
+  NavHistoryContext &
   AudioHistoryContext &
   BookmarkContext &
   CardsContext &

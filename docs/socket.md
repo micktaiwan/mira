@@ -388,6 +388,14 @@ Every file a page triggers is saved straight to `~/Downloads` (no OS save dialog
 | `search-history` | `query`, `limit?` | fuzzy search       |
 | `clear-history`  | —                 | wipe it            |
 
+The active tab's own Back / Forward stack (not the profile history above):
+
+| Command                 | Params                           | Effect / result                                        |
+| ----------------------- | -------------------------------- | ------------------------------------------------------ |
+| `list-nav-history`      | —                                | `{entries: [{url, title}], activeIndex}`, active tab   |
+| `go-to-history-index`   | `index`                          | jump the active tab to that entry                      |
+| `show-nav-history-menu` | `direction` (`back` \| `forward`) | pop the native list (toolbar long press / right-click) |
+
 ### Profiles & windows
 
 | Command                | Params          | Effect / result                                                                                                                                                                                                                                                                  |

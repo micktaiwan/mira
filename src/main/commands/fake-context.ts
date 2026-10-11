@@ -1572,6 +1572,18 @@ export function makeContext(
     // Native audio drop-down (show-audio-menu): a no-op in tests — the item list is
     // covered by audio-menu.test.ts, so the command test only checks dispatch.
     showAudioMenu: () => {},
+    // Session history of the active tab (list-nav-history / go-to-history-index):
+    // the fake has no back/forward stack, so it reports the active tab alone.
+    listNavHistory: () => {
+      const url = fakeTabUrl()
+      return url
+        ? { entries: [{ url, title: '' }], activeIndex: 0 }
+        : { entries: [], activeIndex: -1 }
+    },
+    goToHistoryIndex: () => {},
+    // Native Back / Forward drop-down: a no-op, item list covered by
+    // nav-history-menu.test.ts.
+    showNavHistoryMenu: () => {},
     // Tab folders: real in-memory mutations so the tab-folders command tests can
     // observe them (mirrors ProfileManager, minus the native re-layout).
     listTabFolders: () => ({ folders: state.folders }),

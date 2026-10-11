@@ -37,6 +37,7 @@ import { inputCommands } from './input'
 import { magnifierCommands } from './magnifier'
 import { mediaCommands } from './media'
 import { navigationCommands } from './navigation'
+import { navHistoryCommands } from './nav-history'
 import { openCommands } from './open'
 import { paletteCommands } from './palette'
 import { paneCommands } from './pane'
@@ -73,6 +74,7 @@ export type { CommandContext } from './context'
 export type { NavigableContents, ProfileInfo, CommandResult, CommandHandler } from './registry'
 export type { AppContext } from './app'
 export type { AudioContext } from './audio'
+export type { NavHistoryContext } from './nav-history'
 export type { AudioHistoryContext, AudioHistoryEntry } from './audio-history'
 export type { BookmarkContext } from './bookmarks'
 export type { BookmarkNode, BookmarkUrl, BookmarkFolder, BookmarkTree } from '../bookmark-store'
@@ -215,6 +217,7 @@ export function createCommandRegistry(): CommandRegistry {
   const commands: CommandMap<CommandContext> = {
     ...appCommands,
     ...audioCommands,
+    ...navHistoryCommands,
     ...bookmarksCommands,
     ...cardsCommands,
     ...clipboardCommands,

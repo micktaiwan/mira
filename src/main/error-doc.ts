@@ -219,3 +219,21 @@ export function buildErrorPage(err: LoadError): string {
 export function errorPageUrl(err: LoadError): string {
   return `data:text/html;charset=utf-8,${encodeURIComponent(buildErrorPage(err))}`
 }
+
+/** The history index of the failed URL's entry that sits just behind the error
+ * page, or -1 when there is none to drop.
+ *
+ * The error page is pushed with loadURL, so it lands as a NEW entry on top of the
+ * entry Chromium committed for the failed URL. Left there, Back from the error
+ * page goes to that dead URL, which fails again and pushes a fresh error page:
+ * Back looks like a no-op forever. Dropping the failed entry once the error page
+ * is active makes Back skip it and reach the page the user came from. */
+export function failedEntryIndexToDrop(
+  entries: ReadonlyArray<{ url: string }>,
+  activeIndex: number,
+  failedUrl: string
+): number {
+  const behind = activeIndex - 1
+  if (behind < 0 || !isMiraErrorUrl(entries[activeIndex]?.url ?? '')) return -1
+  return entries[behind]?.url === failedUrl ? behind : -1
+}
