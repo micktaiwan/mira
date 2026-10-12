@@ -9,6 +9,7 @@
 // (no IPC round-trip per key). This module only builds the candidate set.
 
 import type { BookmarkNode } from './bookmark-store'
+import { shortcutLabel } from './shortcuts'
 
 /** Where an entry sorts in the palette; also its section heading. */
 export type PaletteGroup = 'Skills' | 'Commands' | 'Tabs' | 'Bookmarks' | 'History' | 'Profiles'
@@ -59,21 +60,22 @@ export interface PaletteState {
 
 /** The always-present command entries, independent of any window/tab state. Order
  * here is the order they show under the "Commands" group. Shortcuts are display
- * only and must stay in sync with the accelerators registered in menu.ts. */
+ * only and come from the same table the menu binds (shortcuts.ts); palette.test.ts
+ * checks that every shortcut of the menu has its row here, so Cmd+K lists them all. */
 const STATIC_COMMANDS: ReadonlyArray<Omit<PaletteEntry, 'group'>> = [
   {
     id: 'cmd:new-tab',
     title: 'New Tab',
     command: 'new-tab',
     keywords: 'open create',
-    shortcut: '⌘T'
+    shortcut: shortcutLabel('newTab')
   },
   {
     id: 'cmd:close-tab',
     title: 'Close Tab',
     command: 'close-active-tab',
     keywords: 'quit',
-    shortcut: '⌘W'
+    shortcut: shortcutLabel('closeTab')
   },
   {
     id: 'cmd:close-tab-recent',
@@ -81,85 +83,91 @@ const STATIC_COMMANDS: ReadonlyArray<Omit<PaletteEntry, 'group'>> = [
     command: 'close-active-tab',
     params: { focus: 'recent' },
     keywords: 'quit previous last viewed',
-    shortcut: '⌥⇧⌘W'
+    shortcut: shortcutLabel('closeTabToRecent')
   },
   {
     id: 'cmd:reload',
     title: 'Reload Page',
     command: 'reload',
     keywords: 'refresh',
-    shortcut: '⌘R'
+    shortcut: shortcutLabel('reload')
   },
   {
     id: 'cmd:hard-reload',
     title: 'Hard Reload Page',
     command: 'hard-reload',
     keywords: 'refresh cache bypass stale force',
-    shortcut: '⇧⌘R'
+    shortcut: shortcutLabel('hardReload')
   },
   {
     id: 'cmd:find',
     title: 'Find in Page',
     command: 'find-open',
     keywords: 'search text match locate',
-    shortcut: '⌘F'
+    shortcut: shortcutLabel('find')
   },
-  { id: 'cmd:back', title: 'Back', command: 'back', keywords: 'history previous', shortcut: '⌘←' },
+  {
+    id: 'cmd:back',
+    title: 'Back',
+    command: 'back',
+    keywords: 'history previous',
+    shortcut: shortcutLabel('back')
+  },
   {
     id: 'cmd:root-domain',
     title: 'Go to Root Domain',
     command: 'go-root-domain',
     keywords: 'up home site strip subdomain www path parent',
-    shortcut: '⇧⌘↑'
+    shortcut: shortcutLabel('rootDomain')
   },
   {
     id: 'cmd:forward',
     title: 'Forward',
     command: 'forward',
     keywords: 'history next',
-    shortcut: '⌘→'
+    shortcut: shortcutLabel('forward')
   },
   {
     id: 'cmd:discard-tab',
     title: 'Discard Tab',
     command: 'discard-active-tab',
     keywords: 'sleep unload memory ram',
-    shortcut: '⌘S'
+    shortcut: shortcutLabel('discardTab')
   },
   {
     id: 'cmd:move-tab-to-top',
     title: 'Move Tab to Top',
     command: 'move-tab-to-top',
     keywords: 'priority first head promote reorder up',
-    shortcut: '⌥⌘↑'
+    shortcut: shortcutLabel('moveTabToTop')
   },
   {
     id: 'cmd:reveal-tab',
     title: 'Reveal Tab in Sidebar',
     command: 'reveal-tab',
     keywords: 'find locate where current active show scroll',
-    shortcut: '⇧⌘E'
+    shortcut: shortcutLabel('revealTab')
   },
   {
     id: 'cmd:toggle-panel',
     title: 'Toggle Tab Panel',
     command: 'toggle-tabs-panel',
     keywords: 'sidebar hide show',
-    shortcut: '⌘B'
+    shortcut: shortcutLabel('toggleTabsPanel')
   },
   {
     id: 'cmd:add-bookmark',
     title: 'Add to Favorites',
     command: 'add-bookmark',
     keywords: 'bookmark star favorite',
-    shortcut: '⌘D'
+    shortcut: shortcutLabel('addBookmark')
   },
   {
     id: 'cmd:settings',
     title: 'Open Settings',
     command: 'open-settings',
     keywords: 'preferences config options',
-    shortcut: '⌘,'
+    shortcut: shortcutLabel('settings')
   },
   { id: 'cmd:new-profile', title: 'New Profile', command: 'create-profile', keywords: 'account' },
   {
@@ -174,13 +182,153 @@ const STATIC_COMMANDS: ReadonlyArray<Omit<PaletteEntry, 'group'>> = [
     command: 'clear-site-data',
     params: { reload: true },
     keywords: 'logout sign out cookies storage reload current page session',
-    shortcut: '⌘⌥⌫'
+    shortcut: shortcutLabel('clearSiteData')
   },
   {
     id: 'cmd:clear-data',
     title: 'Clear Browsing Data',
     command: 'clear-data',
     keywords: 'cookies cache storage logout sign out wipe reset all profile'
+  },
+  {
+    id: 'cmd:open-location',
+    title: 'Open Location',
+    command: 'focus-address-bar',
+    keywords: 'address bar url type go',
+    shortcut: shortcutLabel('openLocation')
+  },
+  {
+    id: 'cmd:duplicate-tab',
+    title: 'Duplicate Tab',
+    command: 'duplicate-active-tab',
+    keywords: 'copy clone',
+    shortcut: shortcutLabel('duplicateTab')
+  },
+  {
+    id: 'cmd:forget-site',
+    title: 'Close Tab & Forget Site',
+    command: 'forget-site',
+    keywords: 'wipe cookies history erase',
+    shortcut: shortcutLabel('forgetSite')
+  },
+  {
+    id: 'cmd:reopen-tab',
+    title: 'Reopen Closed Tab',
+    command: 'reopen-closed-tab',
+    keywords: 'undo restore',
+    shortcut: shortcutLabel('reopenTab')
+  },
+  {
+    id: 'cmd:wake-all-tabs',
+    title: 'Wake All Tabs',
+    command: 'wake-all-tabs',
+    keywords: 'reload restore asleep',
+    shortcut: shortcutLabel('wakeAllTabs')
+  },
+  {
+    id: 'cmd:prev-tab',
+    title: 'Previous Tab',
+    command: 'prev-tab',
+    keywords: 'up switch',
+    shortcut: shortcutLabel('prevTab')
+  },
+  {
+    id: 'cmd:next-tab',
+    title: 'Next Tab',
+    command: 'next-tab',
+    keywords: 'down switch',
+    shortcut: shortcutLabel('nextTab')
+  },
+  {
+    id: 'cmd:recent-tab-back',
+    title: 'Back to Recent Tab',
+    command: 'recent-tab-back',
+    keywords: 'previous last viewed switch',
+    shortcut: shortcutLabel('recentTabBack')
+  },
+  {
+    id: 'cmd:recent-tab-forward',
+    title: 'Forward to Recent Tab',
+    command: 'recent-tab-forward',
+    keywords: 'next viewed switch',
+    shortcut: shortcutLabel('recentTabForward')
+  },
+  {
+    id: 'cmd:close-window',
+    title: 'Close Window',
+    command: 'close-window',
+    keywords: 'quit',
+    shortcut: shortcutLabel('closeWindow')
+  },
+  {
+    id: 'cmd:find-next',
+    title: 'Find Next',
+    command: 'find-next',
+    keywords: 'search match',
+    shortcut: shortcutLabel('findNext')
+  },
+  {
+    id: 'cmd:find-previous',
+    title: 'Find Previous',
+    command: 'find-previous',
+    keywords: 'search match',
+    shortcut: shortcutLabel('findPrevious')
+  },
+  {
+    id: 'cmd:fill-login',
+    title: 'Fill Login from Vault',
+    command: 'fill-login',
+    keywords: 'password bitwarden sign in autofill',
+    shortcut: shortcutLabel('fillLogin')
+  },
+  {
+    id: 'cmd:toggle-skill-pane',
+    title: 'Toggle AI Panel',
+    command: 'toggle-skill-pane',
+    keywords: 'assistant claude sidebar',
+    shortcut: shortcutLabel('toggleSkillPane')
+  },
+  {
+    id: 'cmd:toggle-zen',
+    title: 'Toggle Zen Mode',
+    command: 'toggle-zen',
+    keywords: 'focus hide toolbar distraction',
+    shortcut: shortcutLabel('toggleZen')
+  },
+  {
+    id: 'cmd:toggle-devtools',
+    title: 'Toggle Developer Tools',
+    command: 'toggle-devtools',
+    keywords: 'inspect console debug',
+    shortcut: shortcutLabel('toggleDevTools')
+  },
+  {
+    id: 'cmd:zoom-in',
+    title: 'Zoom In',
+    command: 'zoom-in',
+    keywords: 'bigger larger',
+    shortcut: shortcutLabel('zoomIn')
+  },
+  {
+    id: 'cmd:zoom-out',
+    title: 'Zoom Out',
+    command: 'zoom-out',
+    keywords: 'smaller',
+    shortcut: shortcutLabel('zoomOut')
+  },
+  {
+    id: 'cmd:zoom-reset',
+    title: 'Actual Size',
+    command: 'zoom-reset',
+    keywords: 'zoom reset 100',
+    shortcut: shortcutLabel('zoomReset')
+  },
+  {
+    id: 'cmd:toggle-fullscreen',
+    title: 'Toggle Full Screen',
+    command: 'set-window-fullscreen',
+    keywords: 'fullscreen window',
+    shortcut: shortcutLabel('toggleFullScreen')
   }
 ]
 

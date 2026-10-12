@@ -1,5 +1,11 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
-import { buildPaletteList, goToEntry, type PaletteEntry, type PaletteMode } from './palette-list'
+import {
+  buildPaletteList,
+  goToEntry,
+  initialCaret,
+  type PaletteEntry,
+  type PaletteMode
+} from './palette-list'
 
 interface Props {
   /** Dismiss the palette (Esc, backdrop click, or after a pick). The parent tells
@@ -9,6 +15,9 @@ interface Props {
   mode: PaletteMode
   /** Seed text (what was typed in the URL bar, empty for Cmd+K). */
   initialQuery: string
+  /** Caret position in `initialQuery` (where the user was typing in the URL bar),
+   * or null to start at the end (Cmd+K). */
+  initialCaretPos: number | null
 }
 
 /** Leading glyph per group — pure decoration; the color accent comes from CSS
@@ -35,23 +44,30 @@ const GROUP_ICONS: Record<PaletteEntry['group'], string> = {
  * which order is buildPaletteList's job (palette-list.ts).
  *
  * The parent mounts this only while open, so its state starts fresh each opening. */
-function CommandPalette({ onClose, mode, initialQuery }: Props): React.JSX.Element {
+function CommandPalette({
+  onClose,
+  mode,
+  initialQuery,
+  initialCaretPos
+}: Props): React.JSX.Element {
   const [entries, setEntries] = useState<PaletteEntry[]>([])
   const [query, setQuery] = useState(initialQuery)
   const [selected, setSelected] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const selectedRef = useRef<HTMLButtonElement>(null)
 
-  // Focus the input SYNCHRONOUSLY on mount (before the browser paints), caret at
-  // the end so the seeded query can be extended. useLayoutEffect (not rAF) is what
+  // Focus the input SYNCHRONOUSLY on mount (before the browser paints), caret where
+  // the user was typing in the URL bar (or at the end for Cmd+K). useLayoutEffect (not rAF) is what
   // makes the address-bar handoff lossless: the palette input takes over keystrokes
   // the instant it mounts, before the next key can land in the address bar behind it.
   useLayoutEffect(() => {
     const el = inputRef.current
     if (!el) return
     el.focus()
-    const end = el.value.length
-    el.setSelectionRange(end, end)
+    const caret = initialCaret(el.value, initialCaretPos)
+    el.setSelectionRange(caret, caret)
+    // Mount-only: the caret is seeded once per opening, like the query.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Fetch the current entries once per opening (tabs / favorites / history change).

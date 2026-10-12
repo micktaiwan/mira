@@ -4,6 +4,7 @@
 
 import { Menu, type MenuItemConstructorOptions } from 'electron'
 import type { BookmarkTree } from './bookmark-store'
+import { SHORTCUTS } from './shortcuts'
 
 export interface AppMenuHandlers {
   listProfiles: () => {
@@ -185,7 +186,7 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
 
   const settingsItem: MenuItemConstructorOptions = {
     label: 'Settings…',
-    accelerator: 'CmdOrCtrl+,',
+    accelerator: SHORTCUTS.settings,
     click: () => handlers.openSettings()
   }
 
@@ -217,40 +218,40 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
     submenu: [
       {
         label: 'Command Palette…',
-        accelerator: 'CmdOrCtrl+K',
+        accelerator: SHORTCUTS.commandPalette,
         click: () => handlers.togglePalette()
       },
       // Hidden twin: Cmd+Shift+K opens the same palette, so a held Shift
       // does not swallow the shortcut.
       {
         label: 'Command Palette…',
-        accelerator: 'CmdOrCtrl+Shift+K',
+        accelerator: SHORTCUTS.commandPaletteShift,
         visible: false,
         click: () => handlers.togglePalette()
       },
       { type: 'separator' },
       {
         label: 'Open Location…',
-        accelerator: 'CmdOrCtrl+L',
+        accelerator: SHORTCUTS.openLocation,
         click: () => handlers.focusAddressBar()
       },
-      { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => handlers.newTab() },
+      { label: 'New Tab', accelerator: SHORTCUTS.newTab, click: () => handlers.newTab() },
       {
         label: 'Duplicate Tab',
-        accelerator: 'CmdOrCtrl+Shift+D',
+        accelerator: SHORTCUTS.duplicateTab,
         click: () => handlers.duplicateTab()
       },
-      { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => handlers.closeTab() },
+      { label: 'Close Tab', accelerator: SHORTCUTS.closeTab, click: () => handlers.closeTab() },
       {
         // Same close, other landing: back to the last tab I actually looked at
         // instead of the strip neighbor. Cmd+Shift+W is Close Window and stays.
         label: 'Close Tab & Go Back',
-        accelerator: 'CmdOrCtrl+Alt+Shift+W',
+        accelerator: SHORTCUTS.closeTabToRecent,
         click: () => handlers.closeTabToRecent()
       },
       {
         label: 'Close Tab & Forget Site',
-        accelerator: 'CmdOrCtrl+Alt+W',
+        accelerator: SHORTCUTS.forgetSite,
         click: () => handlers.forgetSite()
       },
       {
@@ -258,24 +259,28 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         // losing the tab. Cmd+Alt+Backspace, next to Chrome's Cmd+Shift+Delete
         // reflex for clearing data.
         label: 'Clear Site Data & Reload',
-        accelerator: 'CmdOrCtrl+Alt+Backspace',
+        accelerator: SHORTCUTS.clearSiteData,
         click: () => handlers.clearSiteData()
       },
       {
         label: 'Reopen Closed Tab',
-        accelerator: 'CmdOrCtrl+Shift+T',
+        accelerator: SHORTCUTS.reopenTab,
         click: () => handlers.reopenTab()
       },
       // Cmd+Alt+S discards the active tab's page to reclaim RAM but keeps the tab
       // (asleep) and moves to the nearest already-loaded tab (never waking a
       // sleeping one) — not the browser's "Save Page As".
-      { label: 'Discard Tab', accelerator: 'CmdOrCtrl+Alt+S', click: () => handlers.discardTab() },
+      {
+        label: 'Discard Tab',
+        accelerator: SHORTCUTS.discardTab,
+        click: () => handlers.discardTab()
+      },
       // Cmd+Shift+A: re-open every tab that was awake when Mira last quit (restore
       // only wakes the active one, the rest come back asleep). Was Cmd+Shift+R,
       // moved so that reflex maps to Hard Reload (History menu) like a browser.
       {
         label: 'Wake All Tabs',
-        accelerator: 'CmdOrCtrl+Shift+A',
+        accelerator: SHORTCUTS.wakeAllTabs,
         click: () => handlers.wakeAllTabs()
       },
       // The inverse, to reclaim RAM in one go: pinned, keep-awake and the tab on
@@ -300,13 +305,13 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
       // handler still fires when the item is chosen with the mouse.
       {
         label: 'Previous Tab',
-        accelerator: 'CmdOrCtrl+Up',
+        accelerator: SHORTCUTS.prevTab,
         registerAccelerator: false,
         click: () => handlers.prevTab()
       },
       {
         label: 'Next Tab',
-        accelerator: 'CmdOrCtrl+Down',
+        accelerator: SHORTCUTS.nextTab,
         registerAccelerator: false,
         click: () => handlers.nextTab()
       },
@@ -315,13 +320,13 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
       // the keys are handled by the before-input-event hook (wireTabShortcuts).
       {
         label: 'Back to Recent Tab',
-        accelerator: 'CmdOrCtrl+Alt+Left',
+        accelerator: SHORTCUTS.recentTabBack,
         registerAccelerator: false,
         click: () => handlers.recentTabBack()
       },
       {
         label: 'Forward to Recent Tab',
-        accelerator: 'CmdOrCtrl+Alt+Right',
+        accelerator: SHORTCUTS.recentTabForward,
         registerAccelerator: false,
         click: () => handlers.recentTabForward()
       },
@@ -329,19 +334,19 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
       // like Previous/Next Tab: the key is handled by wireTabShortcuts.
       {
         label: 'Move Tab to Top',
-        accelerator: 'CmdOrCtrl+Alt+Up',
+        accelerator: SHORTCUTS.moveTabToTop,
         registerAccelerator: false,
         click: () => handlers.moveTabToTop()
       },
       {
         label: 'Reveal Tab in Sidebar',
-        accelerator: 'CmdOrCtrl+Shift+E',
+        accelerator: SHORTCUTS.revealTab,
         click: () => handlers.revealTab()
       },
       { type: 'separator' },
       {
         label: 'Close Window',
-        accelerator: 'CmdOrCtrl+Shift+W',
+        accelerator: SHORTCUTS.closeWindow,
         click: () => handlers.closeWindow()
       }
     ]
@@ -369,13 +374,13 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         { type: 'separator' },
         {
           label: 'Find in Page…',
-          accelerator: 'CmdOrCtrl+F',
+          accelerator: SHORTCUTS.find,
           click: () => handlers.openFind()
         },
-        { label: 'Find Next', accelerator: 'CmdOrCtrl+G', click: () => handlers.findNext() },
+        { label: 'Find Next', accelerator: SHORTCUTS.findNext, click: () => handlers.findNext() },
         {
           label: 'Find Previous',
-          accelerator: 'CmdOrCtrl+Shift+G',
+          accelerator: SHORTCUTS.findPrevious,
           click: () => handlers.findPrevious()
         },
         { type: 'separator' },
@@ -383,7 +388,7 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
           // In Edit because that is what it does: it types into the page's
           // fields. Cmd+Shift+L is what Bitwarden binds in Chrome.
           label: 'Fill Login from Vault',
-          accelerator: 'CmdOrCtrl+Shift+L',
+          accelerator: SHORTCUTS.fillLogin,
           click: () => handlers.fillLogin()
         }
       ]
@@ -393,22 +398,22 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
       // web content or the chrome), which a renderer keydown listener cannot do.
       label: 'History',
       submenu: [
-        { label: 'Back', accelerator: 'CmdOrCtrl+Left', click: () => handlers.goBack() },
-        { label: 'Forward', accelerator: 'CmdOrCtrl+Right', click: () => handlers.goForward() },
+        { label: 'Back', accelerator: SHORTCUTS.back, click: () => handlers.goBack() },
+        { label: 'Forward', accelerator: SHORTCUTS.forward, click: () => handlers.goForward() },
         // Up to the site root: strips subdomain + path + query in one press
         // (transverse.labanquepostale.fr/xo_/… → labanquepostale.fr). Not a
         // history step, but it lives here because it is the same "get me back
         // out of this page" reflex as Back.
         {
           label: 'Go to Root Domain',
-          accelerator: 'CmdOrCtrl+Shift+Up',
+          accelerator: SHORTCUTS.rootDomain,
           click: () => handlers.goRootDomain()
         },
         { type: 'separator' },
-        { label: 'Reload', accelerator: 'CmdOrCtrl+R', click: () => handlers.reload() },
+        { label: 'Reload', accelerator: SHORTCUTS.reload, click: () => handlers.reload() },
         {
           label: 'Hard Reload',
-          accelerator: 'CmdOrCtrl+Shift+R',
+          accelerator: SHORTCUTS.hardReload,
           click: () => handlers.hardReload()
         }
       ]
@@ -431,7 +436,7 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
       submenu: [
         {
           label: 'Add to Favorites',
-          accelerator: 'CmdOrCtrl+D',
+          accelerator: SHORTCUTS.addBookmark,
           click: () => handlers.addBookmark()
         },
         { type: 'separator' },
@@ -455,12 +460,12 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         // so they fire whatever holds focus — chrome or a focused page.
         {
           label: 'Toggle Tab Sidebar',
-          accelerator: 'CmdOrCtrl+B',
+          accelerator: SHORTCUTS.toggleTabsPanel,
           click: () => handlers.toggleTabsPanel()
         },
         {
           label: 'Toggle AI Panel',
-          accelerator: 'CmdOrCtrl+J',
+          accelerator: SHORTCUTS.toggleSkillPane,
           click: () => handlers.toggleSkillPane()
         },
         {
@@ -470,14 +475,14 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
           // Display-only accelerator: the key is handled by the before-input-event
           // hook (wireTabShortcuts in profiles.ts) so it beats pages that bind it.
           label: 'Toggle Zen Mode',
-          accelerator: 'CmdOrCtrl+Shift+H',
+          accelerator: SHORTCUTS.toggleZen,
           registerAccelerator: false,
           click: () => handlers.toggleZen()
         },
         { type: 'separator' },
         {
           label: 'Toggle Developer Tools',
-          accelerator: isMac ? 'Alt+Cmd+I' : 'Ctrl+Shift+I',
+          accelerator: isMac ? SHORTCUTS.toggleDevTools : 'Ctrl+Shift+I',
           click: () => handlers.toggleDevTools()
         },
         { type: 'separator' },
@@ -485,15 +490,19 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         // the default zoom roles which target the focused webContents — Mira's
         // chrome when the address bar has focus. Cmd+= is the physical key for
         // "zoom in" (no Shift); a hidden twin binds Cmd+Plus so both fire it.
-        { label: 'Actual Size', accelerator: 'CmdOrCtrl+0', click: () => handlers.zoomReset() },
-        { label: 'Zoom In', accelerator: 'CmdOrCtrl+=', click: () => handlers.zoomIn() },
+        {
+          label: 'Actual Size',
+          accelerator: SHORTCUTS.zoomReset,
+          click: () => handlers.zoomReset()
+        },
+        { label: 'Zoom In', accelerator: SHORTCUTS.zoomIn, click: () => handlers.zoomIn() },
         {
           label: 'Zoom In',
-          accelerator: 'CmdOrCtrl+Plus',
+          accelerator: SHORTCUTS.zoomInPlus,
           visible: false,
           click: () => handlers.zoomIn()
         },
-        { label: 'Zoom Out', accelerator: 'CmdOrCtrl+-', click: () => handlers.zoomOut() },
+        { label: 'Zoom Out', accelerator: SHORTCUTS.zoomOut, click: () => handlers.zoomOut() },
         { type: 'separator' },
         // Our own items, not role:'togglefullscreen': the role only reaches the
         // KEY window, and a window stuck in fullscreen with a frameless chrome
@@ -501,7 +510,7 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         // same door is open from the socket.
         {
           label: 'Toggle Full Screen',
-          accelerator: 'Control+Command+F',
+          accelerator: SHORTCUTS.toggleFullScreen,
           click: () => handlers.toggleFullScreen()
         },
         {

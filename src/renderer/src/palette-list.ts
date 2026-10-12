@@ -87,3 +87,11 @@ export function buildPaletteList(
   const go = goToEntry(query)
   return [mode === 'launcher' ? { ...go, shortcut: '⌘↵' } : go, ...ranked]
 }
+
+/** Where the palette input's caret starts. Opened from the URL bar, it keeps the
+ * caret where the user was typing (an edit in the middle of a url stays there);
+ * from Cmd+K (no caret) it goes to the end so the seeded query can be extended. */
+export function initialCaret(query: string, caret: number | null): number {
+  if (caret === null) return query.length
+  return Math.min(Math.max(caret, 0), query.length)
+}

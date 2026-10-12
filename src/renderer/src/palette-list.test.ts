@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildPaletteList, type PaletteEntry } from './palette-list'
+import { buildPaletteList, initialCaret, type PaletteEntry } from './palette-list'
 
 const entry = (id: string, title: string, group: PaletteEntry['group']): PaletteEntry => ({
   id,
@@ -53,5 +53,20 @@ describe('buildPaletteList', () => {
       'bank',
       'perso'
     ])
+  })
+})
+
+describe('initialCaret', () => {
+  it('keeps the caret where the user typed in the URL bar', () => {
+    expect(initialCaret('https://exaXmple.com', 12)).toBe(12)
+  })
+
+  it('goes to the end when there is no caret (Cmd+K)', () => {
+    expect(initialCaret('github', null)).toBe(6)
+  })
+
+  it('clamps an out-of-range caret', () => {
+    expect(initialCaret('abc', 10)).toBe(3)
+    expect(initialCaret('abc', -1)).toBe(0)
   })
 })

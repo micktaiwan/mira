@@ -106,6 +106,9 @@ function App(): React.JSX.Element {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [paletteMode, setPaletteMode] = useState<'launcher' | 'address'>('launcher')
   const [paletteQuery, setPaletteQuery] = useState('')
+  // Caret position in the seeded query when opened from the URL bar, so an edit in
+  // the middle of a url keeps its place; null (Cmd+K) puts it at the end.
+  const [paletteCaret, setPaletteCaret] = useState<number | null>(null)
   // The right-side skill pane (a skill's AI result). Main owns it (it shrinks the
   // web view to make room) and pushes state; the chrome renders SkillPane to match.
   const [skillPane, setSkillPane] = useState<SkillPaneState>({
@@ -213,6 +216,10 @@ function App(): React.JSX.Element {
       if (state.open) {
         setPaletteMode(state.mode)
         setPaletteQuery(state.query)
+        // Main's push carries no caret. A URL-bar opening has already mounted the
+        // palette with its caret (seeded once on mount), so clearing it here only
+        // affects the next opening: Cmd+K then starts at the end.
+        setPaletteCaret(null)
       }
     })
   }, [])
@@ -487,6 +494,7 @@ function App(): React.JSX.Element {
                 // classic "first char opens the overlay, the rest are lost" bug).
                 setPaletteMode('address')
                 setPaletteQuery(v)
+                setPaletteCaret(e.target.selectionStart)
                 setPaletteOpen(true)
                 // Still tell main so it hides the active web view under the overlay.
                 void window.mira.command('toggle-palette', {
@@ -655,7 +663,12 @@ function App(): React.JSX.Element {
           decides the default target of a page pick (current tab in address mode,
           new tab in launcher mode); `initialQuery` seeds the input. */}
       {paletteOpen && (
-        <CommandPalette onClose={closePalette} mode={paletteMode} initialQuery={paletteQuery} />
+        <CommandPalette
+          onClose={closePalette}
+          mode={paletteMode}
+          initialQuery={paletteQuery}
+          initialCaretPos={paletteCaret}
+        />
       )}
       {/* The fullscreen media gallery. Main has hidden the web view, so this
           overlay is visible over the page area. */}
