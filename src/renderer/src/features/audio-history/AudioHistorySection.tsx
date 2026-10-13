@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { timeAgo } from './time-ago'
+import { timeAgo } from '../../../../main/time-ago'
 
 // Settings → Audio: every open tab that has emitted sound, most recent first
 // (list-audio-history). Clicking a row brings that tab to the front through

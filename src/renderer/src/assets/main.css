@@ -569,6 +569,11 @@ body {
   display: block;
 }
 
+/* Always shown for the audio history; dimmed until a tab is playing sound. */
+.audio-button:not(.audio-button-playing) {
+  opacity: 0.45;
+}
+
 /* ---- Pinned tabs (grid of squares at the head of the tab list) ---------- */
 
 /* Pinned tabs render as compact favicon-only squares that flow across the

@@ -558,35 +558,34 @@ function App(): React.JSX.Element {
             starts fresh each time; sits in the toolbar row, beside the address
             bar (an overlay over the page would be hidden by the native view). */}
           {findOpen && <FindBar focusSeq={findFocusSeq} onClose={closeFindBar} />}
-          {/* Audio button: appears only while at least one tab is playing sound.
-            Clicking pops a native menu listing those tabs (show-audio-menu);
-            picking one focuses it. A native menu, not a CSS popover, so it is not
-            clipped by the WebContentsView (main-native-gotchas #3). */}
-          {tabs.some((t) => t.audible) && (
-            <button
-              type="button"
-              className="nav-button audio-button"
-              title="Tabs playing audio"
-              aria-label="Tabs playing audio"
-              onClick={() => window.mira.command('show-audio-menu')}
-            >
-              <svg width="17" height="17" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                <path d="M8 2.6 4.4 5.5H1.9v5h2.5L8 13.4z" fill="currentColor" />
-                <path
-                  d="M10.6 6a2.6 2.6 0 0 1 0 4"
-                  stroke="currentColor"
-                  strokeWidth="1.3"
-                  strokeLinecap="round"
-                />
-                <path
-                  d="M12.3 4.1a5 5 0 0 1 0 7.8"
-                  stroke="currentColor"
-                  strokeWidth="1.3"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </button>
-          )}
+          {/* Audio button: always shown, dimmed while nothing plays. Clicking pops
+            a native menu with the audio history, the last tabs that emitted sound
+            with how long ago (show-audio-menu); picking one focuses it. A native
+            menu, not a CSS popover, so it is not clipped by the WebContentsView
+            (main-native-gotchas #3). */}
+          <button
+            type="button"
+            className={`nav-button audio-button${tabs.some((t) => t.audible) ? ' audio-button-playing' : ''}`}
+            title="Recent tabs that played sound"
+            aria-label="Recent tabs that played sound"
+            onClick={() => window.mira.command('show-audio-menu')}
+          >
+            <svg width="17" height="17" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+              <path d="M8 2.6 4.4 5.5H1.9v5h2.5L8 13.4z" fill="currentColor" />
+              <path
+                d="M10.6 6a2.6 2.6 0 0 1 0 4"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                strokeLinecap="round"
+              />
+              <path
+                d="M12.3 4.1a5 5 0 0 1 0 7.8"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
           <button
             type="button"
             className={`nav-button star-button${currentBookmark ? ' active' : ''}`}

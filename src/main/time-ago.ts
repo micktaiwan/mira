@@ -1,6 +1,7 @@
-// Relative time for the Settings "Audio" history: "just now", "5 min ago",
-// "3 h ago", "2 d ago", then the calendar date past a week. Pure, so it is tested
-// on its own and the row re-renders it against a ticking clock.
+// Relative time for the audio history (Settings "Audio" and the toolbar audio
+// menu): "just now", "5 min ago", "3 h ago", "2 d ago", then the calendar date
+// past a week. Pure, so it is tested on its own. Lives in main and is shared with
+// the renderer (tsconfig.web.json includes this one file).
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE

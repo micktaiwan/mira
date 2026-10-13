@@ -5014,18 +5014,16 @@ export class ProfileManager {
     }
   }
 
-  /** Pop the native drop-down for the toolbar audio button: this window's audible
-   * tabs (in strip order), click one to focus it. Item list from the pure, tested
-   * buildAudioMenu; the popup is the thin native part (like the tab menu). Command
-   * items route through deps.runCommand so they hit the same registry bus. No-op on
-   * a destroyed window; shows a disabled placeholder when nothing is playing. */
+  /** Pop the native drop-down for the toolbar audio button: the audio history
+   * (last tabs that emitted sound, all open profiles, with how long ago), click one
+   * to bring it to the front. Item list from the pure, tested buildAudioMenu; the
+   * popup is the thin native part (like the tab menu). Command items route through
+   * deps.runCommand so they hit the same registry bus. No-op on a destroyed
+   * window; shows a disabled placeholder when no tab has sounded. */
   private showAudioMenuIn(pw: ProfileWindow): void {
     if (pw.window.isDestroyed()) return
     const chrome = pw.window.webContents
-    const audible = pw.state.tabs.filter(
-      (t) => this.liveContents(pw, t.id)?.isCurrentlyAudible() === true
-    )
-    const items = buildAudioMenu(audible.map((t) => ({ id: t.id, title: t.title, url: t.url })))
+    const items = buildAudioMenu(this.listAudioHistory(), Date.now())
     const template = items.map((item) => this.audioMenuItemToTemplate(item, chrome))
     Menu.buildFromTemplate(template).popup({ window: pw.window })
   }
@@ -5063,7 +5061,7 @@ export class ProfileManager {
   }
 
   /** Convert one pure AudioMenuItem to a native menu item. Command items fire on
-   * the registry bus (select-tab); the `disabled` placeholder is a greyed, inert
+   * the registry bus (activate-tab); the `disabled` placeholder is a greyed, inert
    * entry. `chrome` is captured for the click handlers. */
   private audioMenuItemToTemplate(
     item: AudioMenuItem,
