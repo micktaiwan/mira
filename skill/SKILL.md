@@ -348,6 +348,12 @@ before concluding.
 
 ## Traps
 
+- **Calling `mira` from an app or a launchd job, not a terminal**: `~/.local/bin/mira` is a node script
+  (`#!/usr/bin/env node`), and such callers get launchd's bare PATH, where node is not: it fails with
+  `env: node: No such file or directory`, which a caller that hides stderr sees as an empty answer. Give
+  it the login shell's PATH (`zsh -lc 'printf %s "$PATH"'`, read once). And `tabs --json` is large
+  (favicons in base64): read stdout while the process runs, never after it exits, or the pipe fills and
+  both sides wait (Kova Float, 14/10/2026: both bugs at once, `kova-float/Sources/KovaFloat/ContextReader.swift`).
 - Every request without a `tabId` binds to the focused window **at call time**: flaky with several
   windows, prefer an explicit `tabId`. Also true of `nav`/`open`: with no pinned tab (and no session
   window), they target the focused window.
