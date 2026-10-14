@@ -57,6 +57,8 @@
 //                                   to guess a window: pass --window <id> or --profile <id-prefix>.
 //                                   (--background: load it hidden — the window does not switch to it)
 //                                   (both honour --tab / $MIRA_TAB: the pinned tab's WINDOW is the target)
+//                                   In a Claude session, `open` / `nav -n` on a profile that already has
+//                                   a window of the user's open add the tab THERE, not in a session window.
 // No command here ever brings Mira to the foreground; `mira focus` is the explicit way.
 //   mira focus [--window <id>]      bring one window to the front (default: Mira's last-focused one)
 //   mira windows                    list open windows (id / profile / tabs), * = focused
@@ -85,6 +87,7 @@ import {
   sessionTabsTarget,
   matchProfileId,
   profileWindow,
+  userWindowForOpen,
   pickTabByUrl,
   buildExec,
   buildReload,
@@ -263,6 +266,35 @@ function watch(socketPath, { json }) {
   })
 }
 
+/** The user's open window of the profile an agent `open` targets, or null to
+ * fall back to the session window. The profile is the one named by --profile,
+ * else the only profile with a window open; anything ambiguous returns null and
+ * leaves the existing refusals to speak. */
+async function userWindowTarget(agentSession, socketPath, timeoutMs) {
+  const [profs, wins] = await Promise.all([
+    call({ command: 'list-profiles' }, socketPath, timeoutMs).catch(() => null),
+    call({ command: 'list-windows' }, socketPath, timeoutMs).catch(() => null)
+  ])
+  if (!profs?.ok || !wins?.ok) return null
+  let profileId
+  if (agentSession.profileFlag) {
+    const match = matchProfileId(profs.profiles, agentSession.profileFlag)
+    if ('error' in match) return null
+    profileId = match.id
+  } else {
+    const open = [...new Set(wins.windows.map((w) => w.profileId))]
+    if (open.length !== 1) return null
+    profileId = open[0]
+  }
+  const own = await call(
+    { command: 'find-session-window', params: { sessionId: agentSession.sessionId, profileId } },
+    socketPath,
+    timeoutMs
+  ).catch(() => null)
+  const ownWindow = own?.ok && own.found ? own.windowId : null
+  return userWindowForOpen(wins.windows, profileId, ownWindow)
+}
+
 function die(msg, code = 1) {
   process.stderr.write(String(msg) + '\n')
   process.exit(code)
@@ -313,7 +345,26 @@ async function main() {
 
   // An agent session with no explicit target works in its OWN window (see the
   // header): ask Mira for it (created on first use) and aim at its active tab.
-  const agentSession = sessionTarget({ command, positionals, flags, tabId, env: process.env })
+  let agentSession = sessionTarget({ command, positionals, flags, tabId, env: process.env })
+
+  // `open` (and `nav -n`) adds a tab and touches nothing else, so when the
+  // profile already has a window of the USER's open, the tab goes there instead
+  // of into a new session window: one more window per Claude session for a page
+  // the user is meant to see was pure clutter (2026-10-13). In-place `nav` keeps
+  // the session window — it would overwrite the user's active tab.
+  const addsTab =
+    command === 'open' || ((command === 'nav' || command === 'navigate') && flags['new-tab'] === true)
+  if (agentSession && addsTab) {
+    const userWin = await userWindowTarget(agentSession, socketPath, timeoutMs)
+    if (userWin) {
+      flags.window = userWin
+      agentSession = null
+      process.stderr.write(
+        `mira: profile already open — new tab goes into its window ${userWin}; act on it with --tab <id>\n`
+      )
+    }
+  }
+
   if (agentSession) {
     const { profileFlag, ...params } = agentSession
     if (profileFlag) {

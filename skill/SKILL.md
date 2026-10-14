@@ -103,10 +103,17 @@ window, recognised by `CLAUDE_CODE_SESSION_ID`. Mira creates it on the first cal
 frontmost window, with a home tab, and never saves it in the session.
 
 ```bash
-mira open https://example.com --profile perso   # session window in the "perso" profile
-mira shot                                        # same window, nothing to repeat
+mira shot --profile perso                        # session window in the "perso" profile
+mira exec "document.title"                       # same window, nothing to repeat
 mira done                                        # close the session's windows
 ```
+
+**Opening a page never adds a window when its profile is already open** (CLI, 2026-10-13).
+`mira open` (and `nav -n`) puts the new tab in the user's existing window of that profile, says so
+on stderr, and returns the tab id: act on it with `--tab <id>` from then on, or the next tab verb
+creates the session window anyway. A session window is only created when the profile has no window
+open. In-place `nav` still goes to the session window, so it never overwrites the user's active tab.
+The user's words: one more window per session "multiplie les fenêtres pour rien".
 
 - **Several profiles open and no `--profile` on the first call: refused**, never guessed (same
   rule as below). A session that already has a window in two profiles must name one too.
@@ -398,6 +405,19 @@ before concluding.
   one probably worked. Measured 2026-10-06 on Bastion: a loop of async execs that each slept ~7 s
   returned eleven timeouts in a row, created all eleven records anyway, and fired twice on six of
   them, leaving every task duplicated.
+
+- **A site behind a Cloudflare managed challenge: read the tab that is already loaded, never
+  reload it.** Measured 2026-10-11 on an account dashboard the user had open: a
+  same-origin `fetch()` from that tab came back `403` with the challenge page instead of the HTML;
+  the same URL opened with `open -b` sat on "Performing security verification" past a 30 s
+  `wait`; and a `nav` of the user's own tab, meant to refresh it, landed on the "Verify you are
+  human" checkbox — which only the user may tick, so the page was lost until they came back. The
+  DOM of the tab as it stands is still readable with `exec`; read
+  `new Date(performance.timeOrigin)` alongside it so the answer says how old that state is.
+- **`mira wait` right after `mira reload` can match the page being replaced.** `reload` answers
+  `ok` as soon as it is sent; a `wait --text` launched next found its text "after 1ms" in the
+  old document (2026-10-11). To know the reload happened, compare `performance.timeOrigin`
+  before and after, or wait for something only the new page has.
 
 ## Improving the CLI as you go
 

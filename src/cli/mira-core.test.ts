@@ -28,7 +28,8 @@ import {
   resolveNavTarget,
   clientName,
   withClient,
-  profileWindow
+  profileWindow,
+  userWindowForOpen
   // @ts-expect-error — plain-ESM sibling module, no .d.ts (the CLI ships without a build)
 } from './mira-core.mjs'
 
@@ -762,5 +763,30 @@ describe('profileWindow', () => {
     expect(profileWindow(windows, 'perso')).toEqual({
       error: 'profile perso has 2 windows; pick one with --window:\n  w2\n  w3'
     })
+  })
+})
+
+describe('userWindowForOpen — open/nav reuse the user window of an open profile', () => {
+  const windows = [
+    { windowId: 'w-pro', profileId: 'pro' },
+    { windowId: 'w-perso', profileId: 'perso' },
+    { windowId: 'w-session', profileId: 'perso' }
+  ]
+
+  it("picks the profile's user window, never the session's own", () => {
+    expect(userWindowForOpen(windows, 'perso', 'w-session')).toBe('w-perso')
+  })
+
+  it('returns null when the profile has no user window (a session window is then created)', () => {
+    expect(userWindowForOpen(windows, 'closed', null)).toBeNull()
+    expect(userWindowForOpen([{ windowId: 'w-session', profileId: 'perso' }], 'perso', 'w-session')).toBeNull()
+  })
+
+  it('prefers the focused window when the profile has several', () => {
+    const torn = [
+      { windowId: 'a', profileId: 'perso' },
+      { windowId: 'b', profileId: 'perso', focused: true }
+    ]
+    expect(userWindowForOpen(torn, 'perso')).toBe('b')
   })
 })

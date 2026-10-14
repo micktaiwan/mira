@@ -273,6 +273,28 @@ export function profileWindow(windows, profileId, label) {
 }
 
 /**
+ * The USER's window an agent's `open` / `nav` should land in instead of a fresh
+ * session window: the profile's open window that is not the session's own (the
+ * focused one first when there are several). Null when the profile has no window
+ * of the user's open — only then is a session window worth creating. Opening a
+ * page in a profile that is already on screen used to spawn one more window per
+ * Claude session; the user asked for a tab in the window they already have
+ * (2026-10-13). Pure.
+ *
+ * @param {Array<{windowId:string,profileId:string,focused?:boolean}>} windows
+ * @param {string} profileId
+ * @param {string|null} [sessionWindowId]  this session's own window in that profile, if any
+ * @returns {string|null}
+ */
+export function userWindowForOpen(windows, profileId, sessionWindowId = null) {
+  const owned = (windows ?? []).filter(
+    (w) => w.profileId === profileId && w.windowId !== sessionWindowId
+  )
+  if (owned.length === 0) return null
+  return (owned.find((w) => w.focused) ?? owned[0]).windowId
+}
+
+/**
  * Find the single tab whose URL contains `needle`. Returns the match, or a
  * typed error so the caller can fail loudly on 0 or >1 (never guess).
  *
