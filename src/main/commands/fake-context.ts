@@ -860,7 +860,7 @@ export function makeContext(
       state.homeUrl = url.trim()
       return appSettings()
     },
-    diskUsage: () => ({
+    diskUsage: async () => ({
       root: '/fake/userData',
       total: 0,
       reclaimable: 0,
@@ -1001,6 +1001,12 @@ export function makeContext(
     // process (heavier the further down the strip) on its own pid, plus one canned
     // "other" process (a stand-in for extensions/GPU), then run the same pure
     // builder the manager uses — enough to exercise list-tab-memory.
+    // The fake's footprint sample flags the FIRST tab as heavy (2 GB), enough to
+    // exercise list-heavy-tabs end to end.
+    refreshHeavyTabs: () =>
+      Promise.resolve(
+        new Map(state.tabs.tabs.slice(0, 1).map((t) => [t.id, 2 * 1024 * 1024 * 1024]))
+      ),
     listTabMemory: () => {
       const memoryByPid = new Map<number, number>()
       const tabs = state.tabs.tabs.map((t, i) => {

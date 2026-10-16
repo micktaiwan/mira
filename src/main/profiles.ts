@@ -185,6 +185,13 @@ import { ProfileData } from './profile-data'
 import { shouldGrantPermission } from './permissions'
 import { ensureTooltip, showTooltip, hideTooltip, destroyTooltip } from './tooltip-controller'
 import { ensureToast, showToast, destroyToast } from './toast-controller'
+import {
+  HEAVY_TAB_SAMPLE_MS,
+  heavyTabMessage,
+  sameHeavyBadges,
+  updateHeavyTabs
+} from './heavy-tabs'
+import { sampleFootprint } from './footprint'
 import { buildPageMenu, imageUnderPointSource, needsImageProbe } from './page-menu'
 import { buildTabMenu, type TabMenuItem } from './tab-menu'
 import { formatTabCloseLog, type TabCloseReason } from './tab-close-log'
@@ -712,6 +719,14 @@ export class ProfileManager {
   private readonly sessionWindowRegistry = new SessionWindowRegistry()
   private sessionReaper: ReturnType<typeof setInterval> | null = null
   private static readonly SESSION_REAP_MS = 30_000
+  /** Heavy-tab alert (heavy-tabs.ts): tabId → footprint bytes of every tab past
+   * the threshold, the minute timer that refreshes it, and the last `top`
+   * footprint sample (pid → bytes) that listTabMemory reuses so Settings shows
+   * the same figures as the badges. */
+  private heavyTabs = new Map<string, number>()
+  private heavyTimer: ReturnType<typeof setInterval> | null = null
+  private heavySampling = false
+  private lastFootprint = new Map<number, number>()
   /** yt-dlp video downloads in flight, keyed by a unique id, with when each
    * started. A download runs in a background process (independent of any UI), so
    * this lets the status bar show one is running and how long it has taken. */
@@ -3333,7 +3348,9 @@ export class ProfileManager {
       // page. Drives the toolbar reload spinner. An asleep tab has no view, so it
       // is never loading. Refreshed by the did-start/did-stop-loading push.
       loading: this.liveContents(pw, t.id)?.isLoadingMainFrame() === true,
-      waking: this.wakingTabs.has(t.id)
+      waking: this.wakingTabs.has(t.id),
+      // Footprint of a tab past the heavy threshold, else null (refreshHeavyTabs).
+      heavyBytes: this.heavyTabs.get(t.id) ?? null
     }))
   }
 
@@ -5489,8 +5506,20 @@ export class ProfileManager {
    * total account for renderer reuse (several same-site tabs on one process). */
   listTabMemory(): TabMemoryReport {
     const memoryByPid = new Map<number, number>()
-    for (const m of this.deps.getProcessMemory()) memoryByPid.set(m.pid, m.bytes)
+    // Prefer the last `top` footprint (resident + compressed, see heavy-tabs.ts)
+    // over the working set, which shrinks as macOS compresses a renderer's pages.
+    // A pid the sample has not seen yet (a tab woken since) keeps its working set.
+    for (const m of this.deps.getProcessMemory()) {
+      memoryByPid.set(m.pid, this.lastFootprint.get(m.pid) ?? m.bytes)
+    }
     const allPids = [...memoryByPid.keys()]
+    return buildTabMemoryReport(this.loadedTabFrames(), memoryByPid, allPids)
+  }
+
+  /** Every loaded tab of every open window with its frame subtree (main frame +
+   * out-of-process subframes, each with its OS pid). Asleep tabs and the
+   * Settings tab have no view and are skipped. */
+  private loadedTabFrames(): RawTab[] {
     // Gather each loaded tab's full frame subtree: the main frame plus every
     // out-of-process (cross-origin) subframe, each on its own renderer under
     // site-per-process. The pure builder collapses these to distinct processes,
@@ -5535,7 +5564,62 @@ export class ProfileManager {
         })
       }
     }
-    return buildTabMemoryReport(tabs, memoryByPid, allPids)
+    return tabs
+  }
+
+  /** Start the heavy-tab monitor: sample every HEAVY_TAB_SAMPLE_MS, flag the
+   * tabs past the threshold (a badge in the sidebar) and toast each one once
+   * when it crosses. Called once by index.ts after the windows are up. */
+  startHeavyTabMonitor(): void {
+    if (this.heavyTimer) return
+    this.heavyTimer = setInterval(() => void this.refreshHeavyTabs(), HEAVY_TAB_SAMPLE_MS)
+    void this.refreshHeavyTabs()
+  }
+
+  stopHeavyTabMonitor(): void {
+    if (this.heavyTimer) clearInterval(this.heavyTimer)
+    this.heavyTimer = null
+  }
+
+  /** One sample: read every process footprint with `top`, sum it per loaded tab
+   * (all its frame processes), update the heavy set, re-push the sidebars when a
+   * badge changed, and toast the tabs that just crossed in the focused window.
+   * Returns the heavy set (tabId → bytes) for the socket command. */
+  async refreshHeavyTabs(): Promise<Map<string, number>> {
+    if (this.heavySampling) return this.heavyTabs
+    this.heavySampling = true
+    try {
+      const footprint = await sampleFootprint()
+      if (footprint.size === 0) return this.heavyTabs // top failed: keep the last state
+      this.lastFootprint = footprint
+      const tabs = this.loadedTabFrames()
+      const sample = tabs.map((t) => ({
+        tabId: t.tabId,
+        bytes: [...new Set(t.frames.map((f) => f.pid))].reduce(
+          (sum, pid) => sum + (footprint.get(pid) ?? 0),
+          0
+        )
+      }))
+      const { heavy, crossed } = updateHeavyTabs(this.heavyTabs, sample)
+      const changed = !sameHeavyBadges(this.heavyTabs, heavy)
+      this.heavyTabs = heavy
+      if (changed) {
+        for (const pw of this.openById.values()) this.pushTabs(pw)
+      }
+      // The toast only shows on a focused window (mayShowToast): in the
+      // background, the sidebar badge alone carries the alert.
+      const message = heavyTabMessage(
+        crossed.map((id) => ({
+          title: tabs.find((t) => t.tabId === id)?.title ?? 'A tab',
+          bytes: heavy.get(id) ?? 0
+        }))
+      )
+      const focused = this.findByWindow(BrowserWindow.getFocusedWindow())
+      if (message && focused) void showToast(focused, message)
+      return heavy
+    } finally {
+      this.heavySampling = false
+    }
   }
 
   /** Discard a tab by its globally-unique id, in whichever open profile window
@@ -6295,6 +6379,7 @@ export class ProfileManager {
       getMemoryUsage: () => this.deps.getMemoryUsage(),
       // Cross-profile: independent of `target`, walks every open window.
       listTabMemory: () => this.listTabMemory(),
+      refreshHeavyTabs: () => this.refreshHeavyTabs(),
       listAudioHistory: () => this.listAudioHistory(),
       getTabCounts: () => {
         if (!target) return { total: 0, loaded: 0, asleep: 0 }

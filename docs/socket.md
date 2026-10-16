@@ -195,6 +195,7 @@ that order, between the tab id and the title.
 | `list-commands`   | —      | `{commands: string[]}` — every command name, sorted                                            |
 | `get-status`      | —      | memory usage + tab counts (total / loaded / asleep)                                            |
 | `list-tab-memory` | —      | cross-profile: every loaded tab ranked by its renderer-process memory; `{entries, totalBytes}` |
+| `list-heavy-tabs` | —      | samples every process footprint now (`top`, resident + compressed) and returns the tabs past the heavy threshold (1.5 GB, badged in the sidebar and toasted once when they cross), heaviest first: `{tabs: [{tabId, bytes, title, url}]}`. A minute timer runs the same pass |
 | `list-audio-history` | —      | cross-profile: every open tab that has emitted sound, audible-now first then most recent first; `{entries:[{tabId, profileId, profileLabel, title, url, favicon, lastAudibleAt, audible}]}`. `lastAudibleAt` (epoch ms) is stamped on audio start and stop and persisted with the session |
 | `whoami`          | —      | id of the profile owning the target window                                                     |
 | `version`         | —      | `{version}` — the running app's version, no network                                            |

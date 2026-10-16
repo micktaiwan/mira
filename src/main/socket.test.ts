@@ -108,7 +108,8 @@ function setup(): {
       skillPaneWidth: 360,
       magnifierEnabled: false
     }),
-    diskUsage: () => ({ root: '/fake', total: 0, reclaimable: 0, entries: [], profiles: [] }),
+    diskUsage: () =>
+      Promise.resolve({ root: '/fake', total: 0, reclaimable: 0, entries: [], profiles: [] }),
     cookieJarForProfile: () => ({ set: () => Promise.resolve() }),
     countActiveSiteCookies: () => Promise.resolve({ url: null, count: 0 }),
     readActiveSiteCookies: () => Promise.resolve({ url: null, cookie: '', count: 0 }),
@@ -123,6 +124,7 @@ function setup(): {
     forgetDomain: () => Promise.resolve({ domain: null, cookiesRemoved: 0, historyRemoved: 0 }),
     getMemoryUsage: () => ({ rss: 0, processes: 1 }),
     listTabMemory: () => ({ entries: [], tabsBytes: 0, otherBytes: 0, totalBytes: 0 }),
+    refreshHeavyTabs: () => Promise.resolve(new Map()),
     listAudioHistory: () => [],
     getTabCounts: () => ({ total: 0, loaded: 0, asleep: 0 }),
     analyzePageAudio: async () => ({ media: [], unavailable: 0 }),

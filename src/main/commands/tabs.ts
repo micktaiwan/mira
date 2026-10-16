@@ -67,6 +67,10 @@ export interface TabInfo {
    * Its view stays hidden meanwhile and the chrome shows a spinner in the page
    * area. A live runtime flag, not persisted; absent reads as false. */
   waking?: boolean
+  /** Physical footprint (resident + compressed) of a tab past the heavy-tab
+   * threshold, in bytes, else null. Refreshed once a minute (heavy-tabs.ts);
+   * the sidebar shows it as a badge. Absent reads as null. */
+  heavyBytes?: number | null
 }
 
 /** Tabs capability slice: create / close / select / list tabs of the target

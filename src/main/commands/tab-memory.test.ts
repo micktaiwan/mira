@@ -212,3 +212,20 @@ describe('list-tab-memory', () => {
     expect(res.totalBytes).toBe(65 * MB)
   })
 })
+
+describe('list-heavy-tabs', () => {
+  it('returns the heavy tabs from a fresh sample, with title and url', async () => {
+    const { ctx } = makeContext()
+    const registry = createCommandRegistry()
+    registry.execute('new-tab', { url: 'https://a.test' }, ctx)
+    const res = (await registry.execute('list-heavy-tabs', {}, ctx)) as {
+      ok: true
+      tabs: Array<{ tabId: string; bytes: number; title: string; url: string }>
+    }
+    expect(res.ok).toBe(true)
+    // The fake flags only the first tab, at 2 GB.
+    expect(res.tabs).toHaveLength(1)
+    expect(res.tabs[0].tabId).toBe('tab-1')
+    expect(res.tabs[0].bytes).toBe(2 * 1024 * MB)
+  })
+})

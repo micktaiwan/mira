@@ -104,6 +104,10 @@ export interface RawTab {
  * + each view's frame subtree); injected via the context so it stays mockable. */
 export interface TabMemoryContext {
   listTabMemory: () => TabMemoryReport
+  /** Take a footprint sample now (heavy-tabs.ts) and return the tabs past the
+   * heavy threshold, tabId → bytes. Same pass as the minute timer, badge and
+   * toast included. */
+  refreshHeavyTabs: () => Promise<Map<string, number>>
 }
 
 /** Bare host of a url for a compact process label, or the raw string when it is
@@ -215,5 +219,21 @@ export const tabMemoryCommands: CommandMap<CommandContext> = {
   'list-tab-memory': (ctx) => {
     const report = ctx.listTabMemory()
     return { ok: true, ...report }
+  },
+
+  // Sample the footprint now and return the heavy tabs (the ones badged in the
+  // sidebar), heaviest first, each with its title and url from list-tab-memory.
+  'list-heavy-tabs': async (ctx) => {
+    const heavy = await ctx.refreshHeavyTabs()
+    const byId = new Map(ctx.listTabMemory().entries.map((e) => [e.tabId, e]))
+    const tabs = [...heavy]
+      .sort((a, b) => b[1] - a[1])
+      .map(([tabId, bytes]) => ({
+        tabId,
+        bytes,
+        title: byId.get(tabId)?.title ?? '',
+        url: byId.get(tabId)?.url ?? ''
+      }))
+    return { ok: true, tabs }
   }
 }

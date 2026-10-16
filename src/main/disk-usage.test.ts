@@ -1,8 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import * as fs from 'node:fs'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { computeDiskUsage, dirSize, formatDiskBytes } from './disk-usage'
+import { computeDiskUsage, createSizer, dirSize, formatDiskBytes } from './disk-usage'
+
+// Pass-through spy on opendirSync, so a test can count how many times each dir is walked.
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return { ...actual, opendirSync: vi.fn(actual.opendirSync) }
+})
 
 /** Write a file of `size` bytes at `path`, creating parent dirs. */
 function file(path: string, size: number): void {
@@ -17,16 +24,16 @@ describe('dirSize', () => {
   })
   afterEach(() => rmSync(root, { recursive: true, force: true }))
 
-  it('is 0 for a missing path', () => {
-    expect(dirSize(join(root, 'nope'))).toBe(0)
+  it('is 0 for a missing path', async () => {
+    expect(await dirSize(join(root, 'nope'))).toBe(0)
   })
 
-  it('sums a file and a nested tree', () => {
+  it('sums a file and a nested tree', async () => {
     file(join(root, 'a.bin'), 100)
     file(join(root, 'sub', 'b.bin'), 250)
     file(join(root, 'sub', 'deep', 'c.bin'), 50)
-    expect(dirSize(join(root, 'a.bin'))).toBe(100)
-    expect(dirSize(root)).toBe(400)
+    expect(await dirSize(join(root, 'a.bin'))).toBe(100)
+    expect(await dirSize(root)).toBe(400)
   })
 })
 
@@ -37,7 +44,7 @@ describe('computeDiskUsage', () => {
   })
   afterEach(() => rmSync(root, { recursive: true, force: true }))
 
-  it('attributes the default profile to root-level session dirs, others to Partitions', () => {
+  it('attributes the default profile to root-level session dirs, others to Partitions', async () => {
     // Default profile: session files at the userData root.
     file(join(root, 'Cache', 'data'), 1000) // reclaimable
     file(join(root, 'Cookies'), 200) // session data, not reclaimable
@@ -53,7 +60,7 @@ describe('computeDiskUsage', () => {
     file(join(root, 'Partitions', 'mira-p2', 'Local Storage', 'l'), 50)
     file(join(root, 'vaults', 'p2.sparsebundle', 'bands', '0'), 4000)
 
-    const report = computeDiskUsage(root, [
+    const report = await computeDiskUsage(root, [
       { id: 'default', label: 'Pro' },
       { id: 'p1', label: 'Perso' },
       { id: 'p2', label: 'Encrypted', encrypted: true }
@@ -91,8 +98,46 @@ describe('computeDiskUsage', () => {
     expect(bytes).toEqual([...bytes].sort((a, b) => b - a))
   })
 
-  it('handles a missing userData dir without throwing', () => {
-    const report = computeDiskUsage(join(root, 'gone'), [{ id: 'default', label: 'Pro' }])
+  it('walks each directory once, even though the profile rollup re-sizes them', async () => {
+    file(join(root, 'Cache', 'a', 'data'), 10)
+    file(join(root, 'Partitions', 'mira-p1', 'Cache', 'b', 'x'), 20)
+    file(join(root, 'Partitions', 'mira-p1', 'IndexedDB', 'y'), 30)
+    const readdir = vi.mocked(fs.opendirSync)
+    readdir.mockClear()
+
+    const pending = computeDiskUsage(root, [
+      { id: 'default', label: 'Pro' },
+      { id: 'p1', label: 'Perso' }
+    ])
+    expect(pending).toBeInstanceOf(Promise)
+    const report = await pending
+
+    expect(report.profiles.find((p) => p.id === 'p1')?.reclaimable).toBe(20)
+    // Deep dirs are only reached by the walk itself: one read each.
+    const reads = readdir.mock.calls.map(([p]) => String(p))
+    for (const deep of [
+      join(root, 'Cache', 'a'),
+      join(root, 'Partitions', 'mira-p1', 'Cache'),
+      join(root, 'Partitions', 'mira-p1', 'Cache', 'b'),
+      join(root, 'Partitions', 'mira-p1', 'IndexedDB')
+    ]) {
+      expect(reads.filter((p) => p === deep)).toHaveLength(1)
+    }
+  })
+
+  it('yields to the event loop while walking, so the main process keeps serving', async () => {
+    for (let i = 0; i < 50; i++) file(join(root, `d${i}`, 'f'), 1)
+    let ticks = 0
+    const timer = setInterval(() => ticks++, 0)
+    // A zero-length slice yields after every entry: the timer must get turns mid-walk.
+    const bytes = await createSizer(0)(root)
+    clearInterval(timer)
+    expect(bytes).toBe(50)
+    expect(ticks).toBeGreaterThan(0)
+  })
+
+  it('handles a missing userData dir without throwing', async () => {
+    const report = await computeDiskUsage(join(root, 'gone'), [{ id: 'default', label: 'Pro' }])
     expect(report.total).toBe(0)
     expect(report.entries).toEqual([])
     expect(report.profiles).toHaveLength(1)

@@ -52,6 +52,14 @@ describe('TabRow close button', () => {
     expect(kids.length).toBe(4) // favicon, title, audio, close
   })
 
+  it('shows the memory badge of a heavy tab before the close button', () => {
+    const kids = childrenOf(renderRow({ heavyBytes: 2.34 * 1024 ** 3 }, () => {}))
+    expect(kids.length).toBe(4) // favicon, title, heavy badge, close
+    expect((kids.at(-1)?.props as { className?: string }).className).toBe('tab-close')
+    const badge = kids[2]
+    expect((badge.props as { bytes: number }).bytes).toBe(2.34 * 1024 ** 3)
+  })
+
   it('closes the tab and does not let the click select the row', () => {
     const onClose = vi.fn()
     const stopPropagation = vi.fn()

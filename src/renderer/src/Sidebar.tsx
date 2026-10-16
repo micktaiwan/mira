@@ -37,6 +37,22 @@ export interface TabInfo {
   /** Just woken, not painted yet: main hides its view and the page area shows
    * a spinner (features/loading/WakingSpinner). */
   waking?: boolean
+  /** Footprint in bytes of a tab past the heavy-tab threshold (main's
+   * heavy-tabs.ts, sampled once a minute), else null/absent: shows a memory
+   * badge on the row so the user knows which tab to put to sleep. */
+  heavyBytes?: number | null
+}
+
+/** The memory badge of a heavy tab ("2.3 GB"). Text, not an icon: the number is
+ * the information. Hover says what to do about it. */
+function HeavyBadge({ bytes }: { bytes: number }): React.JSX.Element {
+  const text = `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
+  const hint = `Using ${text} of memory. Put it to sleep with ⌘⌥S.`
+  return (
+    <span className="tab-heavy" aria-label={hint} title={hint}>
+      {text}
+    </span>
+  )
 }
 
 /** The speaker icon shown on a tab that is emitting sound. A monochrome inline
@@ -213,6 +229,7 @@ function PinnedSquare({
     >
       <Favicon tab={tab} />
       {tab.audible && <AudioIcon />}
+      {tab.heavyBytes != null && <HeavyBadge bytes={tab.heavyBytes} />}
     </li>
   )
 }
@@ -300,6 +317,7 @@ export function TabRow({
         {isSettings ? 'Settings' : tab.title || tab.url || 'New tab'}
       </span>
       {tab.audible && <AudioIcon />}
+      {tab.heavyBytes != null && <HeavyBadge bytes={tab.heavyBytes} />}
       {/* Close button: last in the row and always taking its slot (CSS hides it
           with opacity, never with display), so every row's × sits at the same x
           and the titles never reflow when the pointer enters a row. */}

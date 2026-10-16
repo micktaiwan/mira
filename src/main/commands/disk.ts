@@ -12,16 +12,16 @@ import type { DiskUsageReport } from '../disk-usage'
 export interface DiskContext {
   /** Compute Mira's userData footprint: a top-level breakdown plus a per-profile
    * rollup (session partition + encrypted vault). Sizes are apparent (sum of
-   * file sizes); the walk is synchronous and takes a few hundred ms on a large
-   * profile. */
-  diskUsage: () => DiskUsageReport
+   * file sizes). The walk is async (seconds on a large userData) so the main
+   * process keeps serving the UI meanwhile. */
+  diskUsage: () => Promise<DiskUsageReport>
 }
 
 export const diskCommands: CommandMap<CommandContext> = {
   // Read-only: where Mira's disk space goes. Surfaced in Settings ▸ Data.
-  'disk-usage': (ctx) => {
+  'disk-usage': async (ctx) => {
     try {
-      return { ok: true, usage: ctx.diskUsage() }
+      return { ok: true, usage: await ctx.diskUsage() }
     } catch (error) {
       return fail(error)
     }

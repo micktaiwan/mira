@@ -811,6 +811,7 @@ app.whenReady().then(async () => {
   // quit so the last changes always land (see flushPendingSaves).
   app.on('will-quit', () => {
     quitTimeline.mark('windows closed (will-quit)')
+    profiles.stopHeavyTabMonitor()
     profiles.flushPendingSaves()
     quitTimeline.mark('pending saves flushed')
   })
@@ -824,6 +825,8 @@ app.whenReady().then(async () => {
   // A `--profile <id>` flag / MIRA_PROFILE env var forces booting into that one
   // profile alone (a dedicated test profile), bypassing the last-open restore.
   profiles.openSavedProfiles(parseProfileArg(process.argv, process.env))
+  // Flag tabs holding too much memory (badge + toast, heavy-tabs.ts), once a minute.
+  profiles.startHeavyTabMonitor()
 
   // The manager now exists and has a window: route default-browser link handoffs
   // to it, and flush any links that arrived during a cold launch (see above).

@@ -541,6 +541,33 @@ body {
   color: var(--color-text);
 }
 
+/* Memory badge of a heavy tab (Sidebar HeavyBadge): a small warm chip after the
+   title, so a tab holding gigabytes stands out in the strip without a popup. */
+.tab-heavy {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 16px;
+  font-variant-numeric: tabular-nums;
+  color: var(--on-accent);
+  background: var(--color-danger);
+}
+
+/* On a pinned square there is no room for the figure: the chip shrinks to a dot
+   in the top-right corner (hover still gives the size). */
+.pinned-tab .tab-heavy {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 0;
+  box-shadow: 0 0 0 1.5px var(--color-background);
+}
+
 /* On a pinned square (no title, favicon-only) the icon overlaps as a small badge
    in the bottom-right corner instead of taking a slot. A soft chip behind it so
    it reads over any favicon. */
