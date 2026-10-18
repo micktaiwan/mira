@@ -28,7 +28,7 @@ const item = (over: Partial<VaultLogin> = {}): VaultLogin => ({
 
 describe('fillHost', () => {
   it('reads the host of a web page', () => {
-    expect(fillHost('https://eu.holistics.io/users/sign_in')).toBe('eu.holistics.io')
+    expect(fillHost('https://eu.example.net/users/sign_in')).toBe('eu.example.net')
   })
 
   it('keeps the port, which is part of the host', () => {
@@ -46,8 +46,8 @@ describe('fillHost', () => {
 
 describe('candidatesForHost', () => {
   it('offers the item filed under the exact host', () => {
-    const items = [item({ id: 'a', hosts: ['eu.holistics.io'] })]
-    expect(candidatesForHost(items, 'eu.holistics.io').map((i) => i.id)).toEqual(['a'])
+    const items = [item({ id: 'a', hosts: ['eu.example.net'] })]
+    expect(candidatesForHost(items, 'eu.example.net').map((i) => i.id)).toEqual(['a'])
   })
 
   it('offers a sibling subdomain of the same site, after the exact ones', () => {
@@ -310,6 +310,6 @@ describe('the frame reports', () => {
 describe('fillSite', () => {
   it('reduces a host to its site, which is what a choice is remembered against', () => {
     expect(fillSite('go.tiime.fr')).toBe('tiime.fr')
-    expect(fillSite('eu.holistics.io')).toBe('holistics.io')
+    expect(fillSite('eu.example.net')).toBe('example.net')
   })
 })

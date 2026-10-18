@@ -1,7 +1,7 @@
 // The floating status-bar tooltip overlay, split out of the ProfileManager god
 // object. A tooltip is a transparent, non-focusable CHILD window the OS composites
 // ABOVE the tab's WebContentsView — a plain DOM bubble would be hidden behind that
-// native layer (CLAUDE.md "les deux pièges" #3). The pure placement geometry lives
+// native layer (trap #3 in .claude/rules/main-native-gotchas.md). The pure placement geometry lives
 // in tooltip.ts (unit-tested); this file is the thin NATIVE driver (create / show /
 // hide / destroy the child window) and is not unit-tested.
 //

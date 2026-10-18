@@ -16,7 +16,7 @@ async function run(
 /** A context with the perso profile mapped to a Bitwarden account and unlocked. */
 async function ready(): Promise<Ctx> {
   const { ctx } = makeContext()
-  await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-perso' })
+  await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-vault' })
   await run(ctx, 'unlock-card-vault', { profileId: 'perso', password: 'good-password' })
   return ctx
 }
@@ -31,11 +31,11 @@ describe('set-card-vault / list-card-vaults / remove-card-vault', () => {
     const { ctx } = makeContext()
     const res = await run(ctx, 'set-card-vault', {
       profileId: 'perso',
-      appDataDir: '/tmp/bw-perso'
+      appDataDir: '/tmp/bw-vault'
     })
     expect(res).toMatchObject({ ok: true, vault: { profileId: 'perso', unlocked: false } })
     expect(await run(ctx, 'list-card-vaults')).toMatchObject({
-      vaults: [{ profileId: 'perso', appDataDir: '/tmp/bw-perso' }]
+      vaults: [{ profileId: 'perso', appDataDir: '/tmp/bw-vault' }]
     })
   })
 
@@ -68,7 +68,7 @@ describe('set-card-vault / list-card-vaults / remove-card-vault', () => {
 describe('card-vault-status / unlock-card-vault', () => {
   it('reports locked, then unlocked after the master password', async () => {
     const { ctx } = makeContext()
-    await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-perso' })
+    await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-vault' })
     expect(await run(ctx, 'card-vault-status', { profileId: 'perso' })).toMatchObject({
       state: 'locked'
     })
@@ -80,7 +80,7 @@ describe('card-vault-status / unlock-card-vault', () => {
 
   it('refuses a wrong master password', async () => {
     const { ctx } = makeContext()
-    await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-perso' })
+    await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-vault' })
     const res = await run(ctx, 'unlock-card-vault', { profileId: 'perso', password: 'nope' })
     expect(res.ok).toBe(false)
     expect(res.error).toMatch(/master password/i)
@@ -140,7 +140,7 @@ describe('save-card', () => {
 
   it('refuses to write into a locked vault', async () => {
     const { ctx } = makeContext()
-    await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-perso' })
+    await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-vault' })
     expect(
       (
         await run(ctx, 'save-card', {

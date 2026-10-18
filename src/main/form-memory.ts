@@ -1,5 +1,5 @@
 // Form memory: what was typed into an ordinary text field, so the same field can
-// be offered back on the next visit. This is the "remember my numéro fiscal"
+// be offered back on the next visit. This is the "remember my tax ID number"
 // feature, NOT card autofill — cards go to Bitwarden (card.ts / bitwarden.ts) and
 // are explicitly excluded here, along with passwords and one-time codes.
 //

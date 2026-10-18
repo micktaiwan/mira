@@ -4,8 +4,8 @@
 //
 // Why this exists. Mira has no synchronous IPC of its own — there is not one
 // `sendSync` nor one `ipcMain.on` in src/. So when a renderer's main thread is
-// found sitting in `mach_msg` during the Google Photos locked-folder stall (see
-// track.md), a `sample` can only report "waiting on Mach"; it can never say on
+// found sitting in `mach_msg` during a renderer stall on a heavy web app,
+// a `sample` can only report "waiting on Mach"; it can never say on
 // WHAT, nor even distinguish a real block from an idle event loop. A content
 // trace records each message with its name and duration, which is exactly the
 // missing piece. The output is a JSON file, readable in chrome://tracing or on

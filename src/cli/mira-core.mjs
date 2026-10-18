@@ -1109,7 +1109,10 @@ export function buildLineRequest(argv, env) {
       return {
         request: {
           command: 'dump-cookies',
-          params: typeof flags.url === 'string' ? { url: flags.url } : {}
+          params: {
+            ...(typeof flags.url === 'string' ? { url: flags.url } : {}),
+            ...(tabId ? { tabId } : {})
+          }
         }
       }
     case 'call': {

@@ -1,191 +1,174 @@
-# Automation — rendre le pilotage de Mira rapide
+# Automation — making Mira driving fast
 
-Brief pour une session dédiée. Écrit le 08/09/2026 après une session qui a piloté
-Notion à la main pendant vingt minutes et qui a mesuré d'où venait la lenteur.
+Brief for a dedicated session. Written after a session that drove a heavy web app by hand
+for twenty minutes and measured where the slowness came from.
 
-## Ce que la mesure dit — et ce qu'elle ne dit pas
+## What the measurement says — and what it does not say
 
-**Mira n'est pas lente.** Mesuré le 08/09/2026 avec `/usr/bin/time -p`, Mira
-tournant avec ses deux profils ouverts et 136 onglets, sur une page Notion
-chargée :
+**Mira is not slow.** Measured with `/usr/bin/time -p`, Mira running with several profiles
+open and over a hundred tabs, on a loaded page of a heavy web app:
 
-| Ce qui est mesuré | Durée |
+| What is measured | Duration |
 | --- | --- |
-| aller-retour socket brut (client python, `exec-js` trivial) | **< 1 ms** |
-| `mira exec` de bout en bout (process node compris) | **40 ms** |
-| `mira exec` d'un `innerText` sur la page Notion entière | 40 ms |
+| raw socket round trip (python client, trivial `exec-js`) | **< 1 ms** |
+| `mira exec` end to end (node process included) | **40 ms** |
+| `mira exec` of an `innerText` on the whole web app page | 40 ms |
 | `mira tabs`, `mira windows` | 40–50 ms |
 | `mira press` | 60 ms |
 | `mira shot` | 110 ms |
-| **trois `exec-js` pipelinés sur UNE connexion** | **< 1 ms au total** |
+| **three `exec-js` pipelined on ONE connection** | **< 1 ms in total** |
 
-⚠️ **Piège de mesure, à ne pas refaire.** Chronométrer en encadrant la commande
-de deux `python3 -c 'time.time()'` donne 226 ms sur *tout*, `mira help` compris
-— qui ne touche même pas le socket. C'est le démarrage de python sous pyenv
-(200 ms), pas Mira. Utiliser `/usr/bin/time -p`, ou `time` du shell.
+⚠️ **Measurement trap, do not repeat it.** Timing by wrapping the command between two
+`python3 -c 'time.time()'` gives 226 ms on *everything*, `mira help` included — which does
+not even touch the socket. That is python starting up under pyenv (200 ms), not Mira. Use
+`/usr/bin/time -p`, or the shell's `time`.
 
-**Ce qui est lent, c'est la forme du pilotage : une commande = un process = un
-tour d'agent.** La séquence qui a servi de cas d'étude (ouvrir les réglages
-Notion et atteindre Settings → People) a coûté ~25 appels, dont **35 secondes de
-`sleep` à l'aveugle** et **cinq appels rien que pour un clic**, dont deux ratés.
-Aucun de ces coûts n'est dans Mira ; tous les trois viennent de capacités
-absentes du CLI.
+**What is slow is the shape of the driving: one command = one process = one agent turn.**
+The sequence used as a case study (open the web app's settings and reach a nested settings
+pane) cost ~25 calls, including **35 seconds of blind `sleep`** and **five calls just for
+one click**, two of which failed. None of these costs is in Mira; all three come from
+capabilities missing from the CLI.
 
-`mira commands` au 08/09/2026 rend ~120 commandes et **aucune** ne matche
-`click`, `mouse`, `wait`, `batch`, `scroll` ni `type` — seul `press-key` existe.
+At the time of writing, `mira commands` returns ~120 commands and **none** matches `click`,
+`mouse`, `wait`, `batch`, `scroll` or `type` — only `press-key` exists.
 
-## Les trois chantiers, dans cet ordre
+## The three workstreams, in this order
 
-### 1. `mira batch` — replier N tours en un
+### 1. `mira batch` — fold N turns into one
 
-**Le gain le plus gros pour le moins de code, et le daemon est déjà prêt.**
-Vérifié : trois requêtes JSON envoyées d'affilée sur une seule connexion
-reçoivent leurs trois réponses, en moins d'une milliseconde. Le protocole est
-déjà du JSON-par-ligne. **Il n'y a donc rien à faire côté main : c'est un
-changement CLI seul.**
+**The biggest gain for the least code, and the daemon is already ready.** Verified: three
+JSON requests sent back to back on a single connection get their three responses, in less
+than a millisecond. The protocol is already JSON-per-line. **So there is nothing to do on
+the main side: it is a CLI-only change.**
 
-Aujourd'hui `bin/mira` ouvre une connexion, envoie **une** requête, lit **une**
-réponse et sort (c'est écrit en tête du fichier). Chaque commande paie donc un
-process node, et surtout un tour d'agent.
+Today `bin/mira` opens a connection, sends **one** request, reads **one** response and
+exits (it is written at the top of the file). Every command therefore pays for a node
+process, and above all an agent turn.
 
-Ce qu'il faut :
+What is needed:
 
 ```bash
-mira batch @script.mira        # un fichier, une commande par ligne
-mira batch -                   # ou depuis stdin
+mira batch @script.mira        # a file, one command per line
+mira batch -                   # or from stdin
 ```
 
-- Format d'une ligne : exactement ce qu'on taperait après `mira`
-  (`exec document.title`, `press , --mod meta`, `wait --text Settings`), plus
-  les commentaires `#` et les lignes vides ignorés.
-- Une seule connexion, requêtes pipelinées, réponses lues dans l'ordre.
-- **Arrêt au premier échec par défaut** (`--keep-going` pour continuer) : dans
-  une séquence d'automation, tout ce qui suit un clic raté est du bruit.
-- Sortie : une ligne par commande, préfixée de son index, plus un résumé
-  `N ok, M failed`. `--json` rend le tableau brut des réponses.
-- Exit code : 0 si tout passe, 1 sinon.
-- La cible d'onglet (`--tab` / `$MIRA_TAB` / `--profile`) se pose **une fois**
-  sur la commande `batch` et s'applique à toutes les lignes, chaque ligne
-  pouvant la surcharger.
+- Line format: exactly what you would type after `mira` (`exec document.title`,
+  `press , --mod meta`, `wait --text Settings`), plus `#` comments and empty lines ignored.
+- A single connection, pipelined requests, responses read in order.
+- **Stop at the first failure by default** (`--keep-going` to continue): in an automation
+  sequence, everything after a failed click is noise.
+- Output: one line per command, prefixed with its index, plus a summary
+  `N ok, M failed`. `--json` returns the raw array of responses.
+- Exit code: 0 if everything passes, 1 otherwise.
+- The tab target (`--tab` / `$MIRA_TAB` / `--profile`) is set **once** on the `batch`
+  command and applies to every line, each line being able to override it.
 
-Où : la logique de parsing va dans `src/cli/mira-core.mjs` (pure, testée) ;
-`bin/mira` ne fait que l'I/O. Ajouter les tests unitaires du parseur à côté.
+Where: the parsing logic goes in `src/cli/mira-core.mjs` (pure, tested); `bin/mira` only
+does the I/O. Add the parser's unit tests next to it.
 
-### 2. Une attente conditionnelle — tuer les `sleep`
+### 2. A conditional wait — kill the `sleep`s
 
-Sans elle, un agent écrit `sleep 3` : trop long quand la page est déjà prête
-(c'est la lenteur ressentie), trop court quand elle ne l'est pas (c'est le faux
-négatif, bien pire — on conclut « l'élément n'existe pas » alors qu'il arrive
-200 ms plus tard).
+Without it, an agent writes `sleep 3`: too long when the page is already ready (that is the
+perceived slowness), too short when it is not (that is the false negative, much worse — you
+conclude "the element does not exist" when it arrives 200 ms later).
 
-Nouvelle commande de registre, **nouveau fichier de domaine**
-`src/main/commands/wait.ts` (+ sa slice `WaitContext`, + `wait.test.ts`, + la
-ligne d'import/spread dans `commands/index.ts` — c'est la seule ligne partagée à
-toucher, cf. `.claude/rules/command-registry.md`).
+New registry command, **new domain file** `src/main/commands/wait.ts` (+ its
+`WaitContext` slice, + `wait.test.ts`, + the import/spread line in `commands/index.ts` — it
+is the only shared line to touch, cf. `.claude/rules/command-registry.md`).
 
 ```bash
-mira wait --selector '[role=dialog]'      # attend qu'il apparaisse
-mira wait --text 'Settings'               # attend un texte visible
-mira wait --url '/settings'               # attend une navigation
-mira wait --gone --selector '.spinner'    # attend une disparition
+mira wait --selector '[role=dialog]'      # waits for it to appear
+mira wait --text 'Settings'               # waits for a visible text
+mira wait --url '/settings'               # waits for a navigation
+mira wait --gone --selector '.spinner'    # waits for a disappearance
 ```
 
-- Polling **dans la page** (via le même chemin que `exec-js`), pas côté node :
-  un aller-retour socket par tentative serait absurde à 50 ms d'intervalle.
-- `--timeout` en ms, défaut 5000. Au dépassement : `ok:false` avec un message
-  qui dit **ce qui a été cherché et pendant combien de temps** — jamais un
-  succès silencieux.
-- Rend le temps réellement attendu, pour que l'appelant voie ce que ça coûte.
-- ⚠️ `exec-js` coupe à 5 s (constaté sur un upload, cf. le skill `mira`) : le
-  polling ne doit pas être un `await` long dans un seul `exec-js`, sinon il
-  meurt à 5 s. Soit une boucle côté main qui réévalue, soit un timeout par
-  tentative bien en dessous.
+- Polling **inside the page** (through the same path as `exec-js`), not on the node side: a
+  socket round trip per attempt would be absurd at 50 ms intervals.
+- `--timeout` in ms, default 5000. When exceeded: `ok:false` with a message that says
+  **what was looked for and for how long** — never a silent success.
+- Returns the time actually waited, so the caller sees what it costs.
+- ⚠️ `exec-js` cuts off at 5 s (seen on an upload, cf. the `mira` skill): the polling must
+  not be one long `await` in a single `exec-js`, otherwise it dies at 5 s. Either a loop on
+  the main side that re-evaluates, or a per-attempt timeout well below that.
 
-### 3. Une vraie souris — `mira click`
+### 3. A real mouse — `mira click`
 
-**C'est le manque qui coûte le plus cher par occurrence.** `press-key` passe par
-CDP `Input.dispatchKeyEvent`, donc `isTrusted: true`. Il n'a **aucun équivalent
-souris** : tout clic doit être reconstruit à la main en `exec-js`, en
-dispatchant `pointerdown` / `mousedown` / `pointerup` / `mouseup` / `click` avec
-les bons `clientX`/`clientY`, sur le bon ancêtre — et beaucoup d'apps ignorent
-ces événements synthétiques. Sur le cas Notion, il a fallu cinq appels et deux
-échecs pour un seul clic sur « Settings ».
+**It is the gap that costs the most per occurrence.** `press-key` goes through CDP
+`Input.dispatchKeyEvent`, so `isTrusted: true`. It has **no mouse equivalent**: every click
+has to be rebuilt by hand in `exec-js`, dispatching `pointerdown` / `mousedown` /
+`pointerup` / `mouseup` / `click` with the right `clientX`/`clientY`, on the right ancestor
+— and many apps ignore these synthetic events. In the case study, it took five calls and
+two failures for a single click on "Settings".
 
 ```bash
 mira click --selector 'button[aria-label=Close]'
-mira click --text 'Settings'          # premier élément visible portant ce texte
-mira click --at 320,180               # coordonnées viewport
-mira click --text 'Réglages' --nth 2  # désambiguïsation
+mira click --text 'Settings'          # first visible element carrying this text
+mira click --at 320,180               # viewport coordinates
+mira click --text 'Réglages' --nth 2  # disambiguation
 ```
 
-Implémentation : **`Input.dispatchMouseEvent`** (`mousePressed` puis
-`mouseReleased`, `button: 'left'`, `clickCount: 1`), exactement le même chemin
-que `pressKeyInTab` dans `src/main/profiles.ts:5779` — reprendre sa mécanique
-telle quelle :
+Implementation: **`Input.dispatchMouseEvent`** (`mousePressed` then `mouseReleased`,
+`button: 'left'`, `clickCount: 1`), exactly the same path as `pressKeyInTab` in
+`src/main/profiles.ts:5779` — reuse its mechanics as is:
 
-- même résolution d'onglet et mêmes erreurs que `exec-js`
-  (`webContentsForTab`) ;
-- **même garde de visibilité** (`ensurePageVisibleForInput`) : Chromium ne
-  délivre l'input qu'à un onglet visible, et un onglet caché avale le clic en
-  répondant `ok` — le pire des échecs. Échouer bruyamment plutôt que mentir ;
-- même discipline de debugger : n'attacher que si personne n'est attaché, ne
-  détacher que ce qu'on a attaché soi-même (laisser celui du shim stealth).
+- same tab resolution and same errors as `exec-js` (`webContentsForTab`);
+- **same visibility guard** (`ensurePageVisibleForInput`): Chromium only delivers input to a
+  visible tab, and a hidden tab swallows the click while answering `ok` — the worst kind of
+  failure. Fail loudly rather than lie;
+- same debugger discipline: only attach if nobody is attached, only detach what we attached
+  ourselves (leave the stealth shim's one alone).
 
-Résolution de la cible : `--selector` / `--text` se résolvent **dans la page**
-en un `getBoundingClientRect()`, puis on clique au centre. Refuser si l'élément
-est hors viewport ou de taille nulle, en le disant (et offrir `--scroll` qui
-`scrollIntoView` avant, plutôt que de cliquer dans le vide).
+Target resolution: `--selector` / `--text` are resolved **inside the page** into a
+`getBoundingClientRect()`, then we click at the center. Refuse if the element is outside
+the viewport or zero-sized, and say so (and offer `--scroll`, which does `scrollIntoView`
+first, rather than clicking into the void).
 
-La commande va dans **`src/main/commands/input.ts`**, le domaine existe déjà et
-c'est exactement son métier (le fichier dit « the keyboard counterpart to
-exec-js » — la souris est le troisième pilier manquant). La traduction pure
-nom→payload vit dans `src/main/input-keys.ts` pour le clavier ; faire pareil
-pour la souris, dans le même fichier ou un `input-mouse.ts` frère, pour rester
-testable sans Electron.
+The command goes in **`src/main/commands/input.ts`**, the domain already exists and it is
+exactly its job (the file says "the keyboard counterpart to exec-js" — the mouse is the
+missing third pillar). The pure name→payload translation lives in `src/main/input-keys.ts`
+for the keyboard; do the same for the mouse, in the same file or a sibling
+`input-mouse.ts`, to stay testable without Electron.
 
-## Déjà fait, à ne pas refaire
+## Already done, do not redo
 
-**Le bug de ponctuation de `press-key` est corrigé** dans le working tree, avec
-ses tests (17 passent, `npx vitest run src/main/input-keys.test.ts`) :
-`src/main/input-keys.ts` a désormais une table `PUNCTUATION` (chaque caractère →
-son vrai `code` US : `,` → `Comma`, `?` → `Slash`, `*` → `Digit8`) et une table
-`PUNCTUATION_ALIASES` (les noms épelés que le shell passe sans quoter :
-`Comma`, `Slash`, `Space`…).
+**The `press-key` punctuation bug is fixed** in the working tree, with its tests (17 pass,
+`npx vitest run src/main/input-keys.test.ts`): `src/main/input-keys.ts` now has a
+`PUNCTUATION` table (each character → its real US `code`: `,` → `Comma`, `?` → `Slash`,
+`*` → `Digit8`) and a `PUNCTUATION_ALIASES` table (the spelled-out names the shell passes
+unquoted: `Comma`, `Slash`, `Space`…).
 
-Le symptôme, pour comprendre la classe de bug : `resolveKey` rendait `code: ''`
-pour toute ponctuation. Taper un caractère n'a besoin que de `text`, mais un
-**raccourci se matche sur `code`** — donc `Cmd+,` (les réglages de Notion,
-Slack, VS Code) partait, répondait `ok`, et ne faisait rien. Un échec qui se
-présente comme un succès.
+The symptom, to understand the bug class: `resolveKey` returned `code: ''` for any
+punctuation. Typing a character only needs `text`, but a **shortcut matches on `code`** —
+so `Cmd+,` (the settings of Notion, Slack, VS Code) went out, answered `ok`, and did
+nothing. A failure that presents itself as a success.
 
-⚠️ **Ce correctif n'est pas dans le build qui tourne.** Il faut un rebuild
-(`./bin/build.sh`) pour le vérifier en vrai — et **un rebuild se demande à
-l'utilisateur**, il quitte Mira, donc les autres sessions qui s'en servent.
+⚠️ **This fix is not in the running build.** It needs a rebuild (`./bin/build.sh`) to be
+checked for real — and **a rebuild is asked of the user**, it quits Mira, and therefore the
+other sessions using it.
 
-## Contraintes à respecter (elles viennent du repo, pas de moi)
+## Constraints to respect (they come from the repo, not from me)
 
-- **Une commande = un nom + un schéma de params dans le registre**, atteignable
-  à l'identique par IPC, socket et MCP. Rien de tout ça ne doit être une astuce
-  du CLI qui bricole en `exec-js` — sauf `batch`, qui est bien du CLI pur.
-- **Un fichier par domaine** dans `src/main/commands/`, et une seule ligne
-  partagée à toucher (l'import + le spread dans `index.ts`). Mira est vibe codé
-  sur plusieurs sessions en parallèle : deux sessions dans le même fichier =
-  écrasement. Détail : `.claude/rules/command-registry.md`.
-- **Une feature = un test** (Vitest, `npm test`). Si une commande est trop
-  couplée à Electron, extraire sa logique pure et ne laisser que l'appel natif.
-- **Ne jamais appeler `focus-app` ni `mira focus`** pour se débloquer. C'est le
-  navigateur de tous les jours de l'utilisateur, ouvert derrière son éditeur : chaque
-  remontée lui coupe ce qu'il tape. Si une commande échoue parce que la fenêtre
-  est cachée, le dire.
-- **Tester sur un onglet en `--background`, dans un profil isolé**, pas sur ses
-  onglets à lui. Voir `.claude/rules/piloting-and-testing.md`.
-- **Ne lancer ni tuer aucun process sans le demander** (donc pas de
-  `npm run dev`, pas de `build.sh`, pas de relance de Mira de sa propre
-  initiative).
+- **A command = a name + a params schema in the registry**, reachable identically through
+  IPC, socket and MCP. None of this must be a CLI trick that hacks around in `exec-js` —
+  except `batch`, which really is pure CLI.
+- **One file per domain** in `src/main/commands/`, and a single shared line to touch (the
+  import + the spread in `index.ts`). Mira is vibe coded across several sessions in
+  parallel: two sessions in the same file = overwrite. Detail:
+  `.claude/rules/command-registry.md`.
+- **One feature = one test** (Vitest, `npm test`). If a command is too coupled to Electron,
+  extract its pure logic and leave only the native call.
+- **Never call `focus-app` or `mira focus`** to get unstuck. It is the user's everyday
+  browser, open behind other windows: every raise cuts off what they are typing. If a
+  command fails because the window is hidden, say so.
+- **Test on a `--background` tab, in an isolated profile**, not on the user's own tabs. See
+  `.claude/rules/piloting-and-testing.md`.
+- **Do not launch or kill any process without asking** (so no `npm run dev`, no
+  `build.sh`, no relaunching Mira on your own initiative).
 
-## Ce qui prouve que c'est fini
+## What proves it is done
 
-Rejouer la séquence qui a servi de cas d'étude — ouvrir les réglages Notion et
-atteindre People — **en un seul `mira batch`**, sans un seul `sleep`, sans un
-seul `exec-js` qui fabrique des `MouseEvent` à la main. Elle a coûté 25 appels
-et vingt minutes ; elle doit tenir en un fichier de dix lignes.
+Replay the sequence used as the case study — open the web app's settings and reach the
+nested settings pane — **in a single `mira batch`**, without a single `sleep`, without a
+single `exec-js` that builds `MouseEvent`s by hand. It cost 25 calls and twenty minutes; it
+must fit in a ten-line file.

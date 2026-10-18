@@ -9,11 +9,11 @@ import {
   vaultFor
 } from './card-vault-store'
 
-const HOME = '/Users/mick'
+const HOME = '/Users/me'
 
 describe('expandHome', () => {
   it('expands a leading tilde', () => {
-    expect(expandHome('~/.config/bw-perso', HOME)).toBe('/Users/mick/.config/bw-perso')
+    expect(expandHome('~/.config/bw-vault', HOME)).toBe('/Users/me/.config/bw-vault')
     expect(expandHome('~', HOME)).toBe(HOME)
   })
 
@@ -25,11 +25,11 @@ describe('expandHome', () => {
 describe('isValidVaultDir', () => {
   it('accepts absolute and tilde paths', () => {
     expect(isValidVaultDir('/tmp/bw', HOME)).toBe(true)
-    expect(isValidVaultDir('~/.config/bw-perso', HOME)).toBe(true)
+    expect(isValidVaultDir('~/.config/bw-vault', HOME)).toBe(true)
   })
 
   it('refuses relative paths and junk', () => {
-    expect(isValidVaultDir('bw-perso', HOME)).toBe(false)
+    expect(isValidVaultDir('bw-vault', HOME)).toBe(false)
     expect(isValidVaultDir('', HOME)).toBe(false)
     expect(isValidVaultDir(42, HOME)).toBe(false)
   })
@@ -38,11 +38,11 @@ describe('isValidVaultDir', () => {
 describe('parseVaultMap', () => {
   it('reads a well-formed file', () => {
     const map = parseVaultMap(
-      { perso: { appDataDir: '~/.config/bw-perso', email: 'owner@example.com' } },
+      { perso: { appDataDir: '~/.config/bw-vault', email: 'owner@example.com' } },
       HOME
     )
     expect(map.perso).toEqual({
-      appDataDir: '/Users/mick/.config/bw-perso',
+      appDataDir: '/Users/me/.config/bw-vault',
       email: 'owner@example.com'
     })
   })
@@ -59,10 +59,10 @@ describe('parseVaultMap', () => {
 })
 
 describe('vaultFor', () => {
-  const map = parseVaultMap({ perso: { appDataDir: '/tmp/bw-perso' } }, HOME)
+  const map = parseVaultMap({ perso: { appDataDir: '/tmp/bw-vault' } }, HOME)
 
   it('finds a mapped profile', () => {
-    expect(vaultFor(map, 'perso')?.appDataDir).toBe('/tmp/bw-perso')
+    expect(vaultFor(map, 'perso')?.appDataDir).toBe('/tmp/bw-vault')
   })
 
   it('returns null for an unmapped profile — the pro wall', () => {
@@ -73,8 +73,8 @@ describe('vaultFor', () => {
 describe('setVault / removeVault', () => {
   it('adds a mapping without mutating the original', () => {
     const map = {}
-    const next = setVault(map, 'perso', { appDataDir: '~/.config/bw-perso' }, HOME)
-    expect(next.perso.appDataDir).toBe('/Users/mick/.config/bw-perso')
+    const next = setVault(map, 'perso', { appDataDir: '~/.config/bw-vault' }, HOME)
+    expect(next.perso.appDataDir).toBe('/Users/me/.config/bw-vault')
     expect(map).toEqual({})
   })
 

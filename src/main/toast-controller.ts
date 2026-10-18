@@ -1,7 +1,7 @@
 // The floating toast overlay, split out of the ProfileManager god object like the
 // tooltip. A toast is a transparent, non-focusable CHILD window the OS composites
 // ABOVE the tab's WebContentsView — a plain DOM pill in the chrome would be hidden
-// behind that native layer (CLAUDE.md "les deux pièges" #3). The pure placement
+// behind that native layer (trap #3 in .claude/rules/main-native-gotchas.md). The pure placement
 // geometry lives in toast.ts (unit-tested); this file is the thin NATIVE driver
 // (create / show / destroy the child window + the auto-hide timer) and is not
 // unit-tested.

@@ -1,7 +1,7 @@
 // The card feature, assembled: the profile -> Bitwarden account map on disk, the
 // capture pipeline, the save bubble, and the CLI. ProfileManager owns ONE of
 // these and forwards the command-context calls to it, so the feature lives here
-// rather than growing profiles.ts (CLAUDE.md, découpage anti-collision).
+// rather than growing profiles.ts (CLAUDE.md, "Anti-collision split").
 //
 // What each collaborator does:
 //   card-vault-store.ts   which profile writes to which Bitwarden account (pure)

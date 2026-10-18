@@ -1,6 +1,6 @@
 // The right-click menu shown on a tab in the sidebar. Like page-menu.ts, the
 // popup itself is thin and NATIVE (in profiles.ts) — a CSS popover over a tab row
-// could be clipped by the WebContentsView (CLAUDE.md "les deux pièges" #3), and a
+// could be clipped by the WebContentsView (trap #3 in .claude/rules/main-native-gotchas.md), and a
 // native menu always composites above it. This pure, testable function decides
 // WHICH items to show for a given tab.
 //

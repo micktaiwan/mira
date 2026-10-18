@@ -6,8 +6,8 @@
 // WHY A SEPARATE FILE FROM bitwarden.ts: a login item is a different type (1 vs
 // 3), a different match rule (by host, not by number) and — unlike a card — it
 // can be UPDATED in place, which needs the item's full raw JSON. Keeping it here
-// also keeps two parallel sessions off the same file (CLAUDE.md, découpage
-// anti-collision).
+// also keeps two parallel sessions off the same file (CLAUDE.md, "Anti-collision
+// split").
 //
 // The rule that shapes everything below: a password read out of the vault exists
 // only to be COMPARED (is the one just typed already saved?) or to be written

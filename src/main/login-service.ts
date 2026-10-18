@@ -1,7 +1,7 @@
 // The login feature, assembled: the capture pipeline, the save/update bubble, and
 // the socket commands. ProfileManager owns ONE of these and forwards the
 // command-context calls to it, so the feature lives here rather than growing
-// profiles.ts (CLAUDE.md, découpage anti-collision).
+// profiles.ts (CLAUDE.md, "Anti-collision split").
 //
 // What each collaborator does:
 //   login-capture.ts        classify, merge the two halves, decide (pure)

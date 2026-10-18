@@ -4,7 +4,7 @@ import MarkdownView from './MarkdownView'
 
 // The right-side AI panel. It does NOT float over the page: main shrinks the
 // active WebContentsView by the pane's width (see profiles.ts layout), so it sits
-// beside the page — no piège #3. The chrome holds no pane state; main pushes it
+// beside the page — no trap #3 (.claude/rules/main-native-gotchas.md). The chrome holds no pane state; main pushes it
 // and we render it. Every action is a command back to the registry.
 //
 // The pane is a chat: `state.messages` is the conversation (user questions +

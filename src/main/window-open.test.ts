@@ -55,13 +55,13 @@ describe('decideWindowOpen', () => {
   it("carries the opener's referrer onto the tab — LinkedIn safety/go needs it", () => {
     expect(
       decideWindowOpen({
-        url: 'https://www.linkedin.com/safety/go/?url=https%3A%2F%2Fdeveloper.lemlist.com',
+        url: 'https://www.linkedin.com/safety/go/?url=https%3A%2F%2Fdeveloper.example.org',
         disposition: 'foreground-tab',
         referrer: { url: 'https://www.linkedin.com/feed/update/urn:li:activity:123/' }
       })
     ).toEqual({
       kind: 'tab',
-      url: 'https://www.linkedin.com/safety/go/?url=https%3A%2F%2Fdeveloper.lemlist.com',
+      url: 'https://www.linkedin.com/safety/go/?url=https%3A%2F%2Fdeveloper.example.org',
       referrer: 'https://www.linkedin.com/feed/update/urn:li:activity:123/',
       background: false
     })
@@ -94,17 +94,17 @@ describe('decideWindowOpen', () => {
 })
 
 describe('decideExtensionWindowOpen', () => {
-  const popupUrl = 'chrome-extension://khnbclggeggefodgimdekejhipkeobnc/public/popup.html'
+  const popupUrl = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop/public/popup.html'
 
-  it('routes an extension popup link (lemlist "Get started") to a Mira tab', () => {
+  it('routes an extension popup link ("Get started") to a Mira tab', () => {
     expect(
       decideExtensionWindowOpen(popupUrl, {
-        url: 'https://www.linkedin.com/search/results/people/?company=lemlist',
+        url: 'https://www.linkedin.com/search/results/people/?company=example',
         disposition: 'foreground-tab'
       })
     ).toEqual({
       kind: 'tab',
-      url: 'https://www.linkedin.com/search/results/people/?company=lemlist',
+      url: 'https://www.linkedin.com/search/results/people/?company=example',
       referrer: undefined,
       background: false
     })

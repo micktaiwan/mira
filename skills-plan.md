@@ -1,198 +1,196 @@
-# Plan — Skills contextuels par site (`skills`)
+# Plan — Contextual per-site skills (`skills`)
 
-Posé le 2026-07-10 (ex `actions-plan.md`, renommé « skills » le 2026-07-10). Spec de
-démarrage : le concept est arrêté, l'implémentation reste à faire. L'archi générale
-et les deux principes fondateurs vivent dans `CLAUDE.md` ; l'état d'avancement vivra
-dans `track.md`. Ce doc porte le plan + les **questions ouvertes** (marquées ❓) à
-trancher au fur et à mesure. Approche assumée : on **crée le premier skill** et on
-affine le modèle en avançant — plusieurs points ci-dessous ne se trancheront qu'au
-contact du code.
+Set on 2026-07-10 (formerly `actions-plan.md`, renamed "skills" on 2026-07-10). Starting
+spec: the concept is settled, the implementation is still to do. The general architecture
+and the two founding principles live in `CLAUDE.md`; progress will live in `track.md`.
+This doc carries the plan + the **open questions** (marked ❓) to settle as we go.
+Deliberate approach: we **create the first skill** and refine the model as we move
+forward — several points below will only be settled on contact with the code.
 
-> **Désambiguïsation.** Ici, un « skill » = une **capacité de Mira sur un site donné**
-> (résumer cette conversation, répondre, capitaliser…). C'est distinct des **skills
-> de Claude** (les `/skills` du harness). Comme Mira est pilotable par Claude via MCP,
-> le risque de collision de vocabulaire existe : quand un skill Mira apparaît au socket
-> / MCP, le nommer sans ambiguïté (préfixe `skill:` / commandes `list-skills`,
-> `run-skill`).
+> **Disambiguation.** Here, a "skill" = a **Mira capability on a given site**
+> (summarize this conversation, reply, save to notes…). It is distinct from **Claude's
+> skills** (the harness's `/skills`). Since Mira can be driven by Claude via MCP, the risk
+> of a vocabulary collision exists: when a Mira skill shows up on the socket / MCP, name it
+> unambiguously (prefix `skill:` / commands `list-skills`, `run-skill`).
 
-## 1. Le concept
+## 1. The concept
 
-Un **skill** est une **capacité contextuelle pilotée par une conf par site**.
+A **skill** is a **contextual capability driven by a per-site config**.
 
-Sur la page courante, Mira lit le contenu, regarde de quel site il s'agit, et propose
-le **jeu de skills défini pour ce site**. Chaque skill a son propre **prompt système**
-et son propre comportement.
+On the current page, Mira reads the content, looks at which site it is, and offers the
+**set of skills defined for that site**. Each skill has its own **system prompt** and its
+own behavior.
 
-Exemple canonique — je suis sur LinkedIn dans une conversation. Les skills du site :
+Canonical example — I am on LinkedIn in a conversation. The site's skills:
 
-- **Résumer la conversation** → texte affiché (dans un pane à droite, voir §2).
-- **Répondre automatiquement** → génère une réponse (V2 : la réinjecte dans la zone
-  de compo ; V1 : affichée, je copie-colle).
-- **Capitaliser dans le SC** → envoie le contenu vers mon second cerveau (fichier /
-  Panorama / skill Claude `/capitalise`).
+- **Summarize the conversation** → text displayed (in a right-hand pane, see §2).
+- **Reply automatically** → generates a reply (V2: injects it back into the compose box;
+  V1: displayed, I copy-paste).
+- **Save to my notes** → sends the content to an external notes system (a file, a notes
+  app, or a Claude skill).
 
-**Où ça se surface — dans la palette Cmd+K.** [DÉCIDÉ 2026-07-10] Les skills applicables
-au site actif apparaissent comme des **entrées dynamiques de la palette**, sous un groupe
-**« Skills sur cette page »** — exactement le mécanisme `buildPaletteEntries` déjà en
-place (voir `src/main/palette.ts`). Pas de surface d'entrée séparée : la palette est
-déjà le hub d'actions, les skills en sont une source de plus. `list-skills` (voir §3)
-alimente ces entrées ; choisir une entrée lance `run-skill`.
+**Where it surfaces — in the Cmd+K palette.** [DECIDED 2026-07-10] The skills that apply
+to the active site appear as **dynamic palette entries**, under a **"Skills on this page"**
+group — exactly the `buildPaletteEntries` mechanism already in place (see
+`src/main/palette.ts`). No separate entry surface: the palette is already the action hub,
+skills are one more source for it. `list-skills` (see §3) feeds these entries; picking an
+entry launches `run-skill`.
 
-L'intérêt d'un feature natif (vs une extension Chrome) : il s'inscrit dans les **deux
-principes fondateurs** de Mira. Un skill = une commande du registre, donc **pilotable**
-(socket + MCP → un agent peut lancer un skill sur ma page depuis une conversation) et
-**testable** (la logique de résolution site→skills est un test Vitest, sans lancer
-Chromium). Décision prise le 2026-07-10 : on fait d'abord le natif dans Mira, pas une
-extension. La portabilité vers d'autres navigateurs n'est pas un objectif.
+The point of a native feature (vs a Chrome extension): it fits the **two founding
+principles** of Mira. A skill = a registry command, so **drivable** (socket + MCP → an
+agent can launch a skill on my page from a conversation) and **testable** (the site→skills
+resolution logic is a Vitest test, without launching Chromium). Decision made on
+2026-07-10: we do the native version in Mira first, not an extension. Portability to other
+browsers is not a goal.
 
-## 2. L'abstraction centrale : un skill
+## 2. The central abstraction: a skill
 
-La conf d'un site = une **liste de skills**. Un skill est décrit par :
+A site's config = a **list of skills**. A skill is described by:
 
-| Champ    | Rôle                                                                                                 |
-| -------- | ---------------------------------------------------------------------------------------------------- |
-| `name`   | Libellé affiché dans la palette (« Skills sur cette page »)                                          |
-| `match`  | Quand le skill s'applique (domaine, pattern d'URL, éventuellement un sélecteur — voir ❓ extraction) |
-| `prompt` | Le prompt système propre au skill                                                                    |
-| `source` | Ce qu'on extrait de la page et qu'on donne à l'IA (voir §4)                                          |
-| `sink`   | Où va le résultat (voir ci-dessous)                                                                  |
+| Field    | Role                                                                                              |
+| -------- | ------------------------------------------------------------------------------------------------- |
+| `name`   | Label shown in the palette ("Skills on this page")                                                |
+| `match`  | When the skill applies (domain, URL pattern, possibly a selector — see ❓ extraction)             |
+| `prompt` | The skill's own system prompt                                                                     |
+| `source` | What we extract from the page and give to the AI (see §4)                                         |
+| `sink`   | Where the result goes (see below)                                                                 |
 
-### La destination (`sink`) — dépend du skill
+### The destination (`sink`) — depends on the skill
 
-Le résultat ne va **pas toujours au même endroit** : c'est le skill qui décide. Trois
-familles, de difficulté croissante — c'est le cœur du découpage V1/V2 :
+The result does **not always go to the same place**: the skill decides. Three families,
+of increasing difficulty — this is the core of the V1/V2 split:
 
-1. **Pane à droite** — ex. résumer la conversation → un texte AI s'affiche dans un
-   **panneau latéral droit** de Mira. **Nouvelle surface chrome.** Point clé (piège #3
-   du `CLAUDE.md`) : ce pane **rétrécit la vue web** (on réduit la largeur du
-   `WebContentsView`, comme la sidebar le décale à gauche), il ne **déborde donc pas**
-   par-dessus la page → pas de couche native au-dessus, pas le problème de l'overlay.
-   **Périmètre V1** (c'est la surface d'affichage par défaut). _(surface à construire)_
-2. **Sur la page elle-même** — ex. répondre auto qui écrit dans la zone de compo, ou
-   annoter/surligner. C'est un **write DOM** dans la `WebContentsView`. **Fragile**
-   (dépend du HTML du site, casse quand le site change). **Différé V2** (voir §6).
-3. **Sortie externe** — ex. capitaliser dans le SC → écrit un fichier / appelle
-   Panorama / déclenche un skill Claude. Le skill tape dans un outil **hors Mira**
-   (socket, MCP, script). ❓ dans le périmètre V1 ? (voir Questions ouvertes)
+1. **Right-hand pane** — e.g. summarize the conversation → an AI text is displayed in a
+   **right side panel** of Mira. **New chrome surface.** Key point (pitfall #3 of
+   `CLAUDE.md`): this pane **shrinks the web view** (we reduce the width of the
+   `WebContentsView`, the way the sidebar shifts it on the left), so it does **not
+   overflow** on top of the page → no native layer above it, not the overlay problem.
+   **V1 scope** (it is the default display surface). _(surface to build)_
+2. **On the page itself** — e.g. auto-reply that writes into the compose box, or
+   annotate/highlight. It is a **DOM write** in the `WebContentsView`. **Fragile**
+   (depends on the site's HTML, breaks when the site changes). **Deferred to V2** (see §6).
+3. **External output** — e.g. save to notes → writes a file / calls an external notes
+   app / triggers a Claude skill. The skill hits a tool **outside Mira** (socket, MCP,
+   script). ❓ in V1 scope? (see Open questions)
 
-### L'asynchrone — un hourglass dans la surface concernée
+### Async — an hourglass in the surface concerned
 
-`run-skill` appelle une IA : c'est **lent** (réseau + modèle), contrairement à toutes
-les commandes actuelles quasi-instantanées. Le retour visuel « ça travaille » vit **dans
-la surface du sink**, et dépend donc du skill : un **hourglass / spinner** dans le pane
-à droite pour un résumé, ou un indicateur dans l'UI pour un skill qui écrit sur la page.
-Modèle exact (streaming token par token ? annulation ? état d'erreur ?) : **à creuser
-au premier skill.** ❓
+`run-skill` calls an AI: it is **slow** (network + model), unlike all the current,
+near-instant commands. The "it's working" visual feedback lives **in the sink's surface**,
+and so depends on the skill: an **hourglass / spinner** in the right-hand pane for a
+summary, or an indicator in the UI for a skill that writes on the page. Exact model
+(token-by-token streaming? cancellation? error state?): **to dig into at the first
+skill.** ❓
 
-## 3. Surface registre (le « tout pilotable »)
+## 3. Registry surface (the "everything drivable")
 
-Deux commandes dans le registre (domaine `commands/skills.ts`, sur le modèle de
-`commands/tabs.ts` / `commands/palette.ts`) :
+Two commands in the registry (domain `commands/skills.ts`, modeled on
+`commands/tabs.ts` / `commands/palette.ts`):
 
-- **`list-skills`** — pour la page/le site courant, retourne les skills applicables
-  (`{ name, ... }`). Alimente les entrées « Skills sur cette page » de la palette _et_
-  est interrogeable au socket/MCP.
-- **`run-skill`** — exécute un skill nommé : extrait la source, appelle l'IA avec le
-  prompt, applique le `sink`. Asynchrone (voir §2).
+- **`list-skills`** — for the current page/site, returns the applicable skills
+  (`{ name, ... }`). Feeds the palette's "Skills on this page" entries _and_ can be queried
+  over the socket/MCP.
+- **`run-skill`** — runs a named skill: extracts the source, calls the AI with the prompt,
+  applies the `sink`. Async (see §2).
 
-Conséquence directe : depuis une conversation Claude (via MCP, wrapper du socket), je
-peux lister et lancer un skill sur la page ouverte dans Mira.
+Direct consequence: from a Claude conversation (via MCP, wrapper of the socket), I can
+list and launch a skill on the page open in Mira.
 
-La logique **pure et testable** à isoler (un test Vitest, pas de Chromium) : la
-**résolution** `(url, conf) → liste de skills applicables`. L'appel IA et le DOM sont
-les bords non-testés unitairement (comme les bits natifs Electron ailleurs).
+The **pure, testable** logic to isolate (a Vitest test, no Chromium): the **resolution**
+`(url, conf) → list of applicable skills`. The AI call and the DOM are the edges not
+unit-tested (like the native Electron bits elsewhere).
 
-## 4. Extraction du contenu
+## 4. Content extraction
 
-Par défaut, extraire le **texte propre** de la page, pas `document.body.innerText`
-(pollué par menus/pubs/footers). État de l'art : **Readability.js** (la lib du mode
-lecture de Firefox) injectée dans la `WebContentsView`, résultat remonté par IPC.
+By default, extract the page's **clean text**, not `document.body.innerText` (polluted by
+menus/ads/footers). State of the art: **Readability.js** (the lib behind Firefox's reader
+mode) injected into the `WebContentsView`, result sent back over IPC.
 
-Mais l'exemple LinkedIn montre le besoin de cibler un **bout précis** (juste le fil de
-la conversation, pas toute la page). D'où la question ouverte sur la granularité de la
-source par skill (❓ §Questions ouvertes).
+But the LinkedIn example shows the need to target a **precise piece** (just the
+conversation thread, not the whole page). Hence the open question on the granularity of
+the source per skill (❓ §Open questions).
 
-## 5. Le moteur IA
+## 5. The AI engine
 
-❓ **API distante vs local — non tranché.** Deux voies :
+❓ **Remote API vs local — not settled.** Two paths:
 
-- **API** (Claude / OpenAI) : qualité max, clé stockée côté main process (Node, pas les
-  contraintes MV3), appels sans CORS. Coûte, et le contenu part chez un tiers.
-- **Local** (Ollama sur `localhost`) : gratuit, privé, mais qualité moindre et dépend du
-  Mac allumé.
+- **API** (Claude / OpenAI): max quality, key stored on the main process side (Node, not
+  the MV3 constraints), calls without CORS. Costs money, and the content goes to a third
+  party.
+- **Local** (Ollama on `localhost`): free, private, but lower quality and depends on the
+  Mac being on.
 
-Piste par défaut à confirmer : commencer en **API, clé en conf locale**, ajouter le
-local ensuite si l'usage suit. À trancher au moment d'implémenter.
+Default lead to confirm: start with the **API, key in local config**, add local later if
+usage follows. To settle at implementation time.
 
-## 6. Différé V2 — réinjection HTML dans la page
+## 6. Deferred to V2 — HTML injection into the page
 
-Le cas « répondre auto qui écrit directement dans la zone de compo LinkedIn ». Hors
-périmètre V1 (affichage dans le pane droit seul). C'est le morceau fragile : écrire dans
-le DOM d'un site tiers dépend de son HTML (sélecteurs qui cassent, champs
-contenteditable/React qui n'acceptent pas un simple `.value =`, events synthétiques à
-dispatcher pour que le site enregistre la saisie). À spécifier proprement quand on
-l'attaque — ne pas l'improviser en V1.
+The "auto-reply that writes directly into the LinkedIn compose box" case. Out of V1 scope
+(display in the right pane only). It is the fragile piece: writing into the DOM of a
+third-party site depends on its HTML (selectors that break, contenteditable/React fields
+that do not accept a plain `.value =`, synthetic events to dispatch so the site records the
+input). To be specified properly when we tackle it — do not improvise it in V1.
 
-## 7. Questions ouvertes (à trancher, souvent au premier skill)
+## 7. Open questions (to settle, often at the first skill)
 
-- ❓ **Granularité de l'extraction.** Tous les skills lisent-ils la même chose (l'article
-  Readability entier), ou un skill peut-il cibler un **bout précis** de la page via un
-  sélecteur (le fil de conv LinkedIn) ? Détermine si `source` porte un sélecteur.
+- ❓ **Extraction granularity.** Do all skills read the same thing (the whole Readability
+  article), or can a skill target a **precise piece** of the page via a selector (the
+  LinkedIn conversation thread)? Determines whether `source` carries a selector.
 
-- ❓ **Modèle async précis.** Streaming token par token dans le pane, ou affichage en
-  une fois à la fin ? Annulation ? État d'erreur ? À creuser au premier skill.
+- ❓ **Precise async model.** Token-by-token streaming in the pane, or one-shot display at
+  the end? Cancellation? Error state? To dig into at the first skill.
 
-- ❓ **Édition de la conf par site — « UI intelligente ».** Une UI pour définir/éditer
-  les skills d'un site, pas juste un JSON à la main. Forme à concevoir plus tard.
-  Sous-questions : où vit la conf (fichier type `~/.mira/skills.json` ? par profil ?),
-  comment on l'édite (Settings ? capture du sélecteur en pointant l'élément ?), skills
-  globaux par défaut + overrides par site.
+- ❓ **Editing the per-site config — "smart UI".** A UI to define/edit a site's skills,
+  not just a hand-written JSON. Shape to design later. Sub-questions: where the config
+  lives (a file like `~/.mira/skills.json`? per profile?), how it is edited (Settings?
+  selector capture by pointing at the element?), global default skills + per-site
+  overrides.
 
-- ❓ **Sortie externe en V1 ?** Le skill « capitaliser dans le SC » (sink externe)
-  entre-t-il dans le premier jet, ou V1 = pane droit + le externe vient juste après ?
+- ❓ **External output in V1?** Does the "save to notes" skill (external sink) make it into
+  the first cut, or is V1 = right pane + the external one comes right after?
 
-- ❓ **Moteur IA** : API vs local en premier (voir §5).
+- ❓ **AI engine**: API vs local first (see §5).
 
-## 8. Périmètre V1 (proposé)
+## 8. V1 scope (proposed)
 
-- Skills du site courant listés comme entrées **« Skills sur cette page »** dans la
-  palette Cmd+K (`list-skills`).
-- `run-skill` avec **sink = pane à droite** (nouvelle surface chrome qui rétrécit la vue
-  web), hourglass pendant l'appel.
-- Extraction Readability par défaut.
-- Une conf par site minimale (forme à décider — l'UI intelligente est différée).
-- Moteur IA branché sur une API avec clé locale (à confirmer).
-- **On code un premier skill concret (ex. résumer une conv) de bout en bout**, et on
-  laisse le modèle se stabiliser à partir de ce cas réel.
+- Current site's skills listed as **"Skills on this page"** entries in the Cmd+K palette
+  (`list-skills`).
+- `run-skill` with **sink = right-hand pane** (new chrome surface that shrinks the web
+  view), hourglass during the call.
+- Readability extraction by default.
+- A minimal per-site config (shape to decide — the smart UI is deferred).
+- AI engine wired to an API with a local key (to confirm).
+- **We code a first concrete skill (e.g. summarize a conversation) end to end**, and let
+  the model settle from that real case.
 
-Réinjection HTML (§6), UI d'édition intelligente (§7) et sortie externe explicitement
-hors V1 (sauf décision contraire).
+HTML injection (§6), smart editing UI (§7) and external output explicitly out of V1
+(unless decided otherwise).
 
-## 9. Bascule 2026-07-11 — l'agent lourd vit HORS de Mira (option A)
+## 9. Switch on 2026-07-11 — the heavy agent lives OUTSIDE Mira (option A)
 
-Discussion tranchée le 2026-07-11 : le besoin réel (sur une page comme Kondo, analyser
-qui écrit, enrichir via web + MCP Panorama, rédiger une réponse contextualisée) est un
-**agent multi-étapes outillé**, pas le skill one-shot de ce plan. Décision : **on ne
-construit pas ce moteur agent dans Mira.** L'agent, c'est **Claude Code** tournant dans le
-terminal (Kova) ; il pilote Mira **depuis dehors** via le socket (`exec-js` + registre).
-C'est le paiement direct du principe fondateur « tout pilotable ».
+Discussion settled on 2026-07-11: the real need (on a third-party web app page, analyze who
+is writing, enrich via the web + an external MCP, draft a contextualized reply) is a
+**multi-step tooled agent**, not the one-shot skill of this plan. Decision: **we do not
+build that agent engine inside Mira.** The agent is **Claude Code** running in the terminal
+(Kova); it drives Mira **from outside** through the socket (`exec-js` + registry). It is the
+direct payoff of the "everything drivable" founding principle.
 
-Conséquences pour ce plan :
+Consequences for this plan:
 
-- Le moteur LLM interne (pane, provider `claude-cli`, toggle Agent) reste **utile pour
-  une Q/R rapide sur la page**, mais **cesse d'être la cible pour l'agentique**. Ne pas
-  investir à en faire un agent multi-outils : ce rôle part dehors.
-- Les skills built-in de Mira restent **légers** (résumé, traduction… un appel LLM), et
-  Mira garde son rôle de **navigateur pilotable**. L'ambition monte d'un cran **dans les
-  skills Claude Code**, pas dans le navigateur.
-- **Ordre A → B.** **A** = skill Claude Code → Mira via le socket, testable **sans une
-  ligne de code Mira**. **B** (plus tard) = lancer un skill depuis la palette Cmd+K, où
-  Mira spawne un pane Kova qui lance Claude Code, lequel repilote Mira.
-- **MCP Mira** = wrapper d'ergonomie par-dessus le socket, **pas un prérequis** (le socket
-  suffit pour tout tester).
-- **Premier test concret : skill Claude Code « Kondo triage »** (ouvrir Kondo, attendre le
-  chargement, lire le 1er message, décider si ça vaut une réponse). ⚠️ Kondo n'est pas une
-  simple page : c'est une **extension** (`kojhnafki…`) **+** une **web app** `app.trykondo.com`
-  couplées par un content script — l'agent pilote la web app, pas juste un DOM statique.
+- The internal LLM engine (pane, `claude-cli` provider, Agent toggle) stays **useful for
+  quick Q&A on the page**, but **stops being the target for agentic work**. Do not invest
+  in turning it into a multi-tool agent: that role moves outside.
+- Mira's built-in skills stay **light** (summary, translation… one LLM call), and Mira
+  keeps its role as a **drivable browser**. The ambition goes up a notch **in the Claude
+  Code skills**, not in the browser.
+- **Order A → B.** **A** = Claude Code skill → Mira through the socket, testable **without
+  a single line of Mira code**. **B** (later) = launch a skill from the Cmd+K palette, where
+  Mira spawns a Kova pane that launches Claude Code, which drives Mira back.
+- **Mira MCP** = an ergonomic wrapper on top of the socket, **not a prerequisite** (the
+  socket is enough to test everything).
+- **First concrete test: a Claude Code "inbox triage" skill** (open the web app, wait for
+  it to load, read the first message, decide whether it deserves a reply). ⚠️ The target
+  is not a plain page: it is an **extension** **+** a **web app** coupled by a content
+  script — the agent drives the web app, not just a static DOM.
 
-État vivant + prochaine action dans `track.md` (ligne « Agent hors de Mira »).
+Living state + next action in `track.md` ("Agent outside Mira" line).

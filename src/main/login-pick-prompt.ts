@@ -45,7 +45,7 @@ export interface LoginPickOption {
 }
 
 export interface LoginPickRequest {
-  /** The page being filled ("eu.holistics.io"). */
+  /** The page being filled ("eu.example.net"). */
   host: string
   /** The Bitwarden account the options come from, for the "which vault?" line. */
   account: string

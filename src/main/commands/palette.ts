@@ -5,7 +5,7 @@
 //   and this command only reads existing context slices — so it needs NO new
 //   capability of its own beyond `setPaletteOpen`.
 // - `toggle-palette` shows / hides the overlay. Because a WebContentsView composites
-//   ABOVE the chrome DOM (CLAUDE.md "les deux pièges"), a normal overlay would be
+//   ABOVE the chrome DOM (trap #3 in .claude/rules/main-native-gotchas.md), a normal overlay would be
 //   hidden behind the page; opening the palette hides the active view (like the
 //   Settings tab) so the chrome overlay is visible. That native effect lives behind
 //   the PaletteContext slice, implemented by the ProfileManager.

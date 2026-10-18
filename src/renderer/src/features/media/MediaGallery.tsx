@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 
 // The fullscreen media gallery (Cmd+Alt+Shift+M). Main hides the active web view
 // while it is open (like the command palette), so this chrome overlay is visible
-// over what would otherwise be the page — no piège #3 (see CLAUDE.md).
+// over what would otherwise be the page — no trap #3 (see .claude/rules/main-native-gotchas.md).
 //
 // It renders whatever `collect-media` returns for the active tab: media merged
 // from the DOM and the continuous network buffer, each item tagged with its

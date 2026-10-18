@@ -8,3 +8,11 @@ out
 native/**/build/
 chrome-extension-api.preload.js
 dist-release
+
+# Local, never public
+skill/LOCAL.md
+CLAUDE.local.md
+track.md
+
+.claude/commands/form.md
+.claude/commands/linkedin-triage.md

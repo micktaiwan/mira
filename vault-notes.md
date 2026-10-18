@@ -1,127 +1,125 @@
-# Mira — cloisonnement par profil & profils chiffrés (notes)
+# Mira — per-profile isolation & encrypted profiles (notes)
 
-Historique et détail technique du chantier « cloisonnement complet par profil »
-et « profil chiffré (vault) ». Le `track.md` n'en garde qu'une ligne d'état ;
-tout le récit vit ici.
+History and technical detail of the "full per-profile isolation" and "encrypted profile
+(vault)" workstreams. `track.md` keeps only one status line for it; the whole story lives
+here.
 
-## Décision (2026-07-11)
+## Decision (2026-07-11)
 
-Chaque profil est une **unité de stockage isolée** : l'historique, les
-permissions et les favoris d'un profil ne doivent PAS fuiter vers un autre.
+Each profile is an **isolated storage unit**: one profile's history, permissions and
+bookmarks must NOT leak into another.
 
-- Isolés dès le départ : la **partition Electron** (cookies/localStorage/IndexedDB,
-  `Partitions/mira-<id>/`), les **onglets** (`sessions.json`, clé par id) et les
+- Isolated from the start: the **Electron partition** (cookies/localStorage/IndexedDB,
+  `Partitions/mira-<id>/`), the **tabs** (`sessions.json`, keyed by id) and the
   **extensions**.
-- Fuyaient encore : `history.json` et `permissions.json` (tableaux globaux à plat).
-  → rendus **par profil**.
-- **Favoris aussi par profil** (renverse le choix « global minimaliste » d'avant).
-- **Réglages restent globaux** (home URL, clé LLM, largeurs — pas de la donnée de
-  navigation).
-- **Pas de migration** : OK de jeter l'historique actuel (confirmé).
+- Still leaking: `history.json` and `permissions.json` (flat global arrays).
+  → made **per profile**.
+- **Bookmarks per profile too** (reverses the earlier "minimalist global" choice).
+- **Settings stay global** (home URL, LLM key, widths — not browsing data).
+- **No migration**: OK to throw away the current history (confirmed).
 
-## Stockage par profil (FAIT 2026-07-11)
+## Per-profile storage (DONE 2026-07-11)
 
-1. Refactor de `ProfileManager` en collaborateurs : `llm-runner.ts`,
+1. Refactor of `ProfileManager` into collaborators: `llm-runner.ts`,
    `tooltip-controller.ts`, `bookmarks-controller.ts`, `profile-data.ts`.
-2. Historique + permissions + favoris vivent dans
-   `userData/profiles/<id>/{history,permissions,bookmarks}.json`, un
-   `ProfileData` / `BookmarksController` par id (`dataFor` / `bookmarksFor`,
-   création lazy).
-3. `recordVisit` / `recordGrant` / favoris routés vers le profil ciblé ;
-   broadcast permissions/favoris scopé à la fenêtre du profil ; menu natif
-   Bookmarks = arbre du profil focus (rebuild au changement de focus).
-4. Les commandes history/permissions/bookmarks agissent sur le profil focus.
+2. History + permissions + bookmarks live in
+   `userData/profiles/<id>/{history,permissions,bookmarks}.json`, one
+   `ProfileData` / `BookmarksController` per id (`dataFor` / `bookmarksFor`,
+   lazy creation).
+3. `recordVisit` / `recordGrant` / bookmarks routed to the targeted profile;
+   permissions/bookmarks broadcast scoped to the profile's window; native Bookmarks
+   menu = tree of the focused profile (rebuilt on focus change).
+4. The history/permissions/bookmarks commands act on the focused profile.
 
-Tests OK. À valider en app après build (rebuild requis).
+Tests OK. To validate in the app after a build (rebuild required).
 
-## Profil chiffré — vault (cœur pilotable FAIT 2026-07-11)
+## Encrypted profile — vault (drivable core DONE 2026-07-11)
 
-Modèle : **déchiffrer vers l'emplacement normal, re-chiffrer au repos** (pas de
-symlink, décidé).
+Model: **decrypt to the normal location, re-encrypt at rest** (no symlink, decided).
 
-- Vault `.sparsebundle` **AES-256 par profil** dans `userData/vaults/<id>.sparsebundle`,
-  chiffre les DEUX dossiers du profil (`profiles/<id>` trails + `Partitions/mira-<id>`
+- **AES-256 per-profile** `.sparsebundle` vault in `userData/vaults/<id>.sparsebundle`,
+  encrypts BOTH of the profile's folders (`profiles/<id>` trails + `Partitions/mira-<id>`
   cookies).
-- `vault.ts` (pur, testé : `vaultPlan` / `assertEncryptable` / `needsUnlock` — le
-  default n'est pas chiffrable, pas de dossier auto-contenu).
-- `vault-service.ts` (natif `hdiutil` + cp/rm, **verify-before-wipe** sur
+- `vault.ts` (pure, tested: `vaultPlan` / `assertEncryptable` / `needsUnlock` — the
+  default profile cannot be encrypted, it has no self-contained folder).
+- `vault-service.ts` (native `hdiutil` + cp/rm, **verify-before-wipe** on
   encrypt+lock).
-- Domaine `commands/vault.ts` : `encrypt-profile` / `unlock-profile` /
-  `lock-profile` / `list-vaults` (pilotables + testés) ; flag `Profile.encrypted`
-  persisté.
-- `ProfileManager` : `unlockedVaults` (id→password en mémoire), gate `openProfile`
-  sur profil verrouillé, skip au démarrage.
-- **encrypt/lock exigent la fenêtre fermée** (course sur les handles Electron évitée).
+- Domain `commands/vault.ts`: `encrypt-profile` / `unlock-profile` /
+  `lock-profile` / `list-vaults` (drivable + tested); `Profile.encrypted` flag
+  persisted.
+- `ProfileManager`: `unlockedVaults` (id→password in memory), `openProfile` gated
+  on a locked profile, skipped at startup.
+- **encrypt/lock require the window to be closed** (race on the Electron handles avoided).
 
-### Natif validé en réel (2026-07-11)
+### Native validated for real (2026-07-11)
 
-Via `vault-service.integration.test.ts` (gardé par `MIRA_VAULT_IT=1`, vrai
-`hdiutil` sur un dossier temp jetable, 5/5 : encrypt+wipe, unlock intact, edit
-persiste après lock, mauvais mot de passe rejeté, discard). S'auto-nettoie (aucun
-volume résiduel).
+Via `vault-service.integration.test.ts` (guarded by `MIRA_VAULT_IT=1`, real
+`hdiutil` on a throwaway temp folder, 5/5: encrypt+wipe, unlock intact, edit
+persists after lock, wrong password rejected, discard). Cleans up after itself (no
+leftover volume).
 
-## Cycle de vie (tranché + câblé 2026-07-11)
+## Lifecycle (settled + wired 2026-07-11)
 
-1. **Auto-lock à la fermeture de fenêtre** — handler `closed`, hors quit (async,
+1. **Auto-lock on window close** — `closed` handler, outside quit (async,
    fire-and-forget).
-2. **Perte de session sur arrêt sale = OK** (« incognito qui garde les cookies »)
-   → pas de réconciliation : au démarrage `reconcileVaults()` **efface** le
-   plaintext qui traîne d'un profil chiffré (le vault fait foi), `discardPlaintext`
-   dans vault-service.
-3. Password en clair en RAM tant que déverrouillé = accepté.
+2. **Session loss on unclean shutdown = OK** ("incognito that keeps the cookies")
+   → no reconciliation: at startup `reconcileVaults()` **erases** the plaintext left
+   over from an encrypted profile (the vault is authoritative), `discardPlaintext`
+   in vault-service.
+3. Password in clear in RAM while unlocked = accepted.
 
-## UI dialog mot de passe (FAIT + flux in-app validé 2026-07-12)
+## Password dialog UI (DONE + in-app flow validated 2026-07-12)
 
-Dialog natif dans Settings → Profiles (`VaultPasswordDialog`, boutons
-Encrypt/Unlock/Lock, badge locked) ; cycle encrypt→unlock→use→lock exercé en vrai.
+Native dialog in Settings → Profiles (`VaultPasswordDialog`, Encrypt/Unlock/Lock
+buttons, locked badge); encrypt→unlock→use→lock cycle exercised for real.
 
-## Saga « perte des cookies » (reloggué à chaque cycle)
+## The "lost cookies" saga (logged out at every cycle)
 
-### Première cause trouvée + fix (2026-07-12)
+### First cause found + fix (2026-07-12)
 
-Electron met en cache l'objet `Session` d'une partition pour toute la vie de l'app
-et ne la relit JAMAIS quand le vault échange les fichiers dessous → un 2ᵉ unlock
-dans le même run sert une session vide = déloggué (prouvé : disque = 37 cookies,
-fichier même pas retouché, mais session vide).
+Electron caches a partition's `Session` object for the whole life of the app and NEVER
+rereads it when the vault swaps the files underneath → a 2nd unlock in the same run serves
+an empty session = logged out (proven: disk = 37 cookies, file not even touched again, but
+empty session).
 
-**Fix = partition à nonce par unlock** (`noncePartitionDir` → dossier live
-`mira-<id>-<nonce>` jamais vu d'Electron → session fraîche qui lit les cookies
-restaurés) ; toute résolution de partition passe par `effectivePartition` (map
-`unlockedPartition`) ; `flushStore()` / `flushStorageData()` au lock avant la
-copie ; éviction + `ProfileData.dispose()` des caches `dataById` / `bookmarksById`
-au lock/unlock (annule les timers de debounce → règle aussi la fuite `history.json`
-recréé APRÈS l'effacement) ; `reconcile` efface les dossiers à nonce orphelins par
-nom (`discardProfilePlaintext` + `isProfilePartitionDir`, glob).
+**Fix = per-unlock nonce partition** (`noncePartitionDir` → live folder
+`mira-<id>-<nonce>` never seen by Electron → fresh session that reads the restored
+cookies); every partition resolution goes through `effectivePartition` (map
+`unlockedPartition`); `flushStore()` / `flushStorageData()` at lock before the copy;
+eviction + `ProfileData.dispose()` of the `dataById` / `bookmarksById` caches at
+lock/unlock (cancels the debounce timers → also fixes the leak of `history.json`
+recreated AFTER the erase); `reconcile` erases orphaned nonce folders by name
+(`discardProfilePlaintext` + `isProfilePartitionDir`, glob).
 
-Validé en dev : unlock → use → lock → re-unlock garde les cookies.
+Validated in dev: unlock → use → lock → re-unlock keeps the cookies.
 
-### Bug revenu, VRAIE cause (2026-07-12)
+### Bug came back, REAL cause (2026-07-12)
 
-Le nonce n'était PAS la cause récurrente. Prouvé (banc Electron isolé) que copier
-la partition **sans flush** perd même les cookies **persistants** (Chromium les
-bufferise en RAM) ; et Mira ne re-chiffrait le vault qu'à la **fermeture de
-fenêtre** (auto-lock), **jamais au quit de l'app** → quitter avec le profil ouvert
-(`open:true` dans sessions.json) figeait le vault au dernier lock, `reconcileVaults`
-effaçant le plaintext au boot → chaque session re-jetée.
+The nonce was NOT the recurring cause. Proven (isolated Electron bench) that copying the
+partition **without a flush** loses even the **persistent** cookies (Chromium buffers them
+in RAM); and Mira only re-encrypted the vault on **window close** (auto-lock), **never on
+app quit** → quitting with the profile open (`open:true` in sessions.json) froze the vault
+at the last lock, `reconcileVaults` erasing the plaintext at boot → every session thrown
+away again.
 
-Chiffrement **hors de cause** (cookies stockés en clair, pas de clé « Mira Safe
-Storage » au Keychain → fallback, non chiffré).
+Encryption **not at fault** (cookies stored in clear, no "Mira Safe Storage" key in the
+Keychain → fallback, unencrypted).
 
-**Fix (code fait) = lock-au-quit** : `before-quit` diffère le quit, ferme les
-fenêtres, re-chiffre tous les vaults ouverts, puis quitte (`lockAllVaults` /
-`performVaultLock` extrait, garde `lockingAll` pour ne pas doubler l'auto-lock) ;
+**Fix (code done) = lock-on-quit**: `before-quit` defers the quit, closes the windows,
+re-encrypts every open vault, then quits (`lockAllVaults` / `performVaultLock` extracted,
+`lockingAll` guard so as not to double the auto-lock);
 
-- flush ajouté à `encrypt-profile` ; + commande pilotable `lock-all-vaults`
-  (panic-lock). Tests unitaires + doc socket à jour.
+- flush added to `encrypt-profile`; + drivable command `lock-all-vaults`
+  (panic-lock). Unit tests + socket doc up to date.
 
-### Résidus non corrigés (mineurs)
+### Unfixed leftovers (minor)
 
-- Cookies de session perdus par cycle (normal).
-- `flushStorageData` non `await` (masqué par le délai hdiutil).
+- Session cookies lost per cycle (normal).
+- `flushStorageData` not `await`ed (masked by the hdiutil delay).
 
-## Reste à faire
+## Still to do
 
-**PAS ENCORE VALIDÉ EN VRAI** (natif Electron, hors tests unit) → à exercer :
-unlock → login → Cmd+Q → re-unlock → toujours loggé. Pour activer le fix : fermer
-la fenêtre du profil chiffré (sauve via l'ancien auto-lock) PUIS redémarrer Mira
-pour charger le nouveau code.
+**NOT YET VALIDATED FOR REAL** (native Electron, outside unit tests) → to exercise:
+unlock → login → Cmd+Q → re-unlock → still logged in. To activate the fix: close the
+encrypted profile's window (saves through the old auto-lock) THEN restart Mira to load the
+new code.

@@ -97,7 +97,7 @@ const TOOLTIP_DELAY_MS = 150
  *
  * Hovering an item shows a real floating tooltip. It cannot be a DOM bubble:
  * that would float up into the region the tab's WebContentsView covers, and the
- * native layer always paints on top of the DOM (CLAUDE.md, "les deux pièges").
+ * native layer always paints on top of the DOM (trap #3 in .claude/rules/main-native-gotchas.md).
  * So the bubble is a transparent overlay WINDOW drawn by main — reached, like
  * every action, through the command registry (show-tooltip / hide-tooltip). */
 export default function StatusBar(): React.JSX.Element {

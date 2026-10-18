@@ -166,7 +166,11 @@ export function clickTargetScript(
             return typeof t === 'string' && t.includes(needle)
           })
           // Deepest only: drop any element that has a matching descendant.
-          return all.filter((el) => !all.some((other) => other !== el && el.contains(other)))
+          const deepest = all.filter((el) => !all.some((other) => other !== el && el.contains(other)))
+          // An element whose whole text IS the needle beats one that merely contains it:
+          // --text 'Add' must hit the "Add" button, not an earlier "Add verification".
+          const exact = deepest.filter((el) => el.innerText.trim() === needle.trim())
+          return exact.length > 0 ? exact : deepest
         })()`
   return `(() => {
   const nth = ${opts.nth}

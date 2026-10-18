@@ -5,7 +5,7 @@ import type { CardFragment } from './card-capture'
 import type { CardPromptAnswer, CardPromptRequest } from './card-prompt'
 import type { CardVault } from './bitwarden'
 
-const PERSO: CardVault = { appDataDir: '/tmp/bw-perso', email: 'owner@example.com' }
+const PERSO: CardVault = { appDataDir: '/tmp/bw-vault', email: 'owner@example.com' }
 const NOW = new Date('2026-08-13T12:00:00Z')
 
 const source = (over: Partial<FragmentSource> = {}): FragmentSource => ({

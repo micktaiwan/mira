@@ -3,42 +3,42 @@ paths:
   - 'src/main/commands/**'
 ---
 
-# Registre de commandes — découpage anti-collision
+# Command registry — split to avoid collisions
 
-Mira est vibe codé sur **plusieurs sessions en parallèle**. Un même fichier édité
-par deux sessions = conflit de merge ou écrasement. Le découpage vise donc **un
-fichier par feature**. Comme tout est une commande, une organisation naïve
-concentrerait toutes les features dans un seul fichier — exactement le point de
-collision à éviter.
+Mira is vibe coded across **several sessions in parallel**. One file edited
+by two sessions = a merge conflict or an overwrite. So the split aims at **one
+file per feature**. Since everything is a command, a naive layout would
+concentrate every feature in a single file — exactly the collision point to
+avoid.
 
-**Registre de commandes = un fichier par domaine.** Le registre ne vit PAS dans un fichier unique. Il est éclaté dans `src/main/commands/` :
+**Command registry = one file per domain.** The registry does NOT live in a single file. It is split across `src/main/commands/`:
 
 ```
 src/main/commands/
-  registry.ts     types cœur + buildRegistry générique (change rarement)
-  context.ts      CommandContext = intersection des slices de chaque domaine
-  index.ts        racine de composition + barrel : fusionne les maps, ré-exporte l'API publique
-  navigation.ts   commandes navigate/back/forward  + slice NavContext
-  profiles.ts     commandes open/create/rename/list + slice ProfileContext
-  settings.ts     commande open-settings           + slice SettingsContext
-  <domaine>.ts    … un fichier par domaine
-  *.test.ts       un test par domaine ; faux contexte partagé dans fake-context.ts
+  registry.ts     core types + generic buildRegistry (rarely changes)
+  context.ts      CommandContext = intersection of each domain's slices
+  index.ts        composition root + barrel: merges the maps, re-exports the public API
+  navigation.ts   navigate/back/forward commands  + NavContext slice
+  profiles.ts     open/create/rename/list commands + ProfileContext slice
+  settings.ts     open-settings command           + SettingsContext slice
+  <domain>.ts     … one file per domain
+  *.test.ts       one test per domain; shared fake context in fake-context.ts
 ```
 
-Règles de découpage à respecter par toute session :
+Split rules every session must follow:
 
-1. **Ajouter une commande à un domaine existant** → éditer **uniquement** son fichier de domaine (ex. `navigation.ts`). Ne pas rapatrier de logique dans `index.ts`.
-2. **Ajouter une capacité de contexte** (une méthode dont la commande a besoin) → l'ajouter à la **slice du domaine** (`NavContext`, `ProfileContext`, …), pas à une interface géante partagée. Le `makeContext` de `src/main/profiles.ts` (ProfileManager) l'implémente ensuite.
-3. **Ajouter un domaine entier** → créer `commands/<domaine>.ts` (+ sa slice + son `.test.ts`), puis **une seule** ligne partagée à toucher : l'`import` + le spread dans `commands/index.ts`.
-4. **Ne jamais réimporter par chemin interne.** Les consommateurs importent depuis `./commands` (résout vers `commands/index.ts`), jamais `./commands/navigation` directement.
-5. **Le même principe s'applique aux autres surfaces** quand elles grossiront : CSS par surface (`assets/toolbar.css`, `sidebar.css`, `palette.css`), composants React par feature sous `renderer/src/features/<x>/`, `App.tsx` ne fait que les assembler. Éviter d'empiler dans `main.css` ou `App.tsx`.
+1. **Adding a command to an existing domain** → edit **only** its domain file (e.g. `navigation.ts`). Do not pull logic back into `index.ts`.
+2. **Adding a context capability** (a method the command needs) → add it to the **domain's slice** (`NavContext`, `ProfileContext`, …), not to a giant shared interface. The `makeContext` in `src/main/profiles.ts` (ProfileManager) then implements it.
+3. **Adding a whole domain** → create `commands/<domain>.ts` (+ its slice + its `.test.ts`), then touch **a single** shared line: the `import` + the spread in `commands/index.ts`.
+4. **Never re-import by internal path.** Consumers import from `./commands` (resolves to `commands/index.ts`), never `./commands/navigation` directly.
+5. **The same principle applies to the other surfaces** as they grow: CSS per surface (`assets/toolbar.css`, `sidebar.css`, `palette.css`), React components per feature under `renderer/src/features/<x>/`, `App.tsx` only assembles them. Avoid piling into `main.css` or `App.tsx`.
 
-Test avant d'écrire : « ma feature touche-t-elle un fichier qu'une autre session
-touche probablement aussi ? ». Si oui, c'est un signal qu'il faut un nouveau
-fichier de domaine plutôt qu'un append dans un fichier partagé.
+Test before writing: "does my feature touch a file another session is probably
+touching too?". If yes, that is a signal it needs a new domain file rather than
+an append to a shared file.
 
-**Une feature = un test.** Chaque commande du registre a son test unitaire
-(entrées → effet/valeur retournée), lancé via `npm test` (Vitest). Si une
-commande est trop couplée à Electron pour être testée simplement, extraire sa
-logique pure dans une fonction à part (testable) et ne laisser dans la commande
-que l'appel natif (fin, non testé).
+**One feature = one test.** Every registry command has its unit test
+(inputs → effect/returned value), run with `npm test` (Vitest). If a command is
+too coupled to Electron to be tested simply, extract its pure logic into a
+separate (testable) function and leave only the native call in the command
+(thin, untested).

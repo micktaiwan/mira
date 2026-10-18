@@ -3,7 +3,7 @@ import { useRef } from 'react'
 // A thin draggable divider for resizing a panel. It is a fixed overlay pinned to
 // the panel's inner edge (positioned via CSS from --sidebar-width /
 // --skill-pane-width), so it sits over the panel's own chrome — NOT over the
-// native WebContentsView, which would swallow the drag (CLAUDE.md piège #3).
+// native WebContentsView, which would swallow the drag (trap #3 in .claude/rules/main-native-gotchas.md).
 //
 // While dragging it reports the new width live (onResize) so the chrome can
 // update the CSS var and ask main to reflow the web view; onCommit fires once on

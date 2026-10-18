@@ -77,7 +77,7 @@
 
 /* Panel resize handles: a thin col-resize strip pinned to each panel's INNER
    edge (so it overlaps the panel's own chrome, never the native web view, which
-   would eat the drag — CLAUDE.md piège #3). Positioned from the width vars so
+   would eat the drag — trap #3 in .claude/rules/main-native-gotchas.md). Positioned from the width vars so
    they track the panel as it resizes. */
 .resize-handle {
   position: fixed;

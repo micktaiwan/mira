@@ -471,7 +471,7 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         {
           // Zen mode: hide toolbar + status bar + both panels in one shot; toggle
           // back to restore whatever was open. Character-mapped accelerator (not
-          // globalShortcut), so H is fine on AZERTY (CLAUDE.md piège #4).
+          // globalShortcut), so H is fine on AZERTY (trap #4 in .claude/rules/main-native-gotchas.md).
           // Display-only accelerator: the key is handled by the before-input-event
           // hook (wireTabShortcuts in profiles.ts) so it beats pages that bind it.
           label: 'Toggle Zen Mode',

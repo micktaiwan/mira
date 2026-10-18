@@ -2,7 +2,7 @@
 // this is the testable logic behind the `show-toast` command (see "tout testable"
 // in CLAUDE.md). The native side — a transparent child window shown over the
 // WebContentsView, since a chrome DOM bubble would be hidden behind that native
-// layer (CLAUDE.md "les deux pièges" #3) — lives in toast-controller.ts and calls
+// layer (trap #3 in .claude/rules/main-native-gotchas.md) — lives in toast-controller.ts and calls
 // this.
 //
 // Everything is in device-independent pixels (DIP). getContentBounds is DIP, and

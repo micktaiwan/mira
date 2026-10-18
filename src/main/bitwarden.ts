@@ -12,7 +12,7 @@
 //      directory is an INDEPENDENT logged-in account. That is what makes "the
 //      perso profile writes to the perso account, the pro one never sees it"
 //      possible at all — the CLI itself is single-account (verified: the default
-//      dir answers as the pro account while ~/.config/bw-perso answers as the
+//      dir answers as the pro account while ~/.config/bw-vault answers as the
 //      perso one).
 //
 // Consequence for the design: a card vault is identified by an appdata DIRECTORY,

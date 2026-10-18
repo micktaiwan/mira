@@ -16,9 +16,9 @@ async function run(
 /** A context with the perso profile mapped to a Bitwarden account and unlocked,
  * its active tab parked on a login page. Filling rides on the very same profile →
  * account mapping as saving. */
-async function ready(url = 'https://eu.holistics.io/users/sign_in'): Promise<Ctx> {
+async function ready(url = 'https://eu.example.net/users/sign_in'): Promise<Ctx> {
   const { ctx } = makeContext()
-  await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-perso' })
+  await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-vault' })
   await run(ctx, 'unlock-card-vault', { profileId: 'perso', password: 'good-password' })
   // Through the tab-targeted path, which is the one that parks the url on the
   // tab itself (the fake's active-tab navigate only records a spy).
@@ -33,7 +33,7 @@ async function save(
 ): Promise<string> {
   const res = await run(ctx, 'save-login', {
     profileId: 'perso',
-    url: over.url ?? 'https://eu.holistics.io/users/sign_in',
+    url: over.url ?? 'https://eu.example.net/users/sign_in',
     username: over.username ?? 'me@example.com',
     password: over.password ?? 'hunter22'
   })
@@ -47,10 +47,10 @@ async function readyWithSpies(): Promise<{
   filledLogins: unknown[]
 }> {
   const fake = makeContext()
-  await run(fake.ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-perso' })
+  await run(fake.ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-vault' })
   await run(fake.ctx, 'unlock-card-vault', { profileId: 'perso', password: 'good-password' })
   await run(fake.ctx, 'navigate', {
-    url: 'https://eu.holistics.io/users/sign_in',
+    url: 'https://eu.example.net/users/sign_in',
     tabId: 'tab-1'
   })
   return { ctx: fake.ctx, loginPick: fake.loginPick, filledLogins: fake.filledLogins }
@@ -61,7 +61,7 @@ describe('login-candidates', () => {
     const ctx = await ready()
     await save(ctx)
     const res = await run(ctx, 'login-candidates', { profileId: 'perso' })
-    expect(res).toMatchObject({ ok: true, host: 'eu.holistics.io' })
+    expect(res).toMatchObject({ ok: true, host: 'eu.example.net' })
     expect(res.candidates).toEqual([
       expect.objectContaining({ username: 'me@example.com', exact: true })
     ])
@@ -77,7 +77,7 @@ describe('login-candidates', () => {
 
   it('refuses a profile mapped to no vault', async () => {
     const { ctx } = makeContext()
-    await run(ctx, 'navigate', { url: 'https://eu.holistics.io/users/sign_in' })
+    await run(ctx, 'navigate', { url: 'https://eu.example.net/users/sign_in' })
     const res = await run(ctx, 'login-candidates', { profileId: 'nope' })
     expect(res.ok).toBe(false)
     expect(String(res.error)).toContain('no card vault')
@@ -89,7 +89,7 @@ describe('fill-login', () => {
     const ctx = await ready()
     await save(ctx)
     const res = await run(ctx, 'fill-login', { profileId: 'perso' })
-    expect(res).toMatchObject({ ok: true, host: 'eu.holistics.io' })
+    expect(res).toMatchObject({ ok: true, host: 'eu.example.net' })
     expect(res.filled).toMatchObject({
       username: 'me@example.com',
       username_filled: true,

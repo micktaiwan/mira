@@ -452,10 +452,10 @@ interface ProfileWindow {
   restoredLoadedIds: Set<string>
   /** True while the Cmd+K command palette overlay is open. The active web view is
    * hidden meanwhile so the chrome overlay is visible (a WebContentsView composites
-   * ABOVE the chrome DOM — CLAUDE.md "les deux pièges"). layout() reads this. */
+   * ABOVE the chrome DOM — the native pitfalls in .claude/rules/main-native-gotchas.md). layout() reads this. */
   paletteOpen: boolean
   /** True while the fullscreen media gallery overlay is open. Like the palette it
-   * hides the active web view so the chrome overlay is visible (piège #3);
+   * hides the active web view so the chrome overlay is visible (pitfall #3);
    * layout() reads this. */
   mediaGalleryOpen: boolean
   /** Per-tab continuous network-media buffer (metadata only — never bodies),
@@ -464,7 +464,7 @@ interface ProfileWindow {
   media: Map<string, MediaBuffer>
   /** The right-side skill pane (an AI summary). Unlike the palette it does not hide
    * the web view — layout() shrinks the view's WIDTH by skillPaneWidth while it is
-   * open, so the pane sits beside the page (no piège #3). Closed by default. */
+   * open, so the pane sits beside the page (no pitfall #3). Closed by default. */
   skillPane: SkillPaneState
   /** Remembered find-in-page text (Cmd+F): the query of the current search on
    * this window, so find-next / find-previous can step it without the chrome
@@ -481,7 +481,7 @@ interface ProfileWindow {
   layoutPending: boolean
   /** Transparent, non-focusable child window that draws the floating status-bar
    * tooltip ABOVE the tab's WebContentsView (a plain DOM bubble would be hidden
-   * behind that native layer, CLAUDE.md "les deux pièges"). Pre-warmed in
+   * behind that native layer, the native pitfalls in .claude/rules/main-native-gotchas.md). Pre-warmed in
    * create(); null once destroyed. */
   tooltip: BrowserWindow | null
   /** Resolves once the tooltip window's document has loaded, so measuring the
@@ -503,7 +503,7 @@ interface ProfileWindow {
   /** Live HTML fullscreen episode (a video fullscreened inside the active tab's
    * page), or null. While set, both side panels are hidden and layout() gives the
    * fullscreen tab the WHOLE window (Chromium only fills the view's own bounds —
-   * piège #1 territory). Panels are put back on exit; a panel toggled DURING the
+   * pitfall #1 territory). Panels are put back on exit; a panel toggled DURING the
    * episode keeps its new state instead (see html-fullscreen.ts). */
   htmlFullScreen: FullScreenEpisode | null
   /** True once the window's saved tabs have been restored (or its first tab
@@ -1770,7 +1770,7 @@ export class ProfileManager {
     ensureToast(profileWindow)
 
     // Reposition the active view by hand on every resize — a WebContentsView is
-    // a native layer, not a DOM element (see CLAUDE.md, "les deux pièges").
+    // a native layer, not a DOM element (see the native pitfalls in .claude/rules/main-native-gotchas.md).
     // Throttled to ~1 frame so a flood of resize events during a drag doesn't
     // call the native setBounds dozens of times per frame.
     window.on('resize', () => {
@@ -2159,7 +2159,7 @@ export class ProfileManager {
     // Cmd hold — all on this tab's already-attached CDP debugger (stealth).
     this.wireMagnifier(pw, tab.id, view.webContents)
     // Right-click on the page → a NATIVE menu (a CSS popover would sit behind the
-    // WebContentsView, CLAUDE.md "les deux pièges" #3). Its item set is decided by
+    // WebContentsView, the native pitfalls in .claude/rules/main-native-gotchas.md, #3). Its item set is decided by
     // the pure buildPageMenu; the popup below is the thin native part.
     this.wireContextMenu(pw, view.webContents)
     // A page asking for a new window is either a POPUP (OAuth / SSO sign-in: it
@@ -3063,7 +3063,7 @@ export class ProfileManager {
     })
     // A page element going fullscreen (a video's ⛶ button) should feel like real
     // fullscreen: hide both side panels and stretch the view over the whole window
-    // — Chromium only fills the view's own bounds (piège #1), so without this the
+    // — Chromium only fills the view's own bounds (pitfall #1), so without this the
     // toolbar / status bar / panels would frame the "fullscreen" video.
     wc.on('enter-html-full-screen', () => this.enterHtmlFullScreenIn(owner(), tabId))
     wc.on('leave-html-full-screen', () => this.leaveHtmlFullScreenIn(owner()))
@@ -3177,7 +3177,7 @@ export class ProfileManager {
     // left — start at y=0 and take the full window height.
     const topChrome = pw.chromeHidden ? 0 : this.deps.toolbarHeight
     // The status bar sits at the very bottom of the chrome; leave room for it so
-    // the native view doesn't cover it (see CLAUDE.md, "les deux pièges") — unless
+    // the native view doesn't cover it (see the native pitfalls in .claude/rules/main-native-gotchas.md) — unless
     // zen mode hid it too.
     const verticalChrome = pw.chromeHidden ? 0 : this.deps.toolbarHeight + this.deps.statusBarHeight
     // The skill pane, when open, sits on the RIGHT: shrink the view's width by it
@@ -3310,9 +3310,9 @@ export class ProfileManager {
    * renderer crash, or a transient view the extension layer tears down). Reading
    * `view.webContents.<anything>` then threw `Cannot read properties of undefined`
    * from inside a debounced pushTabs timer — an UNCAUGHT exception in main, i.e.
-   * the whole browser down. Vérifié le 2026-08-24 16:43 : crash de Mira sur cette
-   * ligne exacte (`isCurrentlyAudible`), 2.7 s après un webContents détruit par un
-   * flux OAuth. Every live read of a view's webContents goes through here. */
+   * the whole browser down. Verified: Mira crashed on this exact line
+   * (`isCurrentlyAudible`), 2.7 s after a webContents was destroyed by an
+   * OAuth flow. Every live read of a view's webContents goes through here. */
   /** The active tab is drawn by a native view that has painted: something
    * opaque sits on top, so an underlay beneath it stays invisible. */
   private activeHasPaintedView(pw: ProfileWindow): boolean {
@@ -5660,7 +5660,7 @@ export class ProfileManager {
   /** Window-open handler for extension pages (browser-action popups, option
    * pages…). The electron-chrome-extensions lib creates its browser-action popup
    * as a bare BrowserWindow with NO window-open handler, so a `window.open(url,
-   * "_blank")` from inside it (e.g. lemlist's "Get started" link → linkedin.com)
+   * "_blank")` from inside it (e.g. an extension's "Get started" link → an external site)
    * escapes into an unmanaged OS window while the popup self-closes on blur —
    * "a popup that opens and closes instantly". We route it into a Mira tab
    * instead, mirroring what tab views do (see the tab setWindowOpenHandler).
@@ -6204,7 +6204,17 @@ export class ProfileManager {
         const cookies = await wc.session.cookies.get({ url })
         return { url, count: cookies.length }
       },
-      readActiveSiteCookies: async (targetUrl) => {
+      readActiveSiteCookies: async (targetUrl, tabId) => {
+        // A named tab reads its own session: the profile it belongs to, wherever
+        // it lives, never the focused window's (which may be another identity).
+        if (tabId) {
+          const wc = this.webContentsForTab(target, tabId)
+          const url = targetUrl ?? wc.getURL()
+          if (!/^https?:/.test(url)) return { url: url || null, cookie: '', count: 0 }
+          const cookies = await wc.session.cookies.get({ url })
+          const cookie = cookies.map((c) => `${c.name}=${c.value}`).join('; ')
+          return { url, cookie, count: cookies.length }
+        }
         // Resolve the site + session exactly like clearSiteData, but read only.
         // An explicit url uses the target window's own session; otherwise read
         // the active tab's url and its OWN session, so the string matches what

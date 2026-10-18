@@ -17,7 +17,7 @@ async function run(
  * logins ride on the very same mapping as cards. */
 async function ready(): Promise<Ctx> {
   const { ctx } = makeContext()
-  await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-perso' })
+  await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-vault' })
   await run(ctx, 'unlock-card-vault', { profileId: 'perso', password: 'good-password' })
   return ctx
 }
@@ -170,7 +170,7 @@ describe('list-logins', () => {
 
   it('fails on a locked vault rather than answering half of it', async () => {
     const { ctx } = makeContext()
-    await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-perso' })
+    await run(ctx, 'set-card-vault', { profileId: 'perso', appDataDir: '/tmp/bw-vault' })
     expect(await run(ctx, 'list-logins', { profileId: 'perso' })).toMatchObject({
       ok: false,
       error: 'vault is locked'

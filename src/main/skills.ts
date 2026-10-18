@@ -22,7 +22,7 @@ export type SkillSource =
   | { kind: 'raw' }
 
 /** Where a skill's result goes. V1 ships only the right pane; writing back into
- * the page (kind 'page') and external sinks (Panorama, files) are deferred — see
+ * the page (kind 'page') and external sinks (another app, files) are deferred — see
  * skills-plan.md §2/§6. */
 export type SkillSink = { kind: 'pane' }
 

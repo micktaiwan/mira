@@ -67,6 +67,7 @@
 //                                   (--json: one raw event per line, for a program)
 //   mira quit                       quit Mira entirely (close-profile never quits; this is the explicit exit)
 //   mira cookies [--url <url>]      print the active site's cookie string (HttpOnly incl.); for export KONDO_COOKIE="$(mira cookies)"
+//                 [--netscape]      print a Netscape cookie jar instead, for yt-dlp --cookies / curl -b
 //   mira forget <domain> [--profile <id>]  wipe a domain's cookies + storage + history (all subdomains); no tab needed
 //   mira commands                   list every command the running build knows
 //   mira call <command> [--params '<json>']   generic passthrough to any command
@@ -765,8 +766,19 @@ async function main() {
       // HttpOnly included, so it pipes straight into an env var:
       //   export KONDO_COOKIE="$(mira cookies)"
       // --url targets another site; --json returns the {url,cookie,count} envelope.
+      // --netscape prints a Netscape cookie jar instead, the format yt-dlp, curl -b
+      // and wget read (yt-dlp --cookies <file>): Instagram reels need the login.
       const params = typeof flags.url === 'string' ? { url: flags.url } : {}
-      return send({ command: 'dump-cookies', params }, { json, pretty: (r) => r.cookie })
+      if (tabId) params.tabId = tabId
+      const netscape = (r) => {
+        const host = new URL(r.url).hostname.replace(/^www\./, '')
+        const rows = r.cookie.split('; ').filter((p) => p.includes('=')).map((p) => {
+          const i = p.indexOf('=')
+          return ['.' + host, 'TRUE', '/', 'TRUE', '2147483647', p.slice(0, i), p.slice(i + 1)].join('\t')
+        })
+        return ['# Netscape HTTP Cookie File', ...rows].join('\n')
+      }
+      return send({ command: 'dump-cookies', params }, { json, pretty: flags.netscape ? netscape : (r) => r.cookie })
     }
 
     case 'forget': {

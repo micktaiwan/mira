@@ -8,7 +8,7 @@ import type { CardVault } from './bitwarden'
 import type { FragmentSource } from './card-capture-service'
 import type { LoginMatch, VaultLogin } from './bitwarden-login'
 
-const PERSO: CardVault = { appDataDir: '/tmp/bw-perso', email: 'owner@example.com' }
+const PERSO: CardVault = { appDataDir: '/tmp/bw-vault', email: 'owner@example.com' }
 const NOW = new Date('2026-08-21T12:00:00Z')
 
 const source = (over: Partial<FragmentSource> = {}): FragmentSource => ({

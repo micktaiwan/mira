@@ -1,16 +1,16 @@
 // `externally_connectable`: the channel a WEB PAGE uses to talk to an extension
-// (chrome.runtime.sendMessage(<extensionId>, msg) from app.lemlist.com, landing
+// (chrome.runtime.sendMessage(<extensionId>, msg) from a web app such as app.example.com, landing
 // on chrome.runtime.onMessageExternal in the extension's service worker).
 //
 // Neither Electron nor electron-chrome-extensions implements it. Electron does
-// ship the SW-side event object (the lemlist worker's unguarded
+// ship the SW-side event object (an extension worker's unguarded
 // `chrome.runtime.onMessageExternal.addListener(...)` evaluates fine), but it
 // can never fire: nothing injects the page-side chrome.runtime, and nothing
 // routes a page message to a worker. Web pages therefore see Mira's stealth
 // stub (stealth.ts installs a no-op `chrome.runtime.sendMessage` on every page
 // so window.chrome doesn't read as headless), whose callback never fires —
-// which is exactly what leaves lemlist stuck on "Step 1 - Download lemlist
-// extension" with the extension installed.
+// which is exactly what leaves a web app stuck on its "install our extension"
+// step with the extension already installed.
 //
 // This file is the PURE half: manifest parsing, Chrome match-pattern matching,
 // the per-session index, and the router that pairs page requests with worker

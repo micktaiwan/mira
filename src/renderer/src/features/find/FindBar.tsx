@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 
 // The find-in-page bar (Cmd+F). It lives INSIDE the toolbar row, next to the
 // address bar — never over the page: a DOM overlay in the body region would be
-// hidden behind the tab's WebContentsView (CLAUDE.md, "les deux pièges"). The
+// hidden behind the tab's WebContentsView (traps #1 and #3 in .claude/rules/main-native-gotchas.md). The
 // bar is pure chrome: every action is a registry command (find-in-page /
 // find-next / find-previous / find-stop), and the "n/m" tally arrives from
 // main's found-in-page forwarding (onFindResult).

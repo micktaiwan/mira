@@ -6,33 +6,33 @@ paths:
   - '**/*.test.ts'
 ---
 
-# Piloter Mira par socket + tester dans un profil isolé
+# Driving Mira over the socket + testing in an isolated profile
 
-Ces notes servent quand tu pilotes une Mira qui tourne (tests, debug) via le
-socket de contrôle `MIRA_SOCKET` (défaut `/tmp/mira.sock`). Protocole complet et
-liste des commandes : `docs/socket.md` ; en live, la commande `list-commands`
-liste les noms connus du build qui tourne.
+These notes apply when you drive a running Mira (tests, debugging) through the
+control socket `MIRA_SOCKET` (default `/tmp/mira.sock`). Full protocol and
+command list: `docs/socket.md`; live, the `list-commands` command lists the
+names known to the running build.
 
-**✅ Premier réflexe : le CLI `mira` (`bin/mira`).** C'est un client mince au-dessus du socket, écrit pour tuer exactement les frictions ci-dessous (piège `nc`, `tabId` à résoudre à la main, JSON fabriqué à la main). Il tourne sans build (`.mjs`, ESM natif), contre la Mira live. Invoquer par chemin : `<repo>/bin/mira <verbe>` (chemin absolu de cette machine : `CLAUDE.local.md`). Logique pure et testée dans `src/cli/mira-core.mjs` (+ `.test.ts`).
+**✅ First reflex: the `mira` CLI (`bin/mira`).** It is a thin client on top of the socket, written to kill exactly the frictions below (the `nc` trap, a `tabId` to resolve by hand, hand-built JSON). It runs without a build (`.mjs`, native ESM), against the live Mira. Invoke it by path: `<repo>/bin/mira <verb>` (this machine's absolute path: `CLAUDE.local.md`). Pure, tested logic in `src/cli/mira-core.mjs` (+ `.test.ts`).
 
 ```bash
 MIRA="$(git rev-parse --show-toplevel)/bin/mira"
-$MIRA tabs                              # liste les onglets (id / titre / url), * = actif
-eval "$($MIRA use --url localhost:8000)" # pin un onglet → export MIRA_TAB=<uuid> (session courante)
-$MIRA exec "document.title"             # exec-js sur l'onglet pinné (ou actif si rien de pinné)
-$MIRA reload                            # reload l'onglet pinné (via exec-js) ou actif
-$MIRA shot /tmp/page.png [--full]       # capture PNG de l'onglet pinné/actif (--full = document entier)
-$MIRA nav example.com                   # navigate l'onglet actif
-$MIRA click --text 'Settings'           # VRAI clic souris CDP (--selector, --at x,y, --nth n, --scroll)
-$MIRA wait --selector '[role=dialog]'   # attend au lieu de dormir (--text, --url, --gone, --timeout ms)
-$MIRA batch @script.mira                # N lignes sur UNE connexion (--keep-going)
-$MIRA commands                          # list-commands du build qui tourne
-$MIRA call select-tab --params '{"id":"<uuid>"}'  # passthrough générique vers N'IMPORTE quelle commande
+$MIRA tabs                              # list tabs (id / title / url), * = active
+eval "$($MIRA use --url localhost:8000)" # pin a tab → export MIRA_TAB=<uuid> (current session)
+$MIRA exec "document.title"             # exec-js on the pinned tab (or the active one if nothing is pinned)
+$MIRA reload                            # reload the pinned tab (via exec-js) or the active one
+$MIRA shot /tmp/page.png [--full]       # PNG capture of the pinned/active tab (--full = whole document)
+$MIRA nav example.com                   # navigate the active tab
+$MIRA click --text 'Settings'           # REAL CDP mouse click (--selector, --at x,y, --nth n, --scroll)
+$MIRA wait --selector '[role=dialog]'   # wait instead of sleeping (--text, --url, --gone, --timeout ms)
+$MIRA batch @script.mira                # N lines over ONE connection (--keep-going)
+$MIRA commands                          # list-commands of the running build
+$MIRA call select-tab --params '{"id":"<uuid>"}'  # generic passthrough to ANY command
 ```
 
-Statefulness **par l'environnement, jamais un fichier partagé** : `MIRA_TAB` pin « l'onglet à travailler » pour MA session shell uniquement → deux sessions Claude ne s'écrasent jamais la cible. Précédence calquée sur `--profile`/`MIRA_PROFILE` : `--tab <id>` > `$MIRA_TAB` > onglet actif de la fenêtre focus. Garde-fou : un `MIRA_TAB` périmé fait **échouer bruyamment** (`unknown tab: <id>`, exit 1), il ne retombe jamais en douce sur l'actif. Code exec-js verbeux : `$MIRA exec @fichier.js` ou `… | $MIRA exec -` (stdin), pour esquiver le quoting shell. Sortie brute JSON : `--json`. Exit code 0/1 sur `ok`, 2 sur erreur de transport — donc branchable en Bash.
+Statefulness **through the environment, never a shared file**: `MIRA_TAB` pins "the tab to work on" for MY shell session only → two Claude sessions never overwrite each other's target. Precedence modelled on `--profile`/`MIRA_PROFILE`: `--tab <id>` > `$MIRA_TAB` > active tab of the focused window. Guard: a stale `MIRA_TAB` **fails loudly** (`unknown tab: <id>`, exit 1), it never quietly falls back to the active tab. Verbose exec-js code: `$MIRA exec @file.js` or `… | $MIRA exec -` (stdin), to dodge shell quoting. Raw JSON output: `--json`. Exit code 0/1 on `ok`, 2 on a transport error — so you can branch on it in Bash.
 
-Sous le CLI il y a toujours le socket brut. **Ne PAS le piloter avec `printf … | nc -U`.** Le `nc` de macOS ferme la connexion dès que stdin fait EOF (juste après le `printf`), donc il **rate toute réponse asynchrone** : `get-status` (réponse instantanée) passe parfois, mais `exec-js` et toute commande qui `await` (CDP, navigation…) renvoient **0 octet** — un « vide » trompeur qui ressemble à un hang ou à un bug de la commande (vérifié le 2026-07-11, m'a fait perdre des heures à croire exec-js cassé). Fix fiable : un **client socket brut** qui lit jusqu'au `\n`. Helper posé pour les sessions de debug : `scratchpad/mira.py` (`call({...})` / `execjs(tabId, code)`), à recréer si absent :
+Under the CLI there is always the raw socket. **Do NOT drive it with `printf … | nc -U`.** macOS `nc` closes the connection as soon as stdin hits EOF (right after the `printf`), so it **misses every asynchronous reply**: `get-status` (instant reply) sometimes gets through, but `exec-js` and any command that `await`s (CDP, navigation…) return **0 bytes** — a misleading "empty" that looks like a hang or a bug in the command (verified; it once cost hours of believing exec-js was broken). Reliable fix: a **raw socket client** that reads up to the `\n`. Helper set up for debugging sessions: `scratchpad/mira.py` (`call({...})` / `execjs(tabId, code)`), to recreate if missing:
 
 ```python
 import socket, json
@@ -46,71 +46,71 @@ def call(obj, timeout=30):
     return json.loads(buf.decode())
 ```
 
-Dépannage rapide en shell si vraiment besoin de `nc` : garder stdin ouvert le temps de la réponse — `{ printf '%s\n' '{…}'; sleep 1; } | nc -U /tmp/mira.sock`. Mais préférer le client Python.
+Quick shell workaround if you really need `nc`: keep stdin open for the duration of the reply — `{ printf '%s\n' '{…}'; sleep 1; } | nc -U /tmp/mira.sock`. But prefer the Python client.
 
-## Forme des requêtes socket (pièges vécus)
+## Shape of socket requests (traps hit in practice)
 
-- **Champ `"command"`, pas `"cmd"`.** Le socket Kova utilise `{"cmd":…}` ; Mira attend `{"command":…}`. Un `"cmd"` renvoie `missing "command" field`.
-- **Champ `"client"` obligatoire** (qui appelle : `"mira.py session=<id>"`, un nom de script). Sans lui : `missing "client" field`. Il finit dans `<userData>/command.log`, et `activation.log` le cite quand Mira passe devant. Le CLI `mira` le remplit tout seul.
-- **Les params sont nichés sous `"params"`, jamais à plat.** `{"command":"install-extension","id":"…"}` échoue avec `"id" must be a non-empty string`. Forme correcte : `{"command":"install-extension","params":{"id":"…"}}`. Exemple complet : `{"client":"my-script","command":"navigate","params":{"url":"example.com"}}`.
+- **Field `"command"`, not `"cmd"`.** Some other control sockets use `{"cmd":…}`; Mira expects `{"command":…}`. A `"cmd"` returns `missing "command" field`.
+- **Field `"client"` is mandatory** (who is calling: `"mira.py session=<id>"`, a script name). Without it: `missing "client" field`. It ends up in `<userData>/command.log`, and `activation.log` quotes it when Mira comes to the front. The `mira` CLI fills it by itself.
+- **Params are nested under `"params"`, never flat.** `{"command":"install-extension","id":"…"}` fails with `"id" must be a non-empty string`. Correct shape: `{"command":"install-extension","params":{"id":"…"}}`. Full example: `{"client":"my-script","command":"navigate","params":{"url":"example.com"}}`.
 
-## exec-js et onglets de test
+## exec-js and test tabs
 
-- **`exec-js` prend un `tabId`** (UUID via `list-tabs`) : toujours le passer pour viser un onglet précis. Un onglet endormi renvoie `{"ok":false,"error":"tab is asleep"}` (le réveiller via `select-tab`). Pour du code async, `exec-js` peut ne pas attendre la promesse dans certains builds — contourner par « lance l'async, stocke dans `window.__x`, relis en sync » sur un 2ᵉ appel.
-- **Aucune commande socket ne remonte Mira au premier plan.** Depuis le fix « foreground policy » (`src/main/foreground-policy.ts`), une commande qui arrive par le socket/MCP fait son travail sans jamais activer l'app : `new-tab`, `navigate`, `open-url`, `open-profile`, `activate-tab`, `press-key`, `detach-tab`. Seul `focus-app` remonte Mira, et c'est sa seule raison d'être — donc **il est interdit tant que l'utilisateur ne l'a pas demandé** (skill `mira`) : c'est la seule porte qui reste pour lui couper ce qu'il est en train de taper, et le 30/08/2026 une session l'a franchie neuf fois en un après-midi pour se simplifier des tests. La même commande venue de l'UI (clic, Cmd+T) garde l'ancien comportement. Et une fenêtre **créée** par le socket (`open-profile` sur un profil fermé, `detach-tab` vers une nouvelle fenêtre) s'ouvre **sous** la fenêtre de devant, pas par-dessus (`src/main/window-order.ts`, piège #11 de `main-native-gotchas.md`). Depuis une session Claude Code, le CLI travaille dans la **fenêtre de la session** (`session-window`, une par profil, fermée par `mira done` ou à la mort du process) : détail dans `docs/socket.md` § « One window per agent session ».
-- **`background:true` reste utile, mais pour autre chose** : il empêche la fenêtre de _basculer_ sur le nouvel onglet, donc rien ne bouge à l'écran. `new-tab {background:true}`, `navigate {newTab:true,background:true}`, ou `mira open <url> -b`. Tu récupères le `tabId` dans la réponse et tu pilotes via `exec-js`.
-- **Profil de test isolé.** Un profil dédié (session/cookies à part) existe pour ne pas polluer les profils réels. Son id concret et son usage vivent dans `CLAUDE.local.md` (non versionné).
+- **`exec-js` takes a `tabId`** (UUID from `list-tabs`): always pass it to aim at a precise tab. An asleep tab returns `{"ok":false,"error":"tab is asleep"}` (wake it with `select-tab`). For async code, `exec-js` may not await the promise in some builds — work around it with "start the async, store it in `window.__x`, reread synchronously" on a 2nd call.
+- **No socket command brings Mira to the front.** Since the "foreground policy" fix (`src/main/foreground-policy.ts`), a command that arrives through the socket/MCP does its work without ever activating the app: `new-tab`, `navigate`, `open-url`, `open-profile`, `activate-tab`, `press-key`, `detach-tab`. Only `focus-app` raises Mira, and that is its only reason to exist — so **it is forbidden until the user has asked for it** (`mira` skill): it is the only door left to cut off what they are typing, and a session once went through it nine times in one afternoon to make its tests easier. The same command coming from the UI (click, Cmd+T) keeps the old behaviour. And a window **created** by the socket (`open-profile` on a closed profile, `detach-tab` into a new window) opens **below** the frontmost window, not on top (`src/main/window-order.ts`, trap #11 of `main-native-gotchas.md`). From a Claude Code session, the CLI works in the **session window** (`session-window`, one per profile, closed by `mira done` or when the process dies): details in `docs/socket.md` § "One window per agent session".
+- **`background:true` is still useful, but for something else**: it stops the window from _switching_ to the new tab, so nothing moves on screen. `new-tab {background:true}`, `navigate {newTab:true,background:true}`, or `mira open <url> -b`. You get the `tabId` back in the reply and drive it through `exec-js`.
+- **Isolated test profile.** A dedicated profile (separate session/cookies) exists so the real profiles are not polluted. Its concrete id and its usage live in `CLAUDE.local.md` (not versioned).
 
-## Une séquence = un `mira batch`, jamais N tours d'agent
+## A sequence = one `mira batch`, never N agent turns
 
-Mesuré le 08/09/2026 : l'aller-retour socket est **sous la milliseconde**, un `mira exec` complet
-40 ms. Ce qui rendait le pilotage lent n'a jamais été Mira — c'était un process node et surtout
-**un tour d'agent par commande**. `mira batch @script.mira` (ou `-` pour stdin) rejoue N lignes sur
-une seule connexion : une ligne = ce qu'on taperait après `mira`, `#` et lignes vides ignorés.
+Measured: the socket round trip is **under a millisecond**, a full `mira exec`
+40 ms. What made driving slow was never Mira — it was a node process and above all
+**one agent turn per command**. `mira batch @script.mira` (or `-` for stdin) replays N lines over
+a single connection: one line = what you would type after `mira`, `#` and blank lines are ignored.
 
-- **Tout est construit avant le premier envoi** : une faute sur la ligne 7 refuse le batch entier
-  plutôt que de laisser la page à moitié pilotée, dans un état que personne n'a décrit.
-- **Arrêt à la première ligne qui échoue** (`--keep-going` pour continuer), parce que tout ce qui
-  suit un clic raté s'exécute contre une page qui n'est pas dans l'état prévu.
-- **Verbes refusés, avec la raison** : `watch` (ne rend jamais la main), `use` (n'imprime qu'un
-  export pour le shell appelant), `batch` (pas d'imbrication). `nav` et `open` y exigent un onglet
-  nommé : sans fenêtre nommée, une page perso se charge dans le profil pro.
-- La cible d'onglet se pose une fois (`mira batch --tab <id>`, ou `$MIRA_TAB`) et chaque ligne peut
-  la surcharger avec son propre `--tab`.
+- **Everything is built before the first send**: a mistake on line 7 refuses the whole batch
+  rather than leaving the page half-driven, in a state nobody described.
+- **Stops at the first line that fails** (`--keep-going` to continue), because everything that
+  follows a missed click runs against a page that is not in the expected state.
+- **Refused verbs, with the reason**: `watch` (never returns), `use` (only prints an
+  export for the calling shell), `batch` (no nesting). `nav` and `open` require a named tab
+  there: without a named window, a personal page loads in the work profile.
+- The tab target is set once (`mira batch --tab <id>`, or `$MIRA_TAB`) and each line can
+  override it with its own `--tab`.
 
-**Et dans un script, plus aucun `sleep` ni `MouseEvent` fabriqué à la main.** `mira wait`
-(`--selector` / `--text` / `--url`, plus `--gone` et `--timeout`) sonde la page toutes les 100 ms et
-rend le temps réellement attendu ; sur timeout il dit ce qu'il cherchait et pendant combien de
-temps. `mira click` (`--selector` / `--text` / `--at x,y`, plus `--nth` et `--scroll`) est un vrai
-clic CDP : la cible est résolue dans la page puis cliquée en son centre, et il refuse en le disant
-quand l'élément est invisible, hors viewport ou recouvert — au lieu de cliquer dans le vide et de
-répondre `ok`. Un exemple complet : `scratchpad/notion-people.mira`.
+**And in a script, no more `sleep` and no more hand-built `MouseEvent`.** `mira wait`
+(`--selector` / `--text` / `--url`, plus `--gone` and `--timeout`) polls the page every 100 ms and
+returns the time actually waited; on timeout it says what it was looking for and for how
+long. `mira click` (`--selector` / `--text` / `--at x,y`, plus `--nth` and `--scroll`) is a real
+CDP click: the target is resolved in the page then clicked at its centre, and it refuses, saying so,
+when the element is invisible, outside the viewport or covered — instead of clicking into nothing and
+answering `ok`. Full examples: the `.mira` scripts under `scratchpad/`.
 
-⚠️ Le polling de `wait` est fait de **beaucoup d'évaluations courtes**, jamais d'un long `await`
-dans la page : `exec-js` coupe à 5 s (`cdp-eval.ts`), donc une attente en un seul appel mourrait à
-cinq secondes quel que soit le `--timeout` demandé.
+⚠️ `wait`'s polling is made of **many short evaluations**, never one long `await`
+in the page: `exec-js` cuts off at 5 s (`cdp-eval.ts`), so a wait in a single call would die at
+five seconds whatever `--timeout` was asked for.
 
-## Piloter au clavier (vraie frappe) et onglets cachés
+## Driving with the keyboard (real keystrokes) and hidden tabs
 
-Pour les web apps **clavier-first** (Kondo, Superhuman : archiver avec `e`, `j`/`k`, `Escape`), utiliser `press-key`, pas un `KeyboardEvent` synthétique via `exec-js`.
+For **keyboard-first** web apps (mail clients and the like: archive with `e`, `j`/`k`, `Escape`), use `press-key`, not a synthetic `KeyboardEvent` through `exec-js`.
 
-- **Les events synthétiques sont ignorés.** Un `document.dispatchEvent(new KeyboardEvent(...))` a `isTrusted:false` ; ces apps le rejettent (vérifié le 2026-07-15 : synthétique `l` n'ouvre PAS le menu Label de Kondo). `press-key` passe par CDP `Input.dispatchKeyEvent` → `isTrusted:true`, indistinguable d'une frappe physique.
-- **CLI** : `mira press <key> [--mod alt,ctrl,meta,shift]`. `key` = nom façon `KeyboardEvent.key` (`e`, `Enter`, `ArrowDown`, ` `). Socket : `press-key {key, tabId?, modifiers?}`.
-- **Une vraie frappe n'atteint qu'un onglet VISIBLE.** Chromium droppe silencieusement l'input d'un onglet caché (arrière-plan / `document.visibilityState !== "visible"`). Le **focus OS de la fenêtre n'est PAS requis** — un onglet visible dans une fenêtre non-focus reçoit quand même la frappe (vérifié le 2026-07-15). `press-key` / `click` / `type` **rendent l'onglet cible vivant d'abord, sans le sélectionner** : sa vue est montrée SOUS celle de l'onglet actif (mêmes bounds, bas du z-order, `src/main/input-underlay.ts`), donc l'utilisateur garde l'onglet qu'il lit — **écrit le 02/10/2026, pas encore vérifié sur une Mira qui tourne**. Repli sur l'ancien comportement (l'onglet passe actif dans SA fenêtre) quand rien ne le couvrirait : onglet Settings actif, palette ou galerie ouverte. Dans les deux cas on attend une frame, **sans jamais remonter ni activer la fenêtre** (le `restore` + `showInactive` + `moveTop` du 24/08 a été retiré par 394d632 : une fenêtre recouverte reste pilotable, car `backgroundThrottling` est coupé sur chaque onglet, voir `ensurePageVisibleForInput` dans `profiles.ts`). Il n'échoue (`page is hidden, input would be dropped`) que si l'onglet est inconnu, ou si le throttling est actif et la page toujours cachée, au lieu de faire un faux succès — le dire à l'utilisateur et lui demander de mettre la fenêtre devant, **pas** appeler `focus-app` pour se débloquer.
+- **Synthetic events are ignored.** A `document.dispatchEvent(new KeyboardEvent(...))` has `isTrusted:false`; these apps reject it (verified: a synthetic `l` does NOT open an app's Label menu). `press-key` goes through CDP `Input.dispatchKeyEvent` → `isTrusted:true`, indistinguishable from a physical keystroke.
+- **CLI**: `mira press <key> [--mod alt,ctrl,meta,shift]`. `key` = a `KeyboardEvent.key`-style name (`e`, `Enter`, `ArrowDown`, ` `). Socket: `press-key {key, tabId?, modifiers?}`.
+- **A real keystroke only reaches a VISIBLE tab.** Chromium silently drops input to a hidden tab (background / `document.visibilityState !== "visible"`). **OS focus of the window is NOT required** — a visible tab in an unfocused window still receives the keystroke (verified). `press-key` / `click` / `type` **bring the target tab to life first, without selecting it**: its view is shown BELOW the active tab's view (same bounds, bottom of the z-order, `src/main/input-underlay.ts`), so the user keeps the tab they are reading — **written but not yet verified on a running Mira**. Falls back to the old behaviour (the tab becomes active in ITS window) when nothing would cover it: Settings tab active, palette or gallery open. In both cases it waits one frame, **without ever raising or activating the window** (the `restore` + `showInactive` + `moveTop` was removed by 394d632: a covered window stays drivable, because `backgroundThrottling` is turned off on every tab, see `ensurePageVisibleForInput` in `profiles.ts`). It only fails (`page is hidden, input would be dropped`) if the tab is unknown, or if throttling is on and the page is still hidden, instead of a fake success — tell the user and ask them to bring the window forward, **not** call `focus-app` to get unstuck.
 
-**Fenêtres multiples & activation cross-fenêtre.** Un profil peut avoir plusieurs fenêtres ; `list-tabs`/`mira tabs` ne montrent que les onglets de la fenêtre cible, `mira windows` liste les fenêtres (`*` = focus). Piège : `select-tab` n'active un onglet que dans la **fenêtre focus** (`unknown tab` sinon), alors que `exec-js`/`press-key` résolvent le `tabId` cross-fenêtre. Pour rendre visible un onglet de N'IMPORTE quelle fenêtre : **`activate-tab {id}`** (le fait passer actif dans sa fenêtre ; il ne remonte plus la fenêtre depuis le socket). `mira tabs` marque `*` l'onglet actif/visible et `z` les onglets endormis (page-bound échoue dessus tant qu'ils ne sont pas réveillés).
+**Multiple windows & cross-window activation.** A profile can have several windows; `list-tabs`/`mira tabs` only show the target window's tabs, `mira windows` lists the windows (`*` = focused). Trap: `select-tab` only activates a tab in the **focused window** (`unknown tab` otherwise), whereas `exec-js`/`press-key` resolve the `tabId` across windows. To make a tab of ANY window visible: **`activate-tab {id}`** (makes it active in its window; it no longer raises the window from the socket). `mira tabs` marks the active/visible tab with `*` and asleep tabs with `z` (page-bound commands fail on them until they are woken).
 
-## Lancer Mira à froid sur un seul profil (`--profile` / `MIRA_PROFILE`)
+## Launching Mira cold on a single profile (`--profile` / `MIRA_PROFILE`)
 
-Au démarrage, Mira rouvre par défaut les profils qui étaient ouverts au dernier quit. Pour **démarrer à froid sur un seul profil** (typiquement le profil de test), sans rouvrir les autres :
+At startup, Mira reopens by default the profiles that were open at the last quit. To **start cold on a single profile** (typically the test profile), without reopening the others:
 
-- Flag CLI : `--profile <id>` ou `--profile=<id>`.
-- Ou variable d'env : `MIRA_PROFILE=<id>` (le flag l'emporte si les deux sont posés).
+- CLI flag: `--profile <id>` or `--profile=<id>`.
+- Or env variable: `MIRA_PROFILE=<id>` (the flag wins if both are set).
 
-Un id inconnu n'est pas fatal : Mira loggue un warning et retombe sur la restauration normale (dernier set ouvert). Parsing pur et testé dans `parseProfileArg` (`src/main/profile-store.ts`), branché au boot dans `src/main/index.ts` via `openSavedProfiles(explicitProfileId)`.
+An unknown id is not fatal: Mira logs a warning and falls back to the normal restore (last open set). Pure, tested parsing in `parseProfileArg` (`src/main/profile-store.ts`), wired at boot in `src/main/index.ts` via `openSavedProfiles(explicitProfileId)`.
 
-Le mécanisme est implémenté et couvert par des tests unitaires ; **pas encore vérifié en vrai** l'invocation shell exacte pour injecter le flag/env dans l'app packagée (`open -a Mira --args --profile <id>` devrait passer par `--args`, l'héritage de `MIRA_PROFILE` via `open` reste à confirmer). À valider au premier usage.
+The mechanism is implemented and covered by unit tests; the exact shell invocation to inject the flag/env into the packaged app is **not yet verified for real** (`open -a Mira --args --profile <id>` should go through `--args`; whether `MIRA_PROFILE` is inherited through `open` remains to be confirmed). To validate on first use.
 
-### Dev « scratch » : booter le seul profil de test, ses onglets restaurés
+### "Scratch" dev: boot only the test profile, with its tabs restored
 
-`npm run dev:scratch` (script dans `package.json`) démarre `electron-vite dev` avec `MIRA_PROFILE` posé sur l'id du profil de test — c'est-à-dire boot de CE profil seul (les autres profils réels ne sont pas rouverts, ni réécrits au quit), en **restaurant ses onglets sauvegardés** (`content: 'restore'`, pas de wipe) pour reprendre les tests là où on s'est arrêté. Ça partage le userData réel (pas d'isolation) : voulu, pour garder cookies/logins/onglets du profil de test. L'id vit dans `.dev-scratch-profile` (git-excluded, absent d'un clone public — le script retombe alors sur la restauration normale, c'est OK). Ne remplace pas `npm run dev` (qui rouvre tout).
+`npm run dev:scratch` (script in `package.json`) starts `electron-vite dev` with `MIRA_PROFILE` set to the test profile's id — that is, it boots THAT profile alone (the other real profiles are not reopened, nor rewritten at quit), **restoring its saved tabs** (`content: 'restore'`, no wipe) to resume tests where you left off. It shares the real userData (no isolation): on purpose, to keep the test profile's cookies/logins/tabs. The id lives in `.dev-scratch-profile` (git-excluded, absent from a public clone — the script then falls back to the normal restore, which is fine). It does not replace `npm run dev` (which reopens everything).

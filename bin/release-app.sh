@@ -17,7 +17,7 @@
 # bin/release.sh builds this Mac's architecture last, so `npm run dev` keeps
 # loading addons it can run.
 #
-# Build, sign and zip steps first written by Robin Bonduelle (PR #2), 2026-09-26.
+# Build, sign and zip steps first contributed in PR #2.
 
 # Download Electron's zip for one architecture into a local cache, checked against
 # Electron's own SHASUMS256.txt, and point release-build.cjs at it

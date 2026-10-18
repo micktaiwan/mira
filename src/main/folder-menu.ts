@@ -1,7 +1,7 @@
 // The right-click menu shown on a tab folder's header in the sidebar. Like
 // tab-menu.ts, the popup itself is thin and NATIVE (in profiles.ts) — a CSS
-// popover over the sidebar could be clipped by the WebContentsView (CLAUDE.md
-// "les deux pièges" #3), and a native menu always composites above it. This pure,
+// popover over the sidebar could be clipped by the WebContentsView (trap #3 in
+// .claude/rules/main-native-gotchas.md), and a native menu always composites above it. This pure,
 // testable function decides WHICH items to show for a given folder.
 //
 // Actions are emitted as `command` items so they route through the same registry

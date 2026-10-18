@@ -511,7 +511,7 @@ app.whenReady().then(async () => {
 
   // Extension pages (browser-action popups, option pages) are created by the
   // electron-chrome-extensions lib as bare BrowserWindows with no window-open
-  // handler — so a window.open("_blank") from inside one (lemlist's "Get started"
+  // handler — so a window.open("_blank") from inside one (an extension's "Get started"
   // → linkedin.com) escapes into an unmanaged OS window while the popup closes on
   // blur. Route those into a Mira tab instead. The handler no-ops (returns null)
   // for any non-extension wc, and tab views install their own handler right after
@@ -685,7 +685,7 @@ app.whenReady().then(async () => {
   )
   console.log(`[mira] control socket listening on ${SOCKET_PATH}`)
 
-  // System-wide shortcut to summon Mira from any app (like Panorama's
+  // System-wide shortcut to summon Mira from any app (a global hotkey like
   // Cmd+Shift+P). Routed through the registry (focus-app) so the same action is
   // reachable from the socket / MCP. Registration fails loudly when another app
   // already owns the combo; Mira keeps working without it.

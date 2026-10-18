@@ -1,6 +1,6 @@
 /* Encrypted-profile (vault) UI: the lock badge in a profile row and the password
    dialog. The dialog is chrome UI (rendered inside the Settings tab, not over web
-   content), so a plain absolute overlay is fine — no piège #3 here. */
+   content), so a plain absolute overlay is fine — no trap #3 (.claude/rules/main-native-gotchas.md) here. */
 
 .vault-badge {
   display: inline-flex;

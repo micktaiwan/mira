@@ -6,7 +6,7 @@
   "bin": {
     "mira": "./bin/mira"
   },
-  "author": "Mickael Faivre-Maçon <faivrem@gmail.com>",
+  "author": "micktaiwan",
   "homepage": "https://github.com/micktaiwan/mira",
   "scripts": {
     "format": "prettier --write .",

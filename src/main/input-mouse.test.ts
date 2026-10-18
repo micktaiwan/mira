@@ -137,6 +137,11 @@ describe('clickTargetScript', () => {
     expect(js).toContain('innerText')
   })
 
+  it('prefers an element whose whole text is the needle over one that only contains it', () => {
+    const js = clickTargetScript({ kind: 'text', value: 'Add' }, { nth: 1, scroll: false })
+    expect(js).toContain('el.innerText.trim() === needle.trim()')
+  })
+
   it('checks visibility, viewport bounds and what actually sits at the point', () => {
     const js = clickTargetScript({ kind: 'selector', value: '.go' }, { nth: 2, scroll: true })
     expect(js).toContain('getComputedStyle')

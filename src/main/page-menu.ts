@@ -1,5 +1,5 @@
-// The right-click menu shown over web page content. Per CLAUDE.md "les deux
-// pièges" #3, a menu drawn over the WebContentsView must be a NATIVE menu (a CSS
+// The right-click menu shown over web page content. Per trap #3 in
+// .claude/rules/main-native-gotchas.md, a menu drawn over the WebContentsView must be a NATIVE menu (a CSS
 // popover would be hidden behind that native layer). So the popup itself is thin
 // and native (in profiles.ts); the decision of WHICH items to show for a given
 // right-click — a link? a text selection? an editable field? — is this pure,

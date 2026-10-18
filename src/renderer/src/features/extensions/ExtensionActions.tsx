@@ -3,7 +3,7 @@
 // electron-chrome-extensions injects via our preload (injectBrowserAction).
 // Clicking a button fires the extension's action or opens its popup — the lib
 // anchors the popup in its own native child window, ABOVE the web content
-// (exactly the parade of CLAUDE.md piège #3, nothing to invent here).
+// (exactly the workaround for trap #3 in .claude/rules/main-native-gotchas.md, nothing to invent here).
 //
 // The `partition` attribute is CRITICAL: the chrome runs on its own
 // extension-free session (see chrome-session.ts), and without the attribute the

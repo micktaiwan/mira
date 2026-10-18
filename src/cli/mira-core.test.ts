@@ -725,7 +725,7 @@ describe('clientName', () => {
   })
 
   it('puts $MIRA_CLIENT first and skips a missing session', () => {
-    expect(clientName({ MIRA_CLIENT: ' track ' }, '/x')).toBe('track mira-cli cwd=/x')
+    expect(clientName({ MIRA_CLIENT: ' mytool ' }, '/x')).toBe('mytool mira-cli cwd=/x')
   })
 })
 

@@ -1,7 +1,7 @@
 // Tracing domain: start and stop a Chromium content trace over every Mira
 // process, and list the categories the running build offers.
 //
-// Built for the Google Photos locked-folder stall (track.md): 21 s of nothing,
+// Built for a renderer stall on a heavy web app: 21 s of nothing,
 // four times running, with no synchronous IPC of Mira's own to blame. A trace
 // names the inter-process message that is being waited on, which no `sample`
 // can do. The recording is process-wide and there can only be one at a time —

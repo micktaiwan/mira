@@ -5,14 +5,14 @@ import type { VaultLogin } from './bitwarden-login'
 import type { CardVault } from './bitwarden'
 import type { WebContents, WebFrameMain } from 'electron'
 
-const PERSO: CardVault = { appDataDir: '/tmp/bw-perso', email: 'owner@example.com' }
+const PERSO: CardVault = { appDataDir: '/tmp/bw-vault', email: 'owner@example.com' }
 
 const item = (over: Partial<VaultLogin> = {}): VaultLogin => ({
   id: 'item-1',
-  name: 'holistics.io',
+  name: 'example.net',
   username: 'me@example.com',
   password: 'hunter22',
-  hosts: ['eu.holistics.io'],
+  hosts: ['eu.example.net'],
   raw: {},
   ...over
 })
@@ -62,7 +62,7 @@ function makeService(opts: {
           sent.push({ username: request.username, password: request.password })
           holder.current?.handleFrameReport({
             token: request.token,
-            url: opts.url ?? 'https://eu.holistics.io/users/sign_in',
+            url: opts.url ?? 'https://eu.example.net/users/sign_in',
             ...answer
           })
         }
@@ -75,7 +75,7 @@ function makeService(opts: {
       return opts.logins ?? []
     },
     framesOf: () => frames,
-    urlOf: () => opts.url ?? 'https://eu.holistics.io/users/sign_in',
+    urlOf: () => opts.url ?? 'https://eu.example.net/users/sign_in',
     load: () => opts.memory ?? {},
     persist: (memory) => persisted.push(memory),
     ...('pick' in opts
@@ -144,7 +144,7 @@ describe('filling', () => {
   it('remembers the account it used, keyed by site', async () => {
     const { service, persisted } = makeService({ logins: [item()] })
     await service.fill({ profileId: 'perso', contents })
-    expect(persisted.at(-1)).toEqual({ perso: { 'holistics.io': 'item-1' } })
+    expect(persisted.at(-1)).toEqual({ perso: { 'example.net': 'item-1' } })
   })
 
   it('does NOT remember a fill that landed nowhere', async () => {
@@ -193,7 +193,7 @@ describe('when more than one account matches', () => {
   it('fills straight away when this site was already answered once', async () => {
     const { service, sent } = makeService({
       logins: two,
-      memory: { perso: { 'holistics.io': 'b' } }
+      memory: { perso: { 'example.net': 'b' } }
     })
     const out = await service.fill({ profileId: 'perso', contents })
     expect(sent).toEqual([{ username: 'bob@x.com', password: 'hunter22' }])
@@ -203,7 +203,7 @@ describe('when more than one account matches', () => {
   it('a choice remembered for another profile does not decide for this one', async () => {
     const { service, sent } = makeService({
       logins: two,
-      memory: { pro: { 'holistics.io': 'b' } }
+      memory: { pro: { 'example.net': 'b' } }
     })
     const out = await service.fill({ profileId: 'perso', contents })
     expect(sent).toEqual([])
@@ -216,7 +216,7 @@ describe('refusals that name what went wrong', () => {
     const { service } = makeService({ logins: [item({ hosts: ['elsewhere.com'] })] })
     await expect(service.fill({ profileId: 'perso', contents })).rejects.toMatchObject({
       reason: 'no-match',
-      message: 'no login saved for eu.holistics.io'
+      message: 'no login saved for eu.example.net'
     })
   })
 
@@ -240,13 +240,13 @@ describe('candidates()', () => {
   it('lists the accounts without filling anything', async () => {
     const { service, sent } = makeService({ logins: [item()] })
     const out = await service.candidates({ profileId: 'perso', contents })
-    expect(out).toMatchObject({ profileId: 'perso', host: 'eu.holistics.io' })
+    expect(out).toMatchObject({ profileId: 'perso', host: 'eu.example.net' })
     expect(out.candidates).toEqual([
       {
         id: 'item-1',
-        name: 'holistics.io',
+        name: 'example.net',
         username: 'me@example.com',
-        hosts: ['eu.holistics.io'],
+        hosts: ['eu.example.net'],
         exact: true
       }
     ])
@@ -262,7 +262,7 @@ describe('candidates()', () => {
 
 describe('forgetProfile', () => {
   it('drops what a profile remembered and writes that down', async () => {
-    const { service, persisted } = makeService({ memory: { perso: { 'holistics.io': 'a' } } })
+    const { service, persisted } = makeService({ memory: { perso: { 'example.net': 'a' } } })
     service.forgetProfile('perso')
     expect(persisted.at(-1)).toEqual({})
   })
@@ -280,7 +280,7 @@ describe('the account picker', () => {
   it('asks which account, then fills the one that was picked', async () => {
     const { service, sent, asked } = makeService({ logins: two, pick: 'b' })
     const out = await service.fill({ profileId: 'perso', contents })
-    expect(asked).toEqual([{ host: 'eu.holistics.io', ids: ['a', 'b'] }])
+    expect(asked).toEqual([{ host: 'eu.example.net', ids: ['a', 'b'] }])
     expect(sent).toEqual([{ username: 'bob@x.com', password: 'hunter22' }])
     expect(out.filled?.id).toBe('b')
     expect(out.candidates).toBeUndefined()
@@ -289,7 +289,7 @@ describe('the account picker', () => {
   it('remembers what was picked, so the same site never asks twice', async () => {
     const { service, persisted } = makeService({ logins: two, pick: 'b' })
     await service.fill({ profileId: 'perso', contents })
-    expect(persisted.at(-1)).toEqual({ perso: { 'holistics.io': 'b' } })
+    expect(persisted.at(-1)).toEqual({ perso: { 'example.net': 'b' } })
   })
 
   it('fills nothing when the bubble is dismissed, and answers with the list', async () => {
@@ -325,7 +325,7 @@ describe('the account picker', () => {
     const { service, asked } = makeService({
       logins: two,
       pick: 'a',
-      memory: { perso: { 'holistics.io': 'b' } }
+      memory: { perso: { 'example.net': 'b' } }
     })
     const out = await service.fill({ profileId: 'perso', contents })
     expect(asked).toEqual([])

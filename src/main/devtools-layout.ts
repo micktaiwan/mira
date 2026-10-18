@@ -4,7 +4,7 @@
 // the active tab's page + its DevTools, hiding the rest.
 //
 // Docked on the RIGHT (like Chrome's default): the tab's page area is split into a
-// left column for the page and a right column for the inspector. This is the piège
+// left column for the page and a right column for the inspector. This is the trap
 // #1 math — a WebContentsView is a native layer we position by hand, recomputed on
 // every resize — kept pure here so it is testable without Electron.
 

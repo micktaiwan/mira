@@ -4,7 +4,7 @@
 //
 // Its own domain file rather than three more entries in logins.ts, for the reason
 // the registry states: one file per feature keeps parallel sessions off each
-// other's diffs (CLAUDE.md, découpage anti-collision).
+// other's diffs (CLAUDE.md, "Anti-collision split").
 //
 // Two commands, and the split between them is the whole design:
 //   - `login-candidates` answers "which accounts could log in here?" — a list,

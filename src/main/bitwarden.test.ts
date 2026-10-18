@@ -71,14 +71,14 @@ describe('encodeItem', () => {
 
 describe('bwEnv', () => {
   it('pins the appdata dir and keeps the inherited env', () => {
-    const env = bwEnv({ PATH: '/usr/bin' }, { appDataDir: '/tmp/bw-perso' }, 'sess')
+    const env = bwEnv({ PATH: '/usr/bin' }, { appDataDir: '/tmp/bw-vault' }, 'sess')
     expect(env.PATH).toBe('/usr/bin')
-    expect(env.BITWARDENCLI_APPDATA_DIR).toBe('/tmp/bw-perso')
+    expect(env.BITWARDENCLI_APPDATA_DIR).toBe('/tmp/bw-vault')
     expect(env.BW_SESSION).toBe('sess')
   })
 
   it('drops an inherited BW_SESSION when we have none (never use another account key)', () => {
-    const env = bwEnv({ BW_SESSION: 'pro-key' }, { appDataDir: '/tmp/bw-perso' }, null)
+    const env = bwEnv({ BW_SESSION: 'pro-key' }, { appDataDir: '/tmp/bw-vault' }, null)
     expect(env.BW_SESSION).toBeUndefined()
   })
 })

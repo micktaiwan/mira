@@ -4,7 +4,7 @@
 //
 // A plain DOM/CSS bubble can't be used here: it would float up into the region
 // the tab's WebContentsView covers, and that native layer always paints on top
-// of the chrome's DOM (CLAUDE.md, "les deux pièges"). The overlay is a separate
+// of the chrome's DOM (trap #3 in .claude/rules/main-native-gotchas.md). The overlay is a separate
 // transparent child window the OS composites above the view. The positioning
 // math is pure and tested in ../tooltip; this file only validates params.
 

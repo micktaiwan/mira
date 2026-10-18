@@ -1,53 +1,50 @@
-# Mira — import depuis ChatGPT Atlas (notes)
+# Mira — import from ChatGPT Atlas (notes)
 
-Détail du chantier « import favoris » et « import onglets ouverts » depuis
-ChatGPT Atlas (navigateur Chromium d'OpenAI). Le `track.md` n'en garde qu'une
-ligne d'état.
+Detail of the "bookmarks import" and "open tabs import" workstreams from ChatGPT Atlas
+(OpenAI's Chromium browser). `track.md` keeps only one status line for it.
 
-## Import favoris (reste à faire actif)
+## Bookmarks import (active to-do)
 
-Objectif : une commande pilotable qui lit le fichier favoris d'Atlas, passe par
-`importAtlasTree` (fonction pure déjà écrite + testée, mappe le format Atlas → notre
-arbre) et fusionne dans l'arbre Mira.
+Goal: a drivable command that reads Atlas's bookmarks file, goes through
+`importAtlasTree` (pure function already written + tested, maps the Atlas format → our
+tree) and merges into the Mira tree.
 
-Manque le câblage lecture-disque : le fichier Atlas `bookmarks/BookmarkBar` est du
-**JSON** (pas de plist ici — le plist, c'est pour les pinned tabs), donc
-`JSON.parse(readFileSync(...))` → `importAtlasTree` → fusion.
+Missing: the disk-read wiring. The Atlas file `bookmarks/BookmarkBar` is **JSON** (no plist
+here — the plist is for the pinned tabs), so
+`JSON.parse(readFileSync(...))` → `importAtlasTree` → merge.
 
-Décisions ouvertes :
+Open decisions:
 
-- **Quel profil** (défaut = principal, ~874 favoris).
-- **Remplacer** l'arbre OU importer dans un dossier **« Imported from Atlas »**
-  (reco : dossier, non destructif).
-- Dédup par url.
+- **Which profile** (default = the main one, which holds most of the bookmarks).
+- **Replace** the tree OR import into an **"Imported from Atlas"** folder
+  (recommendation: folder, non-destructive).
+- Dedup by url.
 
-## Format des favoris Atlas (vérifié sur disque 2026-07-10)
+## Atlas bookmarks format (verified on disk 2026-07-10)
 
-`~/Library/Application Support/com.openai.atlas/<profil>/bookmarks/BookmarkBar` — un
-**JSON** par profil (`bookmarks` est un dossier). Arbre récursif. Nœud :
+`~/Library/Application Support/com.openai.atlas/<profil>/bookmarks/BookmarkBar` — one
+**JSON** per profile (`bookmarks` is a folder). Recursive tree. Node:
 
 - `id` (int), `uuid`, `title`
-- `type` : objet à une clé — `{bookmarkBar:{}}` racine | `{folder:{}}` | `{url:{}}`
-- `children[]`, `parentUUID`, `url` (si type url)
-- **Aucun timestamp/favicon.**
+- `type`: a one-key object — `{bookmarkBar:{}}` root | `{folder:{}}` | `{url:{}}`
+- `children[]`, `parentUUID`, `url` (if type url)
+- **No timestamp/favicon.**
 
-Profil principal : ~874 urls / ~121 dossiers.
+A real-world profile can hold several hundred urls and over a hundred folders.
 
-## Import onglets ouverts (idée — fait à la main une fois)
+## Open tabs import (idea — done by hand once)
 
-Fait **à la main** le 2026-07-10 (onglets d'un profil Atlas réimportés dans un
-profil Mira via le socket : `new-tab` puis `pin-tab`). Contraintes **vérifiées**
-pour un futur import pilotable :
+Done **by hand** once (tabs of an Atlas profile reimported into a Mira profile through the
+socket: `new-tab` then `pin-tab`). **Verified** constraints for a future drivable import:
 
-1. **Source fiable** = fichiers **SNSS**
-   `com.openai.atlas/browser-data/host/<profil>/Sessions/Session_*` — **arbre
-   distinct** des favoris (`com.openai.atlas/<profil>/bookmarks/BookmarkBar`).
-2. **Plusieurs profils** = comptes ChatGPT, dossiers `user-<acct>__<guid>`
-   (+ variantes `__1/__2` par fenêtre) ; ignorer les `login-staging-*` éphémères.
-3. **AppleScript** (`tell application "ChatGPT Atlas"`) fonctionne mais
-   **sous-remonte** — n'énumère que les onglets chargés (a raté 22 des 26).
-4. Chromium **alterne 2 fichiers** `Session_` : le plus récent n'est pas toujours
-   la fenêtre vivante (les 26 vrais onglets étaient dans le fichier plus ancien).
-5. Le flag **pinned n'est pas décodable** de façon fiable dans le SNSS d'Atlas /
-   Chromium 149 → l'épinglage doit venir d'ailleurs (grille d'icônes visible, ou
-   saisie manuelle).
+1. **Reliable source** = the **SNSS** files
+   `com.openai.atlas/browser-data/host/<profil>/Sessions/Session_*` — a **separate tree**
+   from the bookmarks (`com.openai.atlas/<profil>/bookmarks/BookmarkBar`).
+2. **Several profiles** = ChatGPT accounts, folders `user-<acct>__<guid>`
+   (+ `__1/__2` variants per window); ignore the ephemeral `login-staging-*` ones.
+3. **AppleScript** (`tell application "ChatGPT Atlas"`) works but **under-reports** — it
+   only enumerates loaded tabs (it missed most of them).
+4. Chromium **alternates between 2 `Session_` files**: the most recent one is not always
+   the live window (the real tabs were in the older file).
+5. The **pinned** flag cannot be decoded reliably from Atlas's SNSS / Chromium 149 → pinning
+   has to come from elsewhere (visible icon grid, or manual input).

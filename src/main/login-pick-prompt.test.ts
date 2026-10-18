@@ -12,9 +12,9 @@ import { parsePromptAnswer } from './card-prompt'
 const option = (over: Partial<LoginPickOption> = {}): LoginPickOption => ({
   id: 'item-1',
   username: 'me@example.com',
-  name: 'holistics.io',
+  name: 'example.net',
   exact: true,
-  host: 'eu.holistics.io',
+  host: 'eu.example.net',
   ...over
 })
 
@@ -67,7 +67,7 @@ describe('loginPickSize', () => {
 describe('the picker document', () => {
   it('draws one clickable row per account, carrying its vault id', () => {
     const html = renderLoginPickHtml({
-      host: 'eu.holistics.io',
+      host: 'eu.example.net',
       account: 'owner@example.com',
       options: [
         option({ id: 'a', username: 'ana@x.com' }),
@@ -77,12 +77,12 @@ describe('the picker document', () => {
     expect(html).toContain('data-id="a"')
     expect(html).toContain('data-id="b"')
     expect(html).toContain('ana@x.com')
-    expect(html).toContain('Which account for eu.holistics.io?')
+    expect(html).toContain('Which account for eu.example.net?')
   })
 
   it('names the vault the accounts come from', () => {
     const html = renderLoginPickHtml({
-      host: 'eu.holistics.io',
+      host: 'eu.example.net',
       account: 'owner@example.com',
       options: [option()]
     })
@@ -111,7 +111,7 @@ describe('the picker document', () => {
 
   it('never carries a password: there is no field for one on this bubble', () => {
     const html = renderLoginPickHtml({
-      host: 'eu.holistics.io',
+      host: 'eu.example.net',
       account: 'owner@example.com',
       options: [option()]
     })

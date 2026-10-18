@@ -1,6 +1,6 @@
 // Skill pane domain: the right-side AI panel. Unlike an HTML overlay, this pane
 // does NOT float over the page — main shrinks the active WebContentsView to leave
-// room for it (like the left tab panel), so there is no piège #3 (see CLAUDE.md).
+// room for it (like the left tab panel), so there is no trap #3 (see .claude/rules/main-native-gotchas.md).
 // Main owns the pane state and pushes it to the chrome, which renders SkillPane to
 // match.
 //

@@ -61,7 +61,8 @@ export interface CookieContext {
    * another site on the target window's session. `url` is null and `cookie` ''
    * when there is no web page to act on. The value is a live session secret. */
   readActiveSiteCookies: (
-    url?: string
+    url?: string,
+    tabId?: string
   ) => Promise<{ url: string | null; cookie: string; count: number }>
 }
 
@@ -132,12 +133,14 @@ export const cookieCommands: CommandMap<CommandContext> = {
   // Read-only: the cookie string the active tab's site would send, HttpOnly
   // included (read from the session, not document.cookie). Purpose: hand a
   // logged-in session to an external tool without re-authenticating. No `url` →
-  // the active tab's site. Treat the returned `cookie` as a secret: it is the
-  // live session, equivalent to the login itself.
+  // the active tab's site. `tabId` reads that tab's OWN session (its profile),
+  // since a socket request otherwise lands on the focused or first window,
+  // which may be another profile. Treat the returned `cookie` as a secret: it
+  // is the live session, equivalent to the login itself.
   'dump-cookies': async (ctx, params) => {
-    const { url } = (params ?? {}) as { url?: string }
+    const { url, tabId } = (params ?? {}) as { url?: string; tabId?: string }
     try {
-      const { url: site, cookie, count } = await ctx.readActiveSiteCookies(url)
+      const { url: site, cookie, count } = await ctx.readActiveSiteCookies(url, tabId)
       if (!site) return { ok: false, error: 'no active site to read' }
       return { ok: true, url: site, cookie, count }
     } catch (error) {

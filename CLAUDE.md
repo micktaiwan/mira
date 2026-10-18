@@ -1,131 +1,131 @@
 # Mira
 
-Un navigateur web perso, à moi, **basé sur Chromium** et **vibe codé**. Frère de Kova (le terminal) : court, personnel, taillé pour mon usage.
+A personal web browser, my own, **based on Chromium** and **vibe coded**. Sibling of Kova (the terminal): short, personal, cut to fit my use.
 
-Nom : `mira` = "regarde" (latin _mirari_, s'émerveiller) + une étoile. Le job d'un navigateur : afficher le web.
+Name: `mira` = "look" (Latin _mirari_, to marvel) + a star. A browser's job: display the web.
 
-## Rules par domaine (`.claude/rules/`)
+## Rules by area (`.claude/rules/`)
 
-Le savoir spécifique à une zone de code vit dans des **rules path-scopées** qui ne chargent que quand tu touches les fichiers concernés (allège ce CLAUDE.md, toujours chargé). Panorama des rules :
+Knowledge specific to one area of the code lives in **path-scoped rules** that only load when you touch the files concerned (it lightens this CLAUDE.md, which is always loaded). Overview of the rules:
 
-- `main-native-gotchas.md` (`src/main/**`) : pièges natifs Electron — WebContentsView, `<webview>`, overlay natif, `globalShortcut` AZERTY, Spaces macOS.
-- `command-registry.md` (`src/main/commands/**`) : découpage anti-collision du registre de commandes (un fichier par domaine).
-- `piloting-and-testing.md` (`src/main/**`, `docs/socket.md`, `scratchpad/**`, `*.test.ts`) : piloter Mira par le socket (client brut vs piège `nc`, `exec-js`/`tabId`, onglet de test en `background`, profil isolé, `--profile`/`MIRA_PROFILE`).
-- `packaging.md` (`electron-builder.yml`, `patches/**`, `bin/**`, `package.json`) : `build:mac`, patch app-builder-lib figé, `./bin/build.sh`.
+- `main-native-gotchas.md` (`src/main/**`): Electron native pitfalls — WebContentsView, `<webview>`, native overlay, AZERTY `globalShortcut`, macOS Spaces.
+- `command-registry.md` (`src/main/commands/**`): anti-collision split of the command registry (one file per domain).
+- `piloting-and-testing.md` (`src/main/**`, `docs/socket.md`, `scratchpad/**`, `*.test.ts`): driving Mira through the socket (raw client vs the `nc` trap, `exec-js`/`tabId`, test tab in `background`, isolated profile, `--profile`/`MIRA_PROFILE`).
+- `packaging.md` (`electron-builder.yml`, `patches/**`, `bin/**`, `package.json`): `build:mac`, pinned app-builder-lib patch, `./bin/build.sh`.
 
-## Décision d'archi (posée, ne pas rouvrir sans raison)
+## Architecture decision (settled, do not reopen without a reason)
 
-Voie **A** : on **embarque** le moteur Chromium, on ne forke pas. Chromium est une dépendance, pas notre codebase. On construit l'UI et les features par-dessus.
+Path **A**: we **embed** the Chromium engine, we do not fork it. Chromium is a dependency, not our codebase. We build the UI and the features on top of it.
 
-Choix : **Electron** (Chromium + Node bundlés). Retenu pour la masse de doc/exemples — le terrain où le vibe coding se plante le moins. Alternatives écartées : NW.js (écosystème trop petit), Tauri/Wails (webview système = **WebKit sur Mac**, pas Chromium → casse la contrainte).
+Choice: **Electron** (Chromium + Node bundled). Picked for the mass of docs/examples — the ground where vibe coding fails the least. Rejected alternatives: NW.js (ecosystem too small), Tauri/Wails (system webview = **WebKit on Mac**, not Chromium → breaks the constraint).
 
-## Principe fondateur : tout pilotable (IPC + MCP)
+## Founding principle: everything drivable (IPC + MCP)
 
-**Toute action de Mira doit être pilotable par programme, pas seulement à la souris.** C'est une contrainte d'archi, pas un vœu : elle décide de la structure du code dès le départ.
+**Every Mira action must be drivable by a program, not only with the mouse.** It is an architecture constraint, not a wish: it decides the structure of the code from the start.
 
-Conséquences concrètes :
+Concrete consequences:
 
-1. **Couche de commandes unique.** Chaque action (naviguer, ouvrir/fermer/switcher un onglet, back/forward/reload, ajouter un favori, commande de palette…) est une **commande nommée et typée** dans un registre central côté **main**. C'est la seule source de vérité des actions.
-2. **L'UI n'est qu'un appelant.** La chrome React ne mute JAMAIS l'état du browser directement : elle **envoie une commande** (via IPC) que le main exécute. Un click handler = un `invoke('command-name', params)`, pas de la logique métier dans le renderer.
-3. **Trois transports, un seul bus.** Le même registre de commandes est atteignable par :
-   - **IPC** (interne) : la chrome React ↔ main.
-   - **Socket unix** (externe, façon Kova) : `MIRA_SOCKET` (défaut `/tmp/mira.sock`), une requête JSON par ligne, pour piloter Mira depuis un shell / un agent. **Référence API : `docs/socket.md`** ; en live, la commande `list-commands` liste les noms connus du build qui tourne. **En pratique, piloter via le CLI `mira` (`bin/mira`, sur le PATH), pas au `nc` : `mira tabs` / `mira use --url <s>` (pin via `$MIRA_TAB`) / `mira exec` / `mira call <cmd> --params '<json>'`. Logique pure + tests dans `src/cli/mira-core.mjs`.** Détail (client brut, `exec-js`, onglets de test, profil isolé) : rule `.claude/rules/piloting-and-testing.md`.
-   - **MCP** : un serveur mince qui wrappe la socket. Il n'ajoute pas de logique, il expose les commandes existantes.
-4. **Une commande = un nom + un schéma de params.** Ainsi elle est appelable à l'identique depuis IPC, socket ou MCP, sans réécriture.
+1. **A single command layer.** Every action (navigate, open/close/switch a tab, back/forward/reload, add a bookmark, palette command…) is a **named, typed command** in a central registry on the **main** side. It is the single source of truth for actions.
+2. **The UI is just a caller.** The React chrome NEVER mutates the browser state directly: it **sends a command** (via IPC) that main executes. A click handler = an `invoke('command-name', params)`, not business logic in the renderer.
+3. **Three transports, one bus.** The same command registry is reachable through:
+   - **IPC** (internal): React chrome ↔ main.
+   - **Unix socket** (external, Kova-style): `MIRA_SOCKET` (default `/tmp/mira.sock`), one JSON request per line, to drive Mira from a shell / an agent. **API reference: `docs/socket.md`**; live, the `list-commands` command lists the names known to the running build. **In practice, drive it through the `mira` CLI (`bin/mira`, on the PATH), not with `nc`: `mira tabs` / `mira use --url <s>` (pin via `$MIRA_TAB`) / `mira exec` / `mira call <cmd> --params '<json>'`. Pure logic + tests in `src/cli/mira-core.mjs`.** Detail (raw client, `exec-js`, test tabs, isolated profile): rule `.claude/rules/piloting-and-testing.md`.
+   - **MCP**: a thin server that wraps the socket. It adds no logic, it exposes the existing commands.
+4. **A command = a name + a params schema.** That way it can be called identically from IPC, socket or MCP, without rewriting.
 
-Règle de conception au quotidien : avant d'implémenter une action dans un composant React, se demander « est-ce une commande du registre ? ». Si oui (presque toujours), elle vit dans le main et le composant l'appelle. Si une feature n'est atteignable qu'en cliquant, elle viole le principe fondateur.
+Everyday design rule: before implementing an action in a React component, ask yourself "is this a registry command?". If yes (almost always), it lives in main and the component calls it. If a feature can only be reached by clicking, it violates the founding principle.
 
-## Principe fondateur : tout testable (une feature = un test)
+## Founding principle: everything testable (one feature = one test)
 
-**Chaque feature arrive avec son test.** Pas de code de feature mergé sans un test qui le couvre. C'est le corollaire direct du principe « tout pilotable » : comme la logique vit dans le registre de commandes (des fonctions nommées et typées, pas des click handlers), elle se teste sans lancer Electron ni Chromium.
+**Every feature comes with its test.** No feature code merged without a test that covers it. It is the direct corollary of the "everything drivable" principle: since the logic lives in the command registry (named, typed functions, not click handlers), it can be tested without launching Electron or Chromium.
 
-- **Runner : Vitest** (naturel, on est déjà sur Vite via electron-vite). Commande `npm test`.
-- **Ce qu'on teste vraiment = la logique des commandes.** Chaque commande du registre a son test unitaire : entrées → effet attendu / valeur retournée. C'est là que vit 90 % de la valeur.
-- **Ce qu'on ne teste PAS en unitaire = les bouts natifs Electron** (positionnement du `WebContentsView`, cycle de vie des `webContents`, IPC réel). On le fait au coup par coup, pas systématiquement.
-- **Conséquence de conception :** si une commande est trop couplée à Electron pour être testable simplement, extraire sa logique pure dans une fonction à part (testable), et ne laisser dans la commande que l'appel natif (fin, non testé).
+- **Runner: Vitest** (natural, we are already on Vite via electron-vite). Command `npm test`.
+- **What we really test = the command logic.** Every registry command has its unit test: inputs → expected effect / returned value. That is where 90 % of the value lives.
+- **What we do NOT unit test = the Electron native bits** (positioning of the `WebContentsView`, `webContents` lifecycle, real IPC). We do it case by case, not systematically.
+- **Design consequence:** if a command is too coupled to Electron to be tested simply, extract its pure logic into a separate (testable) function, and leave only the native call (thin, untested) in the command.
 
-## Découpage anti-collision (sessions parallèles)
+## Anti-collision split (parallel sessions)
 
-Mira est vibe codé sur **plusieurs sessions en parallèle**. Un même fichier édité par deux sessions = conflit de merge ou écrasement. Le découpage vise donc **un fichier par feature**, pour que deux sessions qui bossent sur deux sujets différents touchent des fichiers différents.
+Mira is vibe coded across **several sessions in parallel**. One file edited by two sessions = merge conflict or overwrite. The split therefore aims for **one file per feature**, so that two sessions working on two different topics touch different files.
 
-**Le détail (layout de `src/main/commands/`, règles pour ajouter une commande / une slice de contexte / un domaine) vit dans la rule `.claude/rules/command-registry.md`.** Test avant d'écrire : « ma feature touche-t-elle un fichier qu'une autre session touche probablement aussi ? » — si oui, nouveau fichier de domaine plutôt qu'un append. Même principe pour les autres surfaces quand elles grossiront (CSS par surface, composants React par feature sous `renderer/src/features/<x>/`, `App.tsx` ne fait qu'assembler).
+**The detail (layout of `src/main/commands/`, rules for adding a command / a context slice / a domain) lives in the rule `.claude/rules/command-registry.md`.** Test before writing: "does my feature touch a file that another session is probably touching too?" — if yes, a new domain file rather than an append. Same principle for the other surfaces when they grow (CSS per surface, React components per feature under `renderer/src/features/<x>/`, `App.tsx` only assembles).
 
 ## Stack
 
-| Couche        | Choix                                     |
-| ------------- | ----------------------------------------- |
-| Shell         | Electron (Chromium + Node)                |
-| Build / HMR   | electron-vite                             |
-| UI ("chrome") | React + TypeScript                        |
-| Style         | Tailwind _(à ajouter — pas encore câblé)_ |
-| Contenu web   | `WebContentsView` (un par onglet)         |
+| Layer          | Choice                                   |
+| -------------- | ---------------------------------------- |
+| Shell          | Electron (Chromium + Node)               |
+| Build / HMR    | electron-vite                            |
+| UI ("chrome")  | React + TypeScript                       |
+| Style          | Tailwind _(to add — not wired yet)_      |
+| Web content    | `WebContentsView` (one per tab)          |
 
-## Le modèle mental : deux mondes séparés
+## The mental model: two separate worlds
 
-1. **La "chrome"** = l'UI _autour_ du web (onglets, barre d'URL, sidebar, palette). C'est notre fenêtre React, notre HTML à nous. Vit dans `src/renderer/`.
-2. **Le contenu web** = les sites visités. Vit dans des conteneurs isolés, un process par vue.
+1. **The "chrome"** = the UI _around_ the web (tabs, address bar, sidebar, palette). It is our React window, our own HTML. Lives in `src/renderer/`.
+2. **The web content** = the sites visited. Lives in isolated containers, one process per view.
 
-Le pont : **`WebContentsView`** (API Electron moderne). Un onglet = un `WebContentsView`, créé côté **main** (`src/main/`), positionné sous la barre d'adresse, écouté (`did-navigate`, `page-title-updated`, `page-favicon-updated`) et piloté (`loadURL`, `goBack`, `reload`). La chrome (renderer) et le main communiquent par **IPC**.
+The bridge: **`WebContentsView`** (modern Electron API). One tab = one `WebContentsView`, created on the **main** side (`src/main/`), positioned under the address bar, listened to (`did-navigate`, `page-title-updated`, `page-favicon-updated`) and driven (`loadURL`, `goBack`, `reload`). The chrome (renderer) and main communicate through **IPC**.
 
-Les **pièges natifs** de ce pont (repositionnement manuel de la vue, overlay impossible sans fenêtre native, etc.) sont dans la rule `.claude/rules/main-native-gotchas.md`, chargée en éditant `src/main/**`.
+The **native pitfalls** of this bridge (manual repositioning of the view, overlay impossible without a native window, etc.) are in the rule `.claude/rules/main-native-gotchas.md`, loaded when editing `src/main/**`.
 
-## Chemin d'incréments
+## Increment path
 
-1. Fenêtre Electron + **un** `WebContentsView` qui charge une URL en dur.
-2. Barre d'adresse qui navigue (URL + entrée → `loadURL`).
-3. Back / forward / reload + affichage titre & favicon.
-4. **Multi-onglets** (tableau de `WebContentsView`, un visible à la fois) — premier vrai palier de complexité (cycle de vie, focus, layout au resize).
-5. Ce qui rend Mira _à moi_ : sidebar façon Arc, raccourcis clavier, command palette `Cmd+K`.
+1. Electron window + **one** `WebContentsView` that loads a hard-coded URL.
+2. Address bar that navigates (URL + enter → `loadURL`).
+3. Back / forward / reload + title & favicon display.
+4. **Multi-tab** (array of `WebContentsView`, one visible at a time) — first real complexity step (lifecycle, focus, layout on resize).
+5. What makes Mira _mine_: Arc-style sidebar, keyboard shortcuts, `Cmd+K` command palette.
 
-## Structure (scaffold electron-vite)
+## Structure (electron-vite scaffold)
 
 ```
-src/main/       process principal (fenêtre, WebContentsView, IPC handlers)
-src/preload/    pont sécurisé main ↔ renderer (contextBridge)
-src/renderer/   l'UI React (la "chrome")
+src/main/       main process (window, WebContentsView, IPC handlers)
+src/preload/    secure bridge main ↔ renderer (contextBridge)
+src/renderer/   the React UI (the "chrome")
 ```
 
-## Commandes
+## Commands
 
 ```bash
 npm run dev        # dev + HMR (process long-running)
 npm run build      # typecheck + build
-npm run typecheck  # tsc, sans build
+npm run typecheck  # tsc, no build
 npm test           # Vitest
 npm run lint / format
-./bin/build.sh     # build packagé + réinstalle l'app (quit par le socket → build:mac → relance en arrière-plan)
-./bin/release.sh patch  # PUBLIE une release GitHub non signée, qui se met à jour seule (docs/releases.md)
+./bin/build.sh     # packaged build + reinstalls the app (quit via the socket → build:mac → relaunch in the background)
+./bin/release.sh patch  # PUBLISHES an unsigned GitHub release that updates itself (docs/releases.md)
 ```
 
-**`npm run format` réécrit TOUT le repo, pas les fichiers que tu viens de toucher.** Le repo n'est
-pas prettier-clean (≈5800 warnings `prettier/prettier` au lint), donc un `format` lancé pour
-vérifier deux fichiers en reformate des dizaines d'autres — 54 fichiers, +7486/−6130, le 30/08/2026
-après un fix de trois fichiers. Aucun changement sémantique, mais le working tree devient
-illisible, ça écrase le travail en cours des autres sessions, et **je n'ai pas le droit de
-l'annuler** (`git checkout`/`restore` interdits par le CLAUDE.md global) : la réparation retombe sur
-l'utilisateur. Donc formater un fichier précis (`npx prettier --write <fichier>`), et vérifier avec
-`npx eslint <fichier>`, jamais les scripts qui balaient le repo.
+**`npm run format` rewrites THE WHOLE repo, not the files you just touched.** The repo is not
+prettier-clean (≈5800 `prettier/prettier` warnings at lint), so a `format` run to check two files
+reformats dozens of others — in one case 54 files, +7486/−6130, after a three-file fix. No semantic
+change, but the working tree becomes unreadable, it overwrites the in-progress work of the other
+sessions, and **it cannot be undone** (destructive git commands such as `git checkout`/`restore`
+are off limits here): the repair falls on the user. So format one specific file
+(`npx prettier --write <file>`), and check with `npx eslint <file>`, never the scripts that sweep
+the repo.
 
-Détails packaging / build packagé : rule `.claude/rules/packaging.md`.
+Packaging / packaged build details: rule `.claude/rules/packaging.md`.
 
 ## Notes
 
-- **Langue** : tout le code, les commentaires, les identifiants et les textes d'UI en **anglais**. Le français reste pour le dialogue.
-- **Rien d'intime ici** : repo de code perso classique, pas le repo `self`. Pas de chiffrement git-crypt, commits descriptifs normaux.
-- **Notes locales non versionnées** : le workflow perso et l'identité du profil de test vivent dans `CLAUDE.local.md`, chargé automatiquement par Claude Code à côté de ce fichier quand il est présent. Il est git-excluded : **absent d'un clone public, c'est normal — ne pas signaler son absence ni la traiter comme une erreur.**
+- **Language**: all code, comments, identifiers and UI text in **English**. French stays for the dialogue.
+- **Public repo**: a regular personal code repo, published on GitHub. No git-crypt encryption, normal descriptive commits.
+- **Unversioned local notes**: the personal workflow and the identity of the test profile live in `CLAUDE.local.md`, loaded automatically by Claude Code next to this file when it is present. It is git-excluded: **absent from a public clone, that is normal — do not report its absence or treat it as an error.**
 
-## Le skill `mira` est la surface publique de cet outil
+## The `mira` skill is the public surface of this tool
 
-`skill/SKILL.md` de ce repo — `~/.claude/skills/mira` n'est qu'un lien vers `skill/` — décrit
-comment une session, depuis n'importe où sur ce Mac, se sert de mira : les commandes, les chemins,
-les ports, ce qu'elle n'a pas le droit de faire. Il est **public** (le repo l'est) : rien de
-personnel dedans. Ce qui est propre à l'utilisateur (ses profils, ses chemins, ses règles de
-travail, les incidents qui expliquent les règles) va dans `skill/LOCAL.md`, exclu de git (sa cible
-est dans `CLAUDE.local.md`), que le skill lit s'il existe. Rien ne synchronise le skill
-automatiquement.
+`skill/SKILL.md` in this repo — `~/.claude/skills/mira` is only a link to `skill/` — describes
+how a session, from anywhere on this Mac, uses mira: the commands, the paths, the ports, what it
+is not allowed to do. It is **public** (the repo is): nothing personal in it. What is specific to
+the user (their profiles, their paths, their working rules, the incidents that explain the rules)
+goes in `skill/LOCAL.md`, excluded from git (its target is in `CLAUDE.local.md`), which the skill
+reads if it exists. Nothing syncs the skill automatically.
 
-**Un changement ici qui touche ce que le skill promet se répercute dans le skill dans la foulée** :
-une commande ou un flag, un chemin de socket ou de données, un port, une valeur par défaut, un nom
-de fichier de conf, une règle sur ce qu'une session peut toucher. Un skill périmé est pire que pas
-de skill du tout, parce qu'une session agit sur ce qu'il dit. `/skill-check mira` compare les deux
-et signale ce qui a divergé.
+This repo is public: nothing personal goes into any tracked file — the user's specifics go in skill/LOCAL.md or CLAUDE.local.md, both excluded from git.
+
+**A change here that touches what the skill promises is carried over into the skill right away**:
+a command or a flag, a socket or data path, a port, a default value, a config file name, a rule
+about what a session may touch. A stale skill is worse than no skill at all, because a session
+acts on what it says. After such a change, compare the skill with the code and fix what diverged.

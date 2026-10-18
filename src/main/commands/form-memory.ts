@@ -1,6 +1,6 @@
 // Form memory domain: what Mira remembers of the ordinary text fields typed into
-// a site, so it can offer the same value back on the next visit (the "numéro
-// fiscal" case). NOT cards — those live in Bitwarden, see commands/cards.ts, and
+// a site, so it can offer the same value back on the next visit (the "tax ID
+// number" case). NOT cards — those live in Bitwarden, see commands/cards.ts, and
 // are explicitly refused by the capture rule.
 //
 // There is no "save this?" command because there is no such question: a value

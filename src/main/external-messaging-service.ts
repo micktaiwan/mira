@@ -284,8 +284,8 @@ export class ExternalMessagingService {
     const pageId = String(wc.id)
     wc.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
       // Only a real document swap kills the ports. An in-place (history API)
-      // navigation keeps the same page alive, and app.lemlist.com is exactly
-      // the kind of SPA that changes route without reloading.
+      // navigation keeps the same page alive, and a web app like app.example.com is
+      // often the kind of SPA that changes route without reloading.
       if (isMainFrame && !isInPlace) router.dropPage(pageId)
     })
     wc.once('destroyed', () => router.dropPage(pageId))

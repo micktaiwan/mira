@@ -137,7 +137,7 @@ describe('run-prompt', () => {
     await registry.execute('run-prompt', { prompt: 'First?' }, ctx)
     await registry.execute('run-prompt', { prompt: 'And then?' }, ctx)
     // The second turn's thread includes the first Q/A plus the new question, so
-    // the model keeps context — this is the "vrai chat avec historique".
+    // the model keeps context — this is the "real chat with history".
     expect(chatCalls[1].messages).toEqual([
       { role: 'user', text: 'First?' },
       {

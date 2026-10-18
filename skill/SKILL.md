@@ -18,7 +18,7 @@ id of a **Mira tab** that Mira attached to the message. It is never a tab of ano
 Docs, Notion…), even when the word "doc" is in the sentence. Go straight to
 `mira exec --tab <uuid> "document.body.innerText"`, without trying other tools first.
 
-**A page whose content is images** (a signature viewer such as Signaturit, pages rendered as lazy
+**A page whose content is images** (an e-signature viewer, pages rendered as lazy
 `<img src="blob:…">`): `innerText` only returns the chrome. For each page, `scrollIntoView()`, wait
 for `naturalWidth > 0`, draw it into a canvas and export a `toDataURL('image/jpeg')` that you decode
 into a file, then read the image. The viewer unloads off-screen pages: capture them one by one, not
@@ -41,7 +41,7 @@ effect and no process launched. It is the living source; what follows is only th
 ```bash
 mira tabs                              # tabs (id / ages / title / url); * = active, z = asleep, ♪ = sound
 mira tabs --window <id>                # ANOTHER window's strip (ids from `mira windows`)
-mira tabs --profile perso              # the user's window of that profile (label or id prefix)
+mira tabs --profile personal           # the user's window of that profile (label or id prefix)
 mira tabs --session                    # YOUR session window's strip (never opens one; --profile if several)
 mira windows                           # open windows (id / profile / tabs), * = focused
 mira close-window --params '{"windowId":"<id>"}'  # close ONE window (no id: the focused one)
@@ -63,7 +63,8 @@ mira nav example.com                   # "go to X" → loads in place, OVERWRITE
 mira done                              # close this Claude session's windows (see below)
 mira focus [--window <id>]             # bring ONE window to the front — FORBIDDEN unless explicitly asked
 mira watch                             # live stream of the watched tab (Ctrl-C to quit)
-mira cookies [--url <url>]             # cookie string of the active site, HttpOnly included
+mira cookies [--url <url>] [--netscape] # cookie string of the tab's site, HttpOnly included; --tab reads THAT tab's profile
+                                       # --netscape: a cookie jar for yt-dlp --cookies / curl -b (Instagram reels need the login)
 mira commands                          # list-commands of the running build
 mira call <command> --params '<json>'  # passthrough to any command
 ```
@@ -103,7 +104,7 @@ window, recognised by `CLAUDE_CODE_SESSION_ID`. Mira creates it on the first cal
 frontmost window, with a home tab, and never saves it in the session.
 
 ```bash
-mira shot --profile perso                        # session window in the "perso" profile
+mira shot --profile personal                     # session window in the profile labelled "personal"
 mira exec "document.title"                       # same window, nothing to repeat
 mira done                                        # close the session's windows
 ```
@@ -113,7 +114,7 @@ mira done                                        # close the session's windows
 on stderr, and returns the tab id: act on it with `--tab <id>` from then on, or the next tab verb
 creates the session window anyway. A session window is only created when the profile has no window
 open. In-place `nav` still goes to the session window, so it never overwrites the user's active tab.
-The user's words: one more window per session "multiplie les fenêtres pour rien".
+The reason: one more window per session multiplies windows for nothing.
 
 - **Several profiles open and no `--profile` on the first call: refused**, never guessed (same
   rule as below). A session that already has a window in two profiles must name one too.
@@ -204,6 +205,13 @@ counts: after `type`, the field's value changed, so the next `click` needs a fre
 on purpose: it stops a click from landing on whatever replaced the element you read. In a
 `mira batch`, write it as `snap` / `type 1 London` / `snap` / `click 4`.
 
+**A page with a live countdown or clock (an OTP form's "4:57") invalidates every snap within a
+second**: the ticking text sits in the form context the guard compares. Separate `mira snap` and
+`mira type` calls then fail with `the page changed since the snapshot`. Put the snap and the action
+in ONE `mira batch` (milliseconds apart, so the timer does not tick between them), or fill and
+submit through `mira exec` (`input.value = …; input.form.requestSubmit()`), which worked on a plain
+server-rendered form.
+
 What snap does not see: elements inside iframes or shadow DOM, canvas apps, password and file
 fields, and text below the fold (scroll, then snap again). For those, fall back to
 `mira click --selector/--text` and `mira exec`.
@@ -257,7 +265,7 @@ which is not necessarily the right one (`docs/socket.md`, § Targeting).
 picking one. Three ways to name the target, in order of preference:
 
 ```bash
-mira open <url> --profile perso     # matches the profile LABEL (or an id prefix)
+mira open <url> --profile personal  # matches the profile LABEL (or an id prefix)
 mira open <url> --window <id>       # id from `mira windows`
 mira open <url> --tab <id>          # or $MIRA_TAB, if a tab is already pinned
 ```
@@ -320,6 +328,12 @@ HTMLInputElement.prototype.click = function () {
 2. **Inject the file**: rebuild the bytes as a `Uint8Array`, turn them into a `File` **carrying the
    exact expected name**, pass it through a `DataTransfer`, then `dispatchEvent(new Event('change',
    {bubbles:true}))`. Assigning `input.files` directly is not enough, the app listens to `change`.
+   **If the page does not react to that event, call the input's own React handler**: on a React
+   app the dispatched `change` can be ignored (it worked once on an avatar uploader, then failed
+   every time after, a reload included). The handler sits on the element:
+   `const k = Object.keys(inp).find(k => k.startsWith('__reactProps')); inp[k].onChange({target: inp,
+   currentTarget: inp, preventDefault(){}, stopPropagation(){}, persist(){}})`. That went through
+   on the first try. Check the dialog's text afterwards; it must move on to its next step.
 
 3. **Answer the name conflict.** On a file that already exists, the app offers "Replace / Keep
    both" — often **outside a `[role=dialog]`, as a plain banner at the bottom of the page**, so
@@ -327,7 +341,7 @@ HTMLInputElement.prototype.click = function () {
    a version instead of duplicating. **Until it is clicked, nothing is uploaded**, even though the
    injection answered without error.
 
-**Three traps seen on a SharePoint OneDrive:**
+**Three traps seen on an online document library:**
 
 - **`mira exec` times out at 5 seconds.** A 4.8 MB `.docx` is 6.4 MB of base64: the script ends in
   `executeJavaScript timed out`. The fix is to push the base64 in **~1.6 MB chunks** into a
@@ -336,14 +350,14 @@ HTMLInputElement.prototype.click = function () {
 - **The file list does not refresh** after the upload: it still shows the old date. `mira reload`
   then reread, otherwise you conclude a failure that is not one.
 - **The only check that counts is to download the file again and reread its content.** The UI can
-  show "modified 3 minutes ago" on a document holding none of our changes: a **Word Online** tab
+  show "modified 3 minutes ago" on a document holding none of our changes: an **online editor** tab
   opened earlier takes over and rewrites the file on top. Close the online editor's tab before any
   re-upload, and compare the size — neither the original's nor ours = a third party wrote.
 
-**When the site's API refuses but the UI works.** Common on a guest share: SharePoint answered
-`403 accessDenied` on `_api/contextinfo` and on three forms of `PUT` (REST as well as Graph/Vroom),
-with a valid `X-RequestDigest`, while the link carried `roles: ["write"]` — a guest authenticated
-by one-time code has no API rights. So an API 403 does **not** prove read-only access: try the UI
+**When the site's API refuses but the UI works.** Common on a guest share: the site answered
+`403 accessDenied` on its context endpoint and on three forms of `PUT` (its REST API as well as its
+Graph-style API), with a valid request digest, while the link carried `roles: ["write"]` — a guest
+authenticated by one-time code has no API rights. So an API 403 does **not** prove read-only access: try the UI
 before concluding.
 
 ## Traps
@@ -353,7 +367,7 @@ before concluding.
   `env: node: No such file or directory`, which a caller that hides stderr sees as an empty answer. Give
   it the login shell's PATH (`zsh -lc 'printf %s "$PATH"'`, read once). And `tabs --json` is large
   (favicons in base64): read stdout while the process runs, never after it exits, or the pipe fills and
-  both sides wait (Kova Float, 14/10/2026: both bugs at once, `kova-float/Sources/KovaFloat/ContextReader.swift`).
+  both sides wait (both bugs were hit at once by a native app reading Mira's context).
 - Every request without a `tabId` binds to the focused window **at call time**: flaky with several
   windows, prefer an explicit `tabId`. Also true of `nav`/`open`: with no pinned tab (and no session
   window), they target the focused window.
@@ -383,7 +397,7 @@ before concluding.
   call that clicks the field for real, selects what is there and inserts the text through CDP.
   **`document.execCommand('insertText', false, '<text>')` is the fallback**, for a field `snap`
   does not see (iframe, shadow DOM): it works on React and controlled forms (Typeform, Notion, most
-  SPAs), but not everywhere. Seen 2026-10-02 on an e-mail field that turns addresses into tags: the
+  SPAs), but not everywhere. Seen on an e-mail field that turns addresses into tags: the
   text was in the DOM value, the form had not seen it and its submit button stayed disabled, while
   `mira type` followed by `mira press ,` produced the tags. So after an `execCommand`, read the
   form's state (button enabled, tag present), not the field's value. ⚠️ **Setting `input.value` directly does not work** on a
@@ -395,8 +409,7 @@ before concluding.
   chunks (see the upload recipe above).
 - **A tab that is not the active one in its window has no layout at all.** `innerWidth` and
   `innerHeight` read `0x0`, so `snap` returns an empty list, `click --selector` finds nothing, and
-  `shot` writes a blank or absurdly narrow PNG (measured 2026-10-06: `413×2541` and a 12 KB solid
-  image). This is not the "covered window" case above — the window can be perfectly visible, the
+  `shot` writes a blank or absurdly narrow PNG (measured: `413×2541` and a 12 KB solid image). This is not the "covered window" case above — the window can be perfectly visible, the
   tab just is not on top of its own strip. It bites every `-b` (background) tab, which is the
   default way to work. **The fix is `mira call activate-tab --params '{"id":"<tab>"}'` on a tab of
   YOUR OWN session window**, which costs nothing (nobody is looking at that window) and never
@@ -408,12 +421,12 @@ before concluding.
   — clicking a button, submitting a form, POSTing — must never contain its own `await sleep`:
   write the waits as shell `sleep` between separate short `exec` calls. And **never retry a write
   `exec` that answered `executeJavaScript timed out`** without first reading the page: the first
-  one probably worked. Measured 2026-10-06 on Bastion: a loop of async execs that each slept ~7 s
+  one probably worked. Measured on a web app: a loop of async execs that each slept ~7 s
   returned eleven timeouts in a row, created all eleven records anyway, and fired twice on six of
   them, leaving every task duplicated.
 
 - **A site behind a Cloudflare managed challenge: read the tab that is already loaded, never
-  reload it.** Measured 2026-10-11 on an account dashboard the user had open: a
+  reload it.** Measured on an account dashboard the user had open: a
   same-origin `fetch()` from that tab came back `403` with the challenge page instead of the HTML;
   the same URL opened with `open -b` sat on "Performing security verification" past a 30 s
   `wait`; and a `nav` of the user's own tab, meant to refresh it, landed on the "Verify you are
@@ -422,7 +435,7 @@ before concluding.
   `new Date(performance.timeOrigin)` alongside it so the answer says how old that state is.
 - **`mira wait` right after `mira reload` can match the page being replaced.** `reload` answers
   `ok` as soon as it is sent; a `wait --text` launched next found its text "after 1ms" in the
-  old document (2026-10-11). To know the reload happened, compare `performance.timeOrigin`
+  old document. To know the reload happened, compare `performance.timeOrigin`
   before and after, or wait for something only the new page has.
 
 ## Improving the CLI as you go

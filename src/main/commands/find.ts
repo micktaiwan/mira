@@ -1,7 +1,7 @@
 // Find-in-page domain: search the active tab's page (Cmd+F). The find bar UI
 // lives in the chrome's toolbar row — NOT over the page: a DOM overlay there
-// would be hidden behind the tab's WebContentsView (CLAUDE.md, "les deux
-// pièges"). Chromium does the actual matching/highlighting via
+// would be hidden behind the tab's WebContentsView (traps #1 and #3 in
+// .claude/rules/main-native-gotchas.md). Chromium does the actual matching/highlighting via
 // webContents.findInPage; match counts come back on the 'found-in-page' event,
 // which main forwards to the chrome (see wireView in profiles.ts).
 
