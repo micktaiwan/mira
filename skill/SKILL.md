@@ -310,6 +310,14 @@ collapses.
 An *Upload* button opens a **native** file picker that nothing drives from the page. So do not let
 it open: **intercept** the `<input type=file>` beforehand, and hand it the file yourself.
 
+**First try `mira upload <file>... [--selector <css>] [--nth <n>]`.** It does step 2 below for you:
+base64 in chunks (so a big file passes the exec timeout), `File` with the right name and MIME type,
+`DataTransfer`, `input` + `change` events, and the React `onChange` fallback. It prints the names
+and sizes the input now holds, and fails with the number of matches when the selector finds no
+input. When the input already sits in the DOM (most upload forms: a "Browse…" button over a
+visible or hidden input), that one command is the whole job; then `mira wait --text` on the page's
+own "processing done" message. The manual recipe below stays for inputs created on click.
+
 The recipe, in three successive execs (the page's JS context persists between them as long as you
 do not reload):
 
@@ -415,7 +423,10 @@ before concluding.
   YOUR OWN session window**, which costs nothing (nobody is looking at that window) and never
   raises the app. Do not activate a tab in one of the user's windows: that switches what they are
   looking at. `exec` keeps working at `0x0`, which is exactly why the failure is silent — the text
-  extraction succeeds and only the clicks and the screenshots come back empty.
+  extraction succeeds and only the clicks and the screenshots come back empty. Partly: in such a
+  tab, `el.innerText` on an element below `body` comes back as `""` (it depends on layout), while
+  `document.body.innerText` still returns the text. Read sub-elements with `textContent` there, and
+  `el.click()` from `exec` still fires the page's handlers.
 - **A `mira exec` that times out at 5 s has still run in the page, and the action it fired is
   done.** The CLI gives up waiting; the JavaScript does not stop. So an `exec` that does something
   — clicking a button, submitting a form, POSTing — must never contain its own `await sleep`:

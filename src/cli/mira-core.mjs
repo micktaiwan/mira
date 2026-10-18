@@ -1204,3 +1204,82 @@ export function withClient(request, client) {
   if (typeof request.client === 'string' && request.client.trim() !== '') return request
   return { client, ...request }
 }
+
+/** Max base64 characters per exec-js call: exec times out at ~5 s, and a
+ * multi-MB literal is what blew it (see skill, upload recipe). */
+export const UPLOAD_CHUNK = 1_500_000
+
+const MIME_BY_EXT = {
+  pdf: 'application/pdf',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  heic: 'image/heic',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  txt: 'text/plain',
+  csv: 'text/csv',
+  json: 'application/json',
+  zip: 'application/zip',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+}
+
+/** MIME type from a file name; unknown extensions go as octet-stream. */
+export function mimeFor(name) {
+  const ext = String(name).split('.').pop()?.toLowerCase() ?? ''
+  return MIME_BY_EXT[ext] ?? 'application/octet-stream'
+}
+
+/**
+ * Build the exec-js scripts that put local files into a page's
+ * `<input type=file>`, so no native picker is ever opened. Returns the scripts
+ * in order: one that resets a page-side buffer, one per base64 chunk, and a
+ * last one that builds the Files, assigns them through a DataTransfer, fires
+ * `input` + `change`, and also calls the element's React `onChange` when the
+ * page is a React app (a dispatched event alone is sometimes ignored there).
+ * The last script returns `{ files: [names], selector }` or throws if the
+ * input is missing.
+ *
+ * @param {{name:string, b64:string}[]} files
+ * @param {{ selector?: string, nth?: number, chunk?: number }} [opts]
+ * @returns {{ scripts: string[] } | { error: string }}
+ */
+export function buildUploadScripts(files, opts = {}) {
+  if (!files.length) return { error: 'no file given' }
+  const selector = opts.selector || 'input[type=file]'
+  const nth = Number.isInteger(opts.nth) && opts.nth > 0 ? opts.nth : 1
+  const chunk = opts.chunk || UPLOAD_CHUNK
+  const scripts = [`window.__miraUpload = ${JSON.stringify(files.map(() => []))}; true`]
+  files.forEach((f, i) => {
+    for (let at = 0; at < f.b64.length; at += chunk) {
+      scripts.push(`window.__miraUpload[${i}].push(${JSON.stringify(f.b64.slice(at, at + chunk))}); true`)
+    }
+  })
+  const meta = files.map((f) => ({ name: f.name, type: mimeFor(f.name) }))
+  scripts.push(`(() => {
+  const meta = ${JSON.stringify(meta)};
+  const inputs = document.querySelectorAll(${JSON.stringify(selector)});
+  const inp = inputs[${nth - 1}];
+  if (!inp) throw new Error('no element matches ' + ${JSON.stringify(selector)} + ' (found ' + inputs.length + ')');
+  const dt = new DataTransfer();
+  meta.forEach((m, i) => {
+    const bin = atob(window.__miraUpload[i].join(''));
+    const bytes = new Uint8Array(bin.length);
+    for (let j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);
+    dt.items.add(new File([bytes], m.name, { type: m.type }));
+  });
+  delete window.__miraUpload;
+  // Read the names BEFORE dispatching: many upload widgets clear the input in their handler.
+  const sent = Array.from(dt.files).map((f) => f.name + ' (' + f.size + ' B)');
+  inp.files = dt.files;
+  inp.dispatchEvent(new Event('input', { bubbles: true }));
+  inp.dispatchEvent(new Event('change', { bubbles: true }));
+  const rk = Object.keys(inp).find((k) => k.startsWith('__reactProps'));
+  if (rk && typeof inp[rk].onChange === 'function') {
+    inp[rk].onChange({ target: inp, currentTarget: inp, preventDefault() {}, stopPropagation() {}, persist() {} });
+  }
+  return { files: sent, selector: ${JSON.stringify(selector)} };
+})()`)
+  return { scripts }
+}

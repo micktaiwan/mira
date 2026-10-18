@@ -32,6 +32,9 @@
 //   mira use --active               pin the focused window's active tab
 //   mira use <id>                   pin an explicit id
 //   mira exec <code|-|@file>        run JS in the pinned/active tab
+//   mira upload <file>... [--selector <css>] [--nth <n>]   put local files into the page's <input type=file>
+//                                   (no native picker; chunked so big files pass the exec timeout;
+//                                    default selector input[type=file], --nth picks among matches)
 //   mira press <key> [--mod a,b]    send a real keypress (e.g. e, Enter, ArrowDown)
 //   mira click --selector <css>|--text <str>|--at <x,y>   a REAL mouse click (CDP), not a synthetic MouseEvent
 //                                   (--nth <n>: pick among several matches, 1-based; --scroll: scroll it in view first)
@@ -116,7 +119,8 @@ import {
   formatSnapshot,
   parseBatchScript,
   buildBatch,
-  formatBatchResults
+  formatBatchResults,
+  buildUploadScripts
 } from '../src/cli/mira-core.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -533,6 +537,28 @@ async function main() {
       })
       if ('error' in cr) return die(cr.error, 2)
       return send(buildExec(cr.code, tabId), { json })
+    }
+
+    case 'upload': {
+      const files = []
+      for (const p of positionals) {
+        try {
+          files.push({ name: p.split('/').pop(), b64: readFileSync(resolve(p)).toString('base64') })
+        } catch (e) {
+          return die(`cannot read ${p}: ${e instanceof Error ? e.message : String(e)}`, 2)
+        }
+      }
+      const up = buildUploadScripts(files, {
+        selector: typeof flags.selector === 'string' ? flags.selector : undefined,
+        nth: flags.nth !== undefined ? Number(flags.nth) : undefined
+      })
+      if ('error' in up) return die(up.error, 2)
+      let res
+      for (const code of up.scripts) {
+        res = await call(buildExec(code, tabId), socketPath, timeoutMs).catch((e) => die(e.message, 2))
+        if (!res.ok) return report(res, { json })
+      }
+      return report(res, { json, pretty: (r) => (r.result?.files ?? []).join('\n') })
     }
 
     case 'click': {
