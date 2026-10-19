@@ -78,6 +78,8 @@ export interface SkillPaneState {
   status: 'idle' | 'loading' | 'error'
   messages: ChatMessage[]
   error?: string
+  /** The pane hosts an embedded Kova terminal (claude) instead of the chat. */
+  terminal?: boolean
 }
 
 export interface MiraAPI {

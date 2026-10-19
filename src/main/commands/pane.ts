@@ -14,6 +14,7 @@
 import { type CommandMap, fail } from './registry'
 import type { CommandContext } from './context'
 import type { ChatMessage } from '../llm'
+import { parseTerminalRect, type TerminalRect } from '../kova-pane'
 
 export type { ChatMessage } from '../llm'
 
@@ -32,6 +33,10 @@ export interface SkillPaneState {
   messages: ChatMessage[]
   /** The failure message, when status is 'error'. */
   error?: string
+  /** True when the pane hosts an embedded Kova terminal running `claude` instead
+   * of the chat (Kova's library linked in + the claude-cli engine, kova-pane.ts).
+   * Set by main on every push; the chrome then renders the terminal's frame. */
+  terminal?: boolean
 }
 
 /** A closed, empty pane (no conversation yet). */
@@ -51,6 +56,9 @@ export interface PaneContext {
   getSkillPane: () => SkillPaneState
   /** Write text to the OS clipboard (the native edge behind copy-chat). */
   writeClipboard: (text: string) => void
+  /** Where the terminal pane's native view goes (top-left window-content points),
+   * as measured by the chrome; null when the chrome unmounted the terminal area. */
+  setTerminalRect: (rect: TerminalRect | null) => void
 }
 
 /** The most recent assistant answer in a thread, or undefined if none yet. */
@@ -104,6 +112,23 @@ export const paneCommands: CommandMap<CommandContext> = {
       const pane = ctx.getSkillPane()
       ctx.showSkillPane({ ...pane, messages: [], status: 'idle', error: undefined })
       return { ok: true, cleared: true }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // The terminal pane's chrome reports the area its native view must cover (it
+  // measures its body: below the header, past the resize handle). Main places,
+  // shows or hides the Kova view from it. `rect: null` = the area is gone.
+  'set-terminal-rect': (ctx, params) => {
+    const { rect } = (params ?? {}) as { rect?: unknown }
+    const parsed = parseTerminalRect(rect)
+    if (parsed === undefined) {
+      return { ok: false, error: '"rect" must be null or {x, y, width, height} finite numbers' }
+    }
+    try {
+      ctx.setTerminalRect(parsed)
+      return { ok: true }
     } catch (error) {
       return fail(error)
     }

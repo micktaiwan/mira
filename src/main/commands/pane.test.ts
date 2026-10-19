@@ -125,3 +125,22 @@ describe('skill pane commands', () => {
     })
   })
 })
+
+describe('set-terminal-rect', () => {
+  it('forwards a valid rect, and null', () => {
+    const { ctx, terminalRects } = makeContext()
+    const rect = { x: 906, y: 90, width: 354, height: 600 }
+    expect(registry.execute('set-terminal-rect', { rect }, ctx)).toEqual({ ok: true })
+    expect(registry.execute('set-terminal-rect', { rect: null }, ctx)).toEqual({ ok: true })
+    expect(terminalRects).toEqual([rect, null])
+  })
+
+  it('rejects a missing or malformed rect', () => {
+    const { ctx, terminalRects } = makeContext()
+    for (const params of [{}, { rect: { x: 1 } }, { rect: { x: 1, y: 2, width: -1, height: 3 } }]) {
+      const res = registry.execute('set-terminal-rect', params, ctx) as { ok: boolean }
+      expect(res.ok).toBe(false)
+    }
+    expect(terminalRects).toEqual([])
+  })
+})

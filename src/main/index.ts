@@ -812,6 +812,8 @@ app.whenReady().then(async () => {
   app.on('will-quit', () => {
     quitTimeline.mark('windows closed (will-quit)')
     profiles.stopHeavyTabMonitor()
+    // No embedded claude outlives Mira (waits up to ~2 s for them to die).
+    profiles.shutdownKova()
     profiles.flushPendingSaves()
     quitTimeline.mark('pending saves flushed')
   })

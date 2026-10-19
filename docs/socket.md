@@ -368,6 +368,18 @@ Every file a page triggers is saved straight to `~/Downloads` (no OS save dialog
 | `toggle-skill-pane`                   | `open?`                     | show/hide the pane                                             |
 | `clear-chat` / `copy-chat`            | —                           | reset / copy the pane thread                                   |
 | `set-chat-options`                    | `model?`, `loadMcp?`        | per-chat LLM options                                           |
+| `set-terminal-rect`                   | `rect`                      | chrome-internal: `{x,y,width,height}` of the terminal view, or `null` |
+
+**Terminal mode.** When Mira was built with Kova's terminal library (`native/mira-kova`, built only
+if `libkova.a` exists on the build machine) and the AI engine is `claude-cli`, the pane hosts a real
+Kova terminal running an interactive `claude` instead of the chat (`src/main/kova-pane.ts`). Then
+`run-skill` and `run-prompt` hand their text to that session and return `sink: "terminal"` (plus
+`skill` and `name` for `run-skill`). The text is flattened to one line, every control character
+replaced by a space; on a first open it is claude's first message (prefixed with `Prompt: ` when it starts with `-`,
+`/`, `!` or `#`), into a running session it is pasted, not
+submitted (the user presses Enter). Claude reads the page itself with the `mira` CLI
+(`MIRA_NO_SESSION_WINDOW=1` in its env). While a terminal lives, the session also shows up on Kova's
+socket protocol at `/tmp/kova-<Mira pid>.sock`. Without the library, nothing changes.
 
 ### Bookmarks
 

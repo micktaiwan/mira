@@ -19,6 +19,7 @@ import {
 } from './focus-restore'
 import { existsSync, rmSync } from 'node:fs'
 import { appendFile, mkdir, writeFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { dirname, extname, join } from 'node:path'
 import {
   app,
@@ -104,6 +105,23 @@ import { lastTabClosesWindow } from './last-tab-close'
 import { isLiveContents } from './live-contents'
 import { type LlmConfig, type ChatMessage, type PageContext } from './llm'
 import { LlmRunner } from './llm-runner'
+import {
+  kovaAvailable,
+  kovaPaneNew,
+  kovaPaneShow,
+  kovaPaneFocus,
+  kovaPanePaste,
+  kovaPaneFree,
+  kovaShutdown,
+  setKovaExitHandler
+} from './mac-kova'
+import {
+  terminalModeOn,
+  terminalShown,
+  terminalText,
+  buildClaudeLaunch,
+  type TerminalRect
+} from './kova-pane'
 import { type BookmarkTree } from './bookmark-store'
 import { BookmarksController } from './bookmarks-controller'
 import {
@@ -466,6 +484,16 @@ interface ProfileWindow {
    * the web view — layout() shrinks the view's WIDTH by skillPaneWidth while it is
    * open, so the pane sits beside the page (no pitfall #3). Closed by default. */
   skillPane: SkillPaneState
+  /** The embedded Kova terminal of this window's skill pane (terminal mode,
+   * kova-pane.ts): its pane id while a claude session lives, else null. Created
+   * on the first open, kept while the pane is merely closed (the session goes
+   * on), freed with the window or when claude exits. */
+  kovaPaneId: number | null
+  /** Where the chrome measured the terminal's area (set-terminal-rect), null
+   * until measured or once the chrome unmounted it. */
+  kovaRect: TerminalRect | null
+  /** Give the terminal keyboard focus as soon as it is shown (set on open). */
+  kovaFocusPending: boolean
   /** Remembered find-in-page text (Cmd+F): the query of the current search on
    * this window, so find-next / find-previous can step it without the chrome
    * resending the text. '' = no active search; cleared by stopFindInPage. */
@@ -1749,6 +1777,9 @@ export class ProfileManager {
       mediaGalleryOpen: false,
       media: new Map(),
       skillPane: closedSkillPane(),
+      kovaPaneId: null,
+      kovaRect: null,
+      kovaFocusPending: false,
       findText: '',
       pushTimer: null,
       layoutThrottled: false,
@@ -1872,6 +1903,11 @@ export class ProfileManager {
       // webContents (as closeTab does) releases the audio. Do it before 'closed',
       // which fires once the native window is already destroyed.
       for (const view of profileWindow.views.values()) view.webContents.close()
+      // The terminal's claude dies with its window (freed while the NSWindow lives).
+      if (profileWindow.kovaPaneId !== null) {
+        kovaPaneFree(profileWindow.kovaPaneId)
+        profileWindow.kovaPaneId = null
+      }
       // Quit Mira when its LAST window closes (e.g. Cmd+Shift+W on the last
       // profile), rather than lingering window-less on macOS. This fires BEFORE
       // 'closed', so app.quit() → 'before-quit' → beginQuit() flips `quitting`
@@ -1884,6 +1920,12 @@ export class ProfileManager {
       if (closeQuitsApp) app.quit()
     })
     window.on('closed', () => {
+      // A window destroyed without 'close' (closeWindowAndWait's destroy()) still
+      // frees its terminal, so its claude never outlives it.
+      if (profileWindow.kovaPaneId !== null) {
+        kovaPaneFree(profileWindow.kovaPaneId)
+        profileWindow.kovaPaneId = null
+      }
       // Drop this window from the open map FIRST, so the "does the profile still
       // have other windows?" check below excludes the one that just closed.
       this.openById.delete(windowId)
@@ -3236,6 +3278,88 @@ export class ProfileManager {
         devtools?.setVisible(false)
       }
     }
+    this.syncKovaPane(pw)
+  }
+
+  /** True when the skill pane is an embedded Kova terminal (kova-pane.ts). */
+  private terminalMode(): boolean {
+    return terminalModeOn({
+      addonAvailable: kovaAvailable(),
+      provider: this.appSettings.llm.provider
+    })
+  }
+
+  /** Place, show or hide this window's terminal view to match the pane, the
+   * chrome overlays and the measured rect. The view is native, ABOVE the chrome
+   * DOM: it hides under the palette and the media gallery. Hands it the keyboard
+   * once shown after an open. */
+  private syncKovaPane(pw: ProfileWindow): void {
+    if (pw.kovaPaneId === null || pw.window.isDestroyed()) return
+    const shown = terminalShown({
+      paneOpen: pw.skillPane.open,
+      paletteOpen: pw.paletteOpen,
+      mediaGalleryOpen: pw.mediaGalleryOpen,
+      rect: pw.kovaRect
+    })
+    kovaPaneShow(pw.kovaPaneId, shown ? pw.kovaRect : null)
+    if (shown && pw.kovaFocusPending) {
+      pw.kovaFocusPending = false
+      kovaPaneFocus(pw.kovaPaneId)
+    }
+  }
+
+  /** Create this window's terminal (hidden until the chrome measures its area),
+   * running an interactive claude, with `initialPrompt` as its first message.
+   * False when it could not be created (the caller falls back to the chat). */
+  private createKovaPane(pw: ProfileWindow, initialPrompt?: string): boolean {
+    if (pw.window.isDestroyed()) return false
+    const wid = parseWindowNumber(pw.window.getMediaSourceId())
+    if (wid === undefined) return false
+    setKovaExitHandler((id) => this.onKovaPaneExited(id))
+    const id = kovaPaneNew(wid, {
+      cwd: homedir(),
+      ...buildClaudeLaunch(initialPrompt, process.env)
+    })
+    if (id === null) return false
+    pw.kovaPaneId = id
+    pw.kovaFocusPending = true
+    return true
+  }
+
+  /** claude exited (exec'd, so the shell is gone too): free the pane and close
+   * the skill pane; the next open starts a fresh session. */
+  private onKovaPaneExited(id: number): void {
+    for (const pw of this.openById.values()) {
+      if (pw.kovaPaneId !== id) continue
+      kovaPaneFree(id)
+      pw.kovaPaneId = null
+      pw.kovaFocusPending = false
+      if (pw.skillPane.open) this.setSkillPaneIn(pw, { ...pw.skillPane, open: false })
+    }
+  }
+
+  /** Terminal mode: open this window's pane and hand `text` to claude — as the
+   * first message of a new session, or pasted (not submitted) into the running
+   * one. False in chat mode or when the terminal could not start. */
+  private typeInTerminalIn(pw: ProfileWindow, text: string): boolean {
+    if (!this.terminalMode()) return false
+    if (pw.kovaPaneId === null) {
+      if (!this.createKovaPane(pw, text)) return false
+    } else {
+      // One line, no control character, no Enter sent after it (how a pasted
+      // printable text affects Claude Code's permission menu is not measured).
+      kovaPanePaste(pw.kovaPaneId, terminalText(text))
+      pw.kovaFocusPending = true
+    }
+    this.setSkillPaneIn(pw, { ...pw.skillPane, open: true })
+    this.syncKovaPane(pw)
+    return true
+  }
+
+  /** Quit: free every terminal and wait for their claude to die. */
+  shutdownKova(): void {
+    for (const pw of this.openById.values()) pw.kovaPaneId = null
+    kovaShutdown()
   }
 
   /** Open / close / toggle the command palette overlay in `pw`. Hides the active
@@ -3263,8 +3387,17 @@ export class ProfileManager {
   /** Set the skill pane state in `pw`: store it, re-layout (shrinks the web view's
    * width when open, restores it when closed), and push the state to the chrome so
    * it renders / hides the pane. The single path for both showSkillPane and close. */
-  private setSkillPaneIn(pw: ProfileWindow, state: SkillPaneState): void {
-    const opening = state.open && !pw.skillPane.open
+  private setSkillPaneIn(pw: ProfileWindow, input: SkillPaneState): void {
+    const opening = input.open && !pw.skillPane.open
+    // Terminal mode is decided here, on every push, so the chrome renders the
+    // right body (chat or the terminal's frame).
+    const terminal = this.terminalMode()
+    if (terminal && opening) {
+      // First open: start the claude session. A failure falls back to the chat.
+      if (pw.kovaPaneId !== null || this.createKovaPane(pw)) pw.kovaFocusPending = true
+    }
+    // The terminal frame only when a session actually lives in this window.
+    const state: SkillPaneState = { ...input, terminal: terminal && pw.kovaPaneId !== null }
     pw.skillPane = state
     // Toggled during HTML fullscreen: the new state becomes the restore target
     // (the user's last word wins over the pre-fullscreen snapshot).
@@ -3275,7 +3408,9 @@ export class ProfileManager {
     if (!pw.window.isDestroyed()) {
       // On open, hand keyboard focus to the chrome (the page likely holds it)
       // so the pane's prompt box can grab it — same move as the palette.
-      if (opening) pw.window.webContents.focus()
+      // In terminal mode the terminal view takes the keyboard instead, once the
+      // chrome has measured its area (syncKovaPane).
+      if (opening && !state.terminal) pw.window.webContents.focus()
       pw.window.webContents.send('mira:skill-pane', state)
     }
   }
@@ -6780,6 +6915,12 @@ export class ProfileManager {
       },
       getSkillPane: () => (target ? target.skillPane : closedSkillPane()),
       writeClipboard: (text: string) => clipboard.writeText(text),
+      setTerminalRect: (rect: TerminalRect | null) => {
+        if (!target) return
+        target.kovaRect = rect
+        this.syncKovaPane(target)
+      },
+      typeInTerminal: (text: string) => (target ? this.typeInTerminalIn(target, text) : false),
       newTab: (url, background = false) => {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
         // focusChrome: opening a tab (click or Cmd+T) focuses the address bar so a

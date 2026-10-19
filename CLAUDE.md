@@ -106,6 +106,12 @@ are off limits here): the repair falls on the user. So format one specific file
 (`npx prettier --write <file>`), and check with `npx eslint <file>`, never the scripts that sweep
 the repo.
 
+**The same trap holds for ONE existing file that is not prettier-clean**: `npx prettier --write`
+on it reformats all of it, not just your lines. `docs/*.md` are the worst case: their tables get
+re-padded, so a 10-line addition to `docs/socket.md` became a 226-line diff. Run `prettier --write`
+only on files you created; on an existing file, check `npx prettier --check <file>` first, and if it
+was already dirty, format your own lines by hand (`git diff --stat` tells you right away).
+
 Packaging / packaged build details: rule `.claude/rules/packaging.md`.
 
 ## Notes

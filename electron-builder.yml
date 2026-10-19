@@ -29,6 +29,13 @@ extraResources:
   # see src/main/mac-activation.ts).
   - from: native/mira-activation/build/Release/mira_activation.node
     to: mira_activation.node
+  # Optional Kova terminal addon (libkova.a linked in, see native/mira-kova/). Its
+  # build is skipped when libkova.a is absent or of another arch, so this ships the
+  # dir's mira_kova.node only when there is one; build.mjs always leaves the dir.
+  - from: native/mira-kova/build/Release
+    to: .
+    filter:
+      - mira_kova.node
 asarUnpack:
   - resources/**
 # Declare Mira a handler for local HTML files so `open foo.html` (and a

@@ -1,0 +1,8 @@
+/* The terminal pane's body: an empty area main covers with Kova's native
+   terminal view (TerminalPane.tsx). Its background shows only for the instant
+   before the view is placed. */
+.terminal-pane-body {
+  flex: 1;
+  min-height: 0;
+  background: #000;
+}

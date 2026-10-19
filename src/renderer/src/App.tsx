@@ -12,6 +12,7 @@ import { ReloadSpinner } from './features/loading/ReloadSpinner'
 import { WakingSpinner } from './features/loading/WakingSpinner'
 import { useRevealTab } from './features/reveal-tab/useRevealTab'
 import { useNavButton } from './features/nav-history/useNavButton'
+import TerminalPane from './features/terminal/TerminalPane'
 import { applyTheme, initialTheme } from './features/profile-theme/profile-theme'
 import type { SkillPaneState, TabFolder } from '../../preload/index.d'
 
@@ -674,7 +675,8 @@ function App(): React.JSX.Element {
       {mediaGalleryOpen && <MediaGallery onClose={closeMediaGallery} />}
       {/* The right-side skill pane. Main shrinks the web view by its width while
           open (profiles.ts layout), so it sits beside the page rather than over it. */}
-      {skillPane.open && (
+      {skillPane.open && skillPane.terminal && <TerminalPane onClose={closeSkillPane} />}
+      {skillPane.open && !skillPane.terminal && (
         <SkillPane
           state={skillPane}
           onClose={closeSkillPane}

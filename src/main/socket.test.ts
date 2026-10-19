@@ -345,6 +345,7 @@ function setup(): {
     activeUrl: () => null,
     extractText: () => Promise.resolve(''),
     capturePage: () => Promise.resolve(null),
+    typeInTerminal: () => false,
     captureTabScreenshot: () =>
       Promise.resolve({ path: '/tmp/shot.png', width: 1, height: 1, bytes: 0, fullPage: false }),
     summarize: (_prompt: string, text: string) => Promise.resolve(text),
@@ -374,7 +375,8 @@ function setup(): {
     showSkillPane: () => {},
     closeSkillPane: () => {},
     getSkillPane: () => ({ open: false, title: '', status: 'idle' as const, messages: [] }),
-    writeClipboard: () => {}
+    writeClipboard: () => {},
+    setTerminalRect: () => {}
   }
   return { registry: createCommandRegistry(), ctx, loaded }
 }

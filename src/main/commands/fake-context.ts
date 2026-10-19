@@ -122,6 +122,7 @@ import {
   type Theme
 } from '../theme-store'
 import { setProfileTheme as setProfileThemePure } from '../profile-store'
+import type { TerminalRect } from '../kova-pane'
 
 export interface FakeContext {
   ctx: CommandContext
@@ -233,6 +234,10 @@ export interface FakeContext {
   skillPaneStates: SkillPaneState[]
   /** Text written to the clipboard via writeClipboard (copy-chat spy). */
   clipboardWrites: string[]
+  /** Text handed to typeInTerminal while the terminal mode is on (spy). */
+  terminalTyped: string[]
+  /** Rects passed to setTerminalRect (set-terminal-rect spy). */
+  terminalRects: Array<TerminalRect | null>
   /** Messages flashed via showToast (show-toast / copy-tab-id spy). */
   toasts: string[]
   /** Live view of the fake app's LLM config (set-llm-config spy). */
@@ -284,6 +289,8 @@ export interface FakeContext {
 export interface FakeOptions {
   /** Make extractText return '' — models a page with no extractable content. */
   emptyExtract?: boolean
+  /** Model the embedded Kova terminal mode: typeInTerminal accepts the text. */
+  terminal?: boolean
 }
 
 export function makeContext(
@@ -321,6 +328,8 @@ export function makeContext(
   const waitFails = { value: false }
   const extractCalls: SkillSource[] = []
   const summarizeCalls: Array<{ prompt: string; text: string }> = []
+  const terminalTyped: string[] = []
+  const terminalRects: Array<TerminalRect | null> = []
   const chatCalls: Array<{ messages: ChatMessage[]; page: PageContext }> = []
   const captureCalls: boolean[] = []
   /** Requests seen by captureTabScreenshot (the `screenshot` command). */
@@ -855,6 +864,9 @@ export function makeContext(
     writeClipboard: (text: string) => {
       clipboardWrites.push(text)
     },
+    setTerminalRect: (rect: TerminalRect | null) => {
+      terminalRects.push(rect)
+    },
     setHomeUrl: (url: string) => {
       // Empty is allowed: it clears the home so new tabs open blank.
       state.homeUrl = url.trim()
@@ -1293,6 +1305,11 @@ export function makeContext(
         fullPage: req.fullPage
       }
       return Promise.resolve(shot)
+    },
+    typeInTerminal: (text: string) => {
+      if (!opts.terminal) return false
+      terminalTyped.push(text)
+      return true
     },
     summarize: (prompt: string, text: string) => {
       summarizeCalls.push({ prompt, text })
@@ -2251,6 +2268,8 @@ export function makeContext(
     screenshots,
     skillPaneStates,
     clipboardWrites,
+    terminalTyped,
+    terminalRects,
     toasts,
     llm: () => state.llm,
     devToolsOpen: () => state.devToolsOpen,

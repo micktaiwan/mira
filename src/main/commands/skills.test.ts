@@ -183,3 +183,45 @@ describe('run-prompt', () => {
     expect(chatCalls[1].page.screenshot).toBe('data:image/png;base64,ZmFrZQ==')
   })
 })
+
+describe('terminal mode (embedded Kova claude)', () => {
+  it('run-skill types the skill into the terminal instead of running claude -p', async () => {
+    const { ctx, extractCalls, summarizeCalls, terminalTyped, skillPaneStates } = makeContext(
+      'default',
+      { terminal: true }
+    )
+    registry.execute('new-tab', { url: 'https://example.com/article' }, ctx)
+    const res = (await registry.execute('run-skill', { id: 'summarize-page' }, ctx)) as {
+      ok: true
+      sink: string
+    }
+    expect(res.ok).toBe(true)
+    expect(res.sink).toBe('terminal')
+    expect(terminalTyped).toHaveLength(1)
+    expect(terminalTyped[0]).toMatch(
+      /^Summarize this page: .*Read the current page with the mira CLI first\.$/
+    )
+    // No extraction, no engine call, no chat turn pushed.
+    expect(extractCalls).toEqual([])
+    expect(summarizeCalls).toEqual([])
+    expect(skillPaneStates).toEqual([])
+  })
+
+  it('run-prompt types the prompt into the terminal, without the chat engine', async () => {
+    const { ctx, chatCalls, terminalTyped } = makeContext('default', { terminal: true })
+    const res = (await registry.execute('run-prompt', { prompt: '  What is this?  ' }, ctx)) as {
+      ok: true
+      sink: string
+    }
+    expect(res).toEqual({ ok: true, sink: 'terminal' })
+    expect(terminalTyped).toEqual(['What is this?'])
+    expect(chatCalls).toEqual([])
+  })
+
+  it('without the terminal mode, run-prompt keeps the chat path', async () => {
+    const { ctx, chatCalls, terminalTyped } = makeContext()
+    await registry.execute('run-prompt', { prompt: 'Hi' }, ctx)
+    expect(terminalTyped).toEqual([])
+    expect(chatCalls).toHaveLength(1)
+  })
+})

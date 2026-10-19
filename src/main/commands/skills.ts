@@ -13,6 +13,7 @@
 import { type CommandMap, fail } from './registry'
 import type { CommandContext } from './context'
 import { resolveSkills, type SkillSource } from '../skills'
+import { skillTerminalPrompt } from '../kova-pane'
 import type { ChatMessage, PageContext } from '../llm'
 
 /** Skills capability slice: the native edges run-skill / run-prompt need. */
@@ -32,6 +33,13 @@ export interface SkillsContext {
   /** Screenshot the active page as a PNG data URL, or null when there is no live
    * page. The pixel edge behind the 📷 button; only called on explicit request. */
   capturePage: () => Promise<string | null>
+  /** When the pane is an embedded Kova terminal (kova-pane.ts): open it and hand
+   * it `text` — the first message of a new claude session, or pasted into the
+   * running one: one line, no control character, never followed by Enter (how
+   * Claude Code's permission menu reacts to pasted printable text is not
+   * measured). Returns false in chat mode, and the caller then takes the
+   * claude -p path. */
+  typeInTerminal: (text: string) => boolean
 }
 
 export interface RunSkillParams {
@@ -75,6 +83,11 @@ export const skillsCommands: CommandMap<CommandContext> = {
     // a turn to the pane conversation (the skill name as the question, its summary
     // as the answer). Other sinks (page write, external) branch here later.
     const usePane = skill.sink.kind === 'pane'
+    // Terminal mode: the skill becomes a message to the embedded claude, which
+    // reads the page itself through the mira CLI (no extraction, no claude -p).
+    if (usePane && ctx.typeInTerminal(skillTerminalPrompt(skill))) {
+      return { ok: true, skill: skill.id, name: skill.name, sink: 'terminal' }
+    }
     // Thread this run onto the existing conversation (a skill posts a Q/A pair);
     // the first entry sets the pane title.
     const pane = usePane ? ctx.getSkillPane() : null
@@ -127,6 +140,8 @@ export const skillsCommands: CommandMap<CommandContext> = {
     if (typeof prompt !== 'string' || prompt.trim() === '') {
       return { ok: false, error: 'missing "prompt"' }
     }
+    // Terminal mode: the prompt goes to the embedded claude session instead.
+    if (ctx.typeInTerminal(prompt.trim())) return { ok: true, sink: 'terminal' }
     const pane = ctx.getSkillPane()
     // The first message sets the conversation title; later turns keep it.
     const title = pane.title || promptTitle(prompt)
