@@ -69,7 +69,13 @@ export const TAB_BOUND = new Set([
   'screenshot',
   'snapshot',
   'type-text',
-  'select-option'
+  'select-option',
+  // Both take `tabId` and resolve it across every open window (docs/socket.md).
+  // Without them here, `mira close-tab --tab <id>` reached the daemon with no
+  // params at all and answered `missing "id" (or "tabId")`, so the only way in
+  // was `--params '{"tabId":"…"}'` — a flag nobody guesses from the error.
+  'close-tab',
+  'discard-tab'
 ])
 
 /**

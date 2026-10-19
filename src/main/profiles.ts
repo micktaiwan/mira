@@ -4296,7 +4296,7 @@ export class ProfileManager {
         const view = pw.views.get(tabId)
         if (view) return { wc: view.webContents, buffer: pw.media.get(tabId) }
         if (tabId === pw.settingsTabId) throw new Error('not a web page (Settings tab)')
-        if (pw.state.tabs.some((t) => t.id === tabId)) throw new Error(`tab is asleep: ${tabId}`)
+        if (pw.state.tabs.some((t) => t.id === tabId)) throw new Error(`tab is asleep: ${tabId} (wake it first, without raising the window: mira reload --tab ${tabId})`)
       }
       throw new Error(`unknown tab: ${tabId}`)
     }
@@ -4319,7 +4319,7 @@ export class ProfileManager {
         const view = pw.views.get(tabId)
         if (view) return view.webContents
         if (tabId === pw.settingsTabId) throw new Error('not a web page (Settings tab)')
-        if (pw.state.tabs.some((t) => t.id === tabId)) throw new Error(`tab is asleep: ${tabId}`)
+        if (pw.state.tabs.some((t) => t.id === tabId)) throw new Error(`tab is asleep: ${tabId} (wake it first, without raising the window: mira reload --tab ${tabId})`)
       }
       throw new Error(`unknown tab: ${tabId}`)
     }
@@ -6539,7 +6539,7 @@ export class ProfileManager {
             if (pw.state.tabs.some((t) => t.id === tabId)) {
               // In the strip but no view: discarded/lazy tab. Waking it here would
               // race the page load; the caller should activate the tab first.
-              throw new Error(`tab is asleep: ${tabId}`)
+              throw new Error(`tab is asleep: ${tabId} (wake it first, without raising the window: mira reload --tab ${tabId})`)
             }
           }
           throw new Error(`unknown tab: ${tabId}`)

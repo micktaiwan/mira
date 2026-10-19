@@ -379,8 +379,10 @@ before concluding.
 - Every request without a `tabId` binds to the focused window **at call time**: flaky with several
   windows, prefer an explicit `tabId`. Also true of `nav`/`open`: with no pinned tab (and no session
   window), they target the focused window.
-- An asleep tab (lazy-load, discard) makes page-bound commands fail (`tab is asleep`); `select-tab`
-  wakes it.
+- An asleep tab (lazy-load, discard; `z` in `mira tabs`) makes page-bound commands fail
+  (`tab is asleep`). `mira reload --tab <id>` wakes it without switching the window to it, then
+  `mira wait --tab <id> --host <site>` before the next `exec`; `select-tab` wakes it too, but makes
+  it the visible tab.
 - **Every tab carries three ages** (columns between the id and the title, in this order): since it
   opened, since it was last visited, since its page last changed — `3d`, `4h`, or `-` when the data
   is missing (a tab never looked at, or restored from a session older than the feature). In JSON

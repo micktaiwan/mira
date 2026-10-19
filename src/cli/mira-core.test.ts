@@ -254,6 +254,16 @@ describe('buildCall — generic passthrough', () => {
       params: { id: 'x' }
     })
     expect(TAB_BOUND.has('exec-js')).toBe(true)
+    // close-tab and discard-tab take `tabId` too: without them in the set, the
+    // daemon answered `missing "id" (or "tabId")` on `--tab <id>`.
+    expect(buildCall('close-tab', undefined, 't1').request).toEqual({
+      command: 'close-tab',
+      params: { tabId: 't1' }
+    })
+    expect(buildCall('discard-tab', undefined, 't1').request).toEqual({
+      command: 'discard-tab',
+      params: { tabId: 't1' }
+    })
     // get-console is tab-bound too, so `mira get-console` respects the pinned tab.
     expect(buildCall('get-console', undefined, 't1').request).toEqual({
       command: 'get-console',

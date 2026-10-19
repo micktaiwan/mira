@@ -62,6 +62,8 @@
 //                                   (both honour --tab / $MIRA_TAB: the pinned tab's WINDOW is the target)
 //                                   In a Claude session, `open` / `nav -n` on a profile that already has
 //                                   a window of the user's open add the tab THERE, not in a session window.
+//   mira close-tab --tab <id>       close that tab (id from `mira tabs`, resolved across windows)
+//                                   (no --tab: the pinned/active one; `mira discard-tab` puts it to sleep instead)
 // No command here ever brings Mira to the foreground; `mira focus` is the explicit way.
 //   mira focus [--window <id>]      bring one window to the front (default: Mira's last-focused one)
 //   mira windows                    list open windows (id / profile / tabs), * = focused
