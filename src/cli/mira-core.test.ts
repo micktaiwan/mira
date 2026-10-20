@@ -29,7 +29,8 @@ import {
   clientName,
   withClient,
   profileWindow,
-  userWindowForOpen
+  userWindowForOpen,
+  typePlan
   // @ts-expect-error — plain-ESM sibling module, no .d.ts (the CLI ships without a build)
 } from './mira-core.mjs'
 
@@ -641,6 +642,12 @@ describe('sessionTarget', () => {
   it('lets an explicit target win', () => {
     expect(sessionTarget({ command: 'exec', tabId: 't1', env })).toBeNull()
     expect(sessionTarget({ command: 'open', flags: { window: 'w1' }, env })).toBeNull()
+    const flags = { params: '{"tabId":"t1","level":"warning"}' }
+    expect(sessionTarget({ command: 'call', positionals: ['get-console'], flags, env })).toBeNull()
+    // A params object without a tab still lands in the session window.
+    expect(
+      sessionTarget({ command: 'call', positionals: ['exec-js'], flags: { params: '{}' }, env })
+    ).toMatchObject({ sessionId: 'sess-1' })
   })
 
   it('never opens a window for a verb that does not target a tab', () => {
@@ -798,5 +805,23 @@ describe('userWindowForOpen — open/nav reuse the user window of an open profil
       { windowId: 'b', profileId: 'perso', focused: true }
     ]
     expect(userWindowForOpen(torn, 'perso')).toBe('b')
+  })
+})
+
+describe('typePlan — by ref, or into the focused element', () => {
+  it('keeps the by-ref form', () => {
+    expect(typePlan(null, ['3', 'London'], {})).toEqual({
+      request: { command: 'type-text', params: { ref: 3, text: 'London' } }
+    })
+  })
+
+  it('--focused takes every positional as the text, no ref', () => {
+    expect(typePlan('t1', ['428', '220'], { focused: true })).toEqual({
+      request: { command: 'type-text', params: { focused: true, text: '428 220', tabId: 't1' } }
+    })
+  })
+
+  it('--focused without text is an error', () => {
+    expect(typePlan(null, [], { focused: true })).toEqual({ error: 'type --focused needs <text>' })
   })
 })

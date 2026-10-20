@@ -58,6 +58,7 @@ import { tabMenuCommands } from './tab-menu'
 import { tabTidyCommands } from './tab-tidy'
 import { tabTopCommands } from './tab-top'
 import { tabsCommands } from './tabs'
+import { terminalCwdCommands } from './terminal-cwd'
 import { themeCommands } from './themes'
 import { toastCommands } from './toast'
 import { tooltipCommands } from './tooltip'
@@ -172,6 +173,7 @@ export { formatBytes, rankTabMemory, buildTabMemoryReport, hostOf } from './tab-
 export type { TabDetachContext, WindowInfo } from './tab-detach'
 export type { TabMenuContext } from './tab-menu'
 export type { TabsContext, TabInfo, TabKind } from './tabs'
+export type { TerminalCwdContext } from './terminal-cwd'
 export type { ThemeContext } from './themes'
 export type { Theme, ThemeInput } from '../theme-store'
 export type { ToastContext } from './toast'
@@ -259,6 +261,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...tabTidyCommands,
     ...tabTopCommands,
     ...tabsCommands,
+    ...terminalCwdCommands,
     ...themeCommands,
     ...toastCommands,
     ...tooltipCommands,

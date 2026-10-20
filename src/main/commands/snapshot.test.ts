@@ -42,6 +42,20 @@ describe('type-text', () => {
     expect(typings).toEqual([{ ref: 3, text: 'London', tabId: null }])
   })
 
+  it('types into the focused element when asked, with no ref (iframes)', async () => {
+    const { ctx, typings } = makeContext()
+    const res = await registry.execute('type-text', { focused: true, text: '123456' }, ctx)
+    expect(res).toEqual({ ok: true, focused: true, target: 'focused element' })
+    expect(typings).toEqual([{ ref: null, text: '123456', tabId: null }])
+  })
+
+  it('refuses a ref and focused together', async () => {
+    const { ctx } = makeContext()
+    expect(
+      await registry.execute('type-text', { focused: true, ref: 3, text: 'x' }, ctx)
+    ).toEqual({ ok: false, error: 'pass "ref" or "focused", not both' })
+  })
+
   it('rejects a bad ref or empty text', async () => {
     const { ctx } = makeContext()
     expect(await registry.execute('type-text', { ref: '3', text: 'x' }, ctx)).toMatchObject({

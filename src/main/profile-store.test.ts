@@ -14,6 +14,7 @@ import {
   removeProfile,
   assertProfileDeletable,
   profileOrigin,
+  setProfileTerminalCwd,
   type Profile
 } from './profile-store'
 
@@ -348,5 +349,43 @@ describe('assertProfileDeletable', () => {
 
   it('refuses an unknown id before anything else', () => {
     expect(() => assertProfileDeletable(list(), 'nope', 'automation')).toThrow(/unknown profile/)
+  })
+})
+
+describe('terminalCwd', () => {
+  const base: Profile[] = [
+    { id: 'default', label: 'Default' },
+    { id: 'pro', label: 'Pro' }
+  ]
+
+  it('sets and clears a profile folder, leaving the others untouched', () => {
+    const set = setProfileTerminalCwd(base, 'pro', '/Users/me/projects/notes')
+    expect(findById(set, 'pro')).toEqual({
+      id: 'pro',
+      label: 'Pro',
+      terminalCwd: '/Users/me/projects/notes'
+    })
+    expect(findById(set, 'default')).toEqual({ id: 'default', label: 'Default' })
+    expect(findById(setProfileTerminalCwd(set, 'pro', null), 'pro')).toEqual({
+      id: 'pro',
+      label: 'Pro'
+    })
+  })
+
+  it('throws on an unknown profile or a relative folder', () => {
+    expect(() => setProfileTerminalCwd(base, 'nope', '/tmp')).toThrow('unknown profile: nope')
+    expect(() => setProfileTerminalCwd(base, 'pro', 'tmp')).toThrow('not an absolute folder')
+  })
+
+  it('survives a round trip through profiles.json, and drops a malformed value', () => {
+    const read = normalizeProfiles([
+      { id: 'default', label: 'Default' },
+      { id: 'pro', label: 'Pro', terminalCwd: '/Users/me/projects/notes' },
+      { id: 'bad', label: 'Bad', terminalCwd: 'relative/dir' },
+      { id: 'num', label: 'Num', terminalCwd: 42 }
+    ])
+    expect(findById(read, 'pro')?.terminalCwd).toBe('/Users/me/projects/notes')
+    expect(findById(read, 'bad')).toEqual({ id: 'bad', label: 'Bad' })
+    expect(findById(read, 'num')).toEqual({ id: 'num', label: 'Num' })
   })
 })

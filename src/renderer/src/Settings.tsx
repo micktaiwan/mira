@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AudioHistorySection } from './features/audio-history/AudioHistorySection'
 
 // The Settings surface, rendered inline as a Mira tab (App shows it when the
@@ -14,6 +14,8 @@ interface Profile {
   themeId?: string
   /** Legacy tint color (#rrggbb) for pre-themes profiles. */
   color?: string
+  /** The folder the profile's embedded terminal starts in; absent = home. */
+  terminalCwd?: string
   open: boolean
 }
 
@@ -244,6 +246,7 @@ function ProfileRow({
   themes,
   onRename,
   onSetTheme,
+  onSetTerminalCwd,
   onOpen,
   onEncrypt,
   onUnlock,
@@ -260,6 +263,8 @@ function ProfileRow({
   themes: ThemeItem[]
   onRename: (label: string) => void
   onSetTheme: (themeId: string) => void
+  /** Commit the terminal folder ('' = back to the home folder). */
+  onSetTerminalCwd: (cwd: string) => void
   onOpen: () => void
   onEncrypt: () => void
   onUnlock: () => void
@@ -269,6 +274,10 @@ function ProfileRow({
   // Local draft, seeded from the prop. The parent remounts this row (via key)
   // when the committed label changes, so no prop-sync effect is needed.
   const [label, setLabel] = useState(profile.label)
+  const [cwd, setCwd] = useState(profile.terminalCwd ?? '')
+  // Escape reverts then blurs; the blur handler still sees the typed draft, so
+  // this flag tells it not to commit.
+  const cwdCancelled = useRef(false)
   const status = profile.open ? (focused ? 'focused' : 'open') : 'closed'
   // The theme this profile currently resolves to (its themeId, else the default),
   // for the picker's value and preview dot.
@@ -379,6 +388,33 @@ function ProfileRow({
           </button>
         )}
       </span>
+      <div className="profile-terminal-cwd">
+        <span className="profile-terminal-cwd-label">Terminal folder</span>
+        <input
+          className="profile-label-input"
+          value={cwd}
+          placeholder="~ (home folder)"
+          onChange={(e) => setCwd(e.target.value)}
+          onBlur={() => {
+            if (cwdCancelled.current) {
+              cwdCancelled.current = false
+              return
+            }
+            if (cwd.trim() !== (profile.terminalCwd ?? '')) onSetTerminalCwd(cwd)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur()
+            if (e.key === 'Escape') {
+              cwdCancelled.current = true
+              setCwd(profile.terminalCwd ?? '')
+              e.currentTarget.blur()
+            }
+          }}
+          spellCheck={false}
+          aria-label="Terminal folder"
+          title="The folder the side terminal (claude) starts in. Applies to the next one opened."
+        />
+      </div>
     </li>
   )
 }
@@ -695,6 +731,12 @@ function ProfilesSection(): React.JSX.Element {
     setError(res.ok ? null : String(res.error))
   }
 
+  const setTerminalCwd = async (id: string, cwd: string): Promise<void> => {
+    // Main checks the folder exists, persists, and pushes profiles-changed.
+    const res = await run('set-profile-terminal-cwd', { id, cwd })
+    setError(res.ok ? null : String(res.error))
+  }
+
   const create = async (): Promise<void> => {
     const res = await run('create-profile')
     if (!res.ok) setError(String(res.error))
@@ -743,7 +785,7 @@ function ProfilesSection(): React.JSX.Element {
       <ul className="profile-list">
         {profiles.map((p) => (
           <ProfileRow
-            key={`${p.id}:${p.label}`}
+            key={`${p.id}:${p.label}:${p.terminalCwd ?? ''}`}
             profile={p}
             focused={p.id === focused}
             encrypted={encrypted.has(p.id)}
@@ -751,6 +793,7 @@ function ProfilesSection(): React.JSX.Element {
             themes={themes}
             onRename={(label) => rename(p.id, label)}
             onSetTheme={(themeId) => void setTheme(p.id, themeId)}
+            onSetTerminalCwd={(cwd) => void setTerminalCwd(p.id, cwd)}
             onOpen={() => open(p.id)}
             onEncrypt={() => setDialog({ mode: 'encrypt', profile: p })}
             onUnlock={() => setDialog({ mode: 'unlock', profile: p })}

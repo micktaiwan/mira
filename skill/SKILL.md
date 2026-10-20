@@ -277,6 +277,11 @@ fresh shell. So either `--profile`/`--tab` on **every** command, or `export … 
 `mira call list-profiles` gives the labels and ids (`{ id, label, open }`), and the focused id is
 often `null` — that is the root of it all.
 
+The folder a profile's side terminal (the Kova pane running claude) starts in is a per-profile
+setting: `mira call set-profile-terminal-cwd --params '{"id":"<profile>","cwd":"~/some/folder"}'`
+(must exist; `""` or `null` = back to home), read back as `terminalCwd` in `list-profiles`. It
+applies to the next pane created: a running pane keeps its folder until claude exits or the window closes. The user also sets it in Settings > Profiles.
+
 **The CLI also checks that the running Mira honours the target.** Before sending the real URL, it
 opens an `about:blank` at the target and looks where it lands; if the build ignores the `tabId`, it
 refuses and says so, rather than load the page under another profile. Such a refusal means the fix
@@ -415,7 +420,12 @@ before concluding.
   `dispatchEvent('input')`: the value is rewritten on the next render and the field comes out
   empty, with no error. To replace the content rather than append, `t.select()` before inserting.
   `execCommand` returns `false` when the field is not really focused — the signal to click it
-  first, not to retry. ⚠️ `mira exec` times out at 5 seconds, so a huge text is still pushed in
+  first, not to retry. ⚠️ **In a cross-origin iframe, `execCommand` stays `false` even after the
+  click**: `mira exec` runs in the top document, which cannot reach the iframe (`click --text` then
+  answers `no match` too). Seen on a login provider's 2FA modal. What works: `mira shot`, read the
+  coordinates, `mira click --at <x,y>` (screenshot pixels), then `mira type --focused <text>`: it
+  replaces the content of whatever field has focus, iframe included, in one call. (Mira builds
+  before 2026-10-20 lack `--focused`: one `mira press <char>` per character there.) ⚠️ `mira exec` times out at 5 seconds, so a huge text is still pushed in
   chunks (see the upload recipe above).
 - **A tab that is not the active one in its window has no layout at all.** `innerWidth` and
   `innerHeight` read `0x0`, so `snap` returns an empty list, `click --selector` finds nothing, and

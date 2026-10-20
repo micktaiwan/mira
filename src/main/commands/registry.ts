@@ -38,6 +38,9 @@ export interface ProfileInfo {
    * Always resolved (never absent) on the way out, unlike the persisted shape —
    * a scripted delete is allowed on 'automation' profiles only. */
   origin?: 'user' | 'automation'
+  /** The absolute folder the profile's embedded terminal starts in; absent = the
+   * home folder (see terminal-cwd.ts). */
+  terminalCwd?: string
 }
 
 export type CommandResult = { ok: true; [key: string]: unknown } | { ok: false; error: string }

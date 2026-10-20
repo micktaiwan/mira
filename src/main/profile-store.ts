@@ -34,6 +34,9 @@ export interface Profile {
    * itself lives outside this model (userData/vaults/<id>.sparsebundle); this flag
    * only records that the profile IS encrypted. See vault.ts. */
   encrypted?: boolean
+  /** The absolute folder the profile's embedded terminal (the right-side pane
+   * running claude) starts in. Absent = the home folder. See terminal-cwd.ts. */
+  terminalCwd?: string
 }
 
 /** The preset theme colors offered in Settings. Any valid hex is accepted by
@@ -80,13 +83,14 @@ export function normalizeProfiles(raw: unknown): Profile[] {
   const list = Array.isArray(raw) ? raw : []
   for (const item of list) {
     if (!item || typeof item !== 'object') continue
-    const { id, label, themeId, color, encrypted, origin } = item as {
+    const { id, label, themeId, color, encrypted, origin, terminalCwd } = item as {
       id?: unknown
       label?: unknown
       themeId?: unknown
       color?: unknown
       encrypted?: unknown
       origin?: unknown
+      terminalCwd?: unknown
     }
     if (typeof id !== 'string' || id.trim() === '') continue
     if (typeof label !== 'string' || label.trim() === '') continue
@@ -99,7 +103,8 @@ export function normalizeProfiles(raw: unknown): Profile[] {
       ...(typeof themeId === 'string' && themeId.trim() !== '' ? { themeId: themeId.trim() } : {}),
       ...(isProfileColor(color) ? { color } : {}),
       ...(encrypted === true ? { encrypted: true } : {}),
-      ...(origin === 'automation' ? { origin: 'automation' as const } : {})
+      ...(origin === 'automation' ? { origin: 'automation' as const } : {}),
+      ...(typeof terminalCwd === 'string' && terminalCwd.startsWith('/') ? { terminalCwd } : {})
     })
   }
   const def = out.find((p) => p.id === DEFAULT_PROFILE_ID) ?? {
@@ -206,6 +211,23 @@ export function setProfileTheme(
     if (p.id !== id) return p
     const { themeId: _t, color: _c, ...rest } = p
     return trimmed ? { ...rest, themeId: trimmed } : rest
+  })
+}
+
+/** Return a new list with profile `id`'s terminal folder set to `cwd` (already
+ * normalized: see normalizeTerminalCwd) or cleared with null (back to the home
+ * folder). Throws on unknown id or a relative folder. */
+export function setProfileTerminalCwd(
+  profiles: Profile[],
+  id: string,
+  cwd: string | null
+): Profile[] {
+  if (!findById(profiles, id)) throw new Error(`unknown profile: ${id}`)
+  if (cwd !== null && !cwd.startsWith('/')) throw new Error(`not an absolute folder: ${cwd}`)
+  return profiles.map((p) => {
+    if (p.id !== id) return p
+    const { terminalCwd: _c, ...rest } = p
+    return cwd === null ? rest : { ...rest, terminalCwd: cwd }
   })
 }
 

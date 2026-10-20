@@ -21,8 +21,10 @@ export interface SnapshotContext {
    * it, select-all, then CDP text insertion (so React/Vue inputs see real input
    * events). Same tab resolution and visibility guard as clickInTab. Throws
    * with the in-page reason when the ref is stale, hidden, covered or not
-   * editable. */
-  typeInTab: (ref: number, text: string, tabId?: string) => Promise<{ target: string }>
+   * editable. A null ref skips the click and types into whatever element has
+   * focus, iframes included: CDP input goes to the focused frame, which a
+   * snapshot (top document only) cannot name. */
+  typeInTab: (ref: number | null, text: string, tabId?: string) => Promise<{ target: string }>
 }
 
 function tabIdOf(p: Record<string, unknown>): string | undefined | { error: string } {
@@ -46,8 +48,10 @@ export const snapshotCommands: CommandMap<CommandContext> = {
 
   'type-text': async (ctx, params) => {
     const p = (params ?? {}) as Record<string, unknown>
-    const ref = parseRef(p.ref)
-    if (typeof ref !== 'number') return { ok: false, error: ref.error }
+    const focused = p.focused === true
+    if (focused && p.ref !== undefined) return { ok: false, error: 'pass "ref" or "focused", not both' }
+    const ref = focused ? null : parseRef(p.ref)
+    if (ref !== null && typeof ref !== 'number') return { ok: false, error: ref.error }
     if (typeof p.text !== 'string' || p.text.length === 0) {
       return { ok: false, error: '"text" must be a non-empty string' }
     }
@@ -55,6 +59,7 @@ export const snapshotCommands: CommandMap<CommandContext> = {
     if (typeof tabId === 'object') return { ok: false, error: tabId.error }
     try {
       const { target } = await ctx.typeInTab(ref, p.text, tabId)
+      if (ref === null) return { ok: true, focused: true, target }
       return { ok: true, ref, target }
     } catch (error) {
       return fail(error)

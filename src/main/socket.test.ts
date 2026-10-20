@@ -72,6 +72,11 @@ function setup(): {
       label: id,
       ...(themeId ? { themeId } : {})
     }),
+    setProfileTerminalCwd: (id: string, cwd: string | null) => ({
+      id,
+      label: id,
+      ...(cwd ? { terminalCwd: cwd } : {})
+    }),
     openSettings: () => {},
     getSettings: () => ({
       homeUrl: 'home',

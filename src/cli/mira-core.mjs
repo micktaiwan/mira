@@ -34,7 +34,9 @@ export const BOOLEAN_FLAGS = new Set([
   // batch: --keep-going runs every line even after one fails.
   'keep-going',
   // tabs: --session lists this Claude session's own window.
-  'session'
+  'session',
+  // type: --focused types into the element that has focus (iframes included).
+  'focused'
 ])
 
 /** Single-letter short flags, mapped to their long boolean name. `-n` == `--new-tab`.
@@ -198,6 +200,10 @@ export function sessionTarget({ command, positionals = [], flags = {}, tabId, en
   if (!sessionId || env.MIRA_NO_SESSION_WINDOW === '1') return null
   if (tabId || typeof flags.window === 'string') return null
   if (!command) return null
+  // `mira call get-console --params '{"tabId":…}'` names its tab too: routing it
+  // to the session window refused with "3 profiles are open" while the tab id
+  // already said which page (and so which profile) was meant.
+  if (command === 'call' && paramsTabId(flags.params)) return null
   const registryName = command === 'call' ? positionals[0] : command
   const wantsTab = SESSION_VERBS.has(command) || TAB_BOUND.has(registryName ?? '')
   if (!wantsTab) return null
@@ -208,6 +214,17 @@ export function sessionTarget({ command, positionals = [], flags = {}, tabId, en
     out.profileFlag = flags.profile.trim()
   }
   return out
+}
+
+/** The tabId a `--params` JSON names, or null (absent, empty, or not JSON). */
+function paramsTabId(params) {
+  if (typeof params !== 'string') return null
+  try {
+    const parsed = JSON.parse(params)
+    return typeof parsed?.tabId === 'string' && parsed.tabId.trim() !== '' ? parsed.tabId : null
+  } catch {
+    return null
+  }
 }
 
 /**
@@ -842,20 +859,43 @@ export function buildSnapshot(tabId) {
 }
 
 /**
- * type plan: replace the text of the field named by a snapshot ref.
+ * type plan: replace the text of the field named by a snapshot ref, or with
+ * `focused`, of the element that has focus (no ref, no click): the way into a
+ * cross-origin iframe, which a snapshot cannot see. Click the field first.
  *
  * @param {string|null} tabId
  * @param {unknown} ref
  * @param {unknown} text
+ * @param {{ focused?: boolean }} [opts]
  * @returns {{ request: {command:string, params:object} } | { error: string }}
  */
-export function buildType(tabId, ref, text) {
+export function buildType(tabId, ref, text, opts = {}) {
+  if (opts.focused) {
+    if (typeof text !== 'string' || text.length === 0) return { error: 'type --focused needs <text>' }
+    const params = { focused: true, text }
+    if (tabId) params.tabId = tabId
+    return { request: { command: 'type-text', params } }
+  }
   const n = parseRef(ref)
   if (typeof n !== 'number') return n
   if (typeof text !== 'string' || text.length === 0) return { error: 'type needs <ref> <text>' }
   const params = { ref: n, text }
   if (tabId) params.tabId = tabId
   return { request: { command: 'type-text', params } }
+}
+
+/**
+ * `mira type` argv → plan: `<ref> <text>`, or `--focused <text>` (no ref).
+ *
+ * @param {string|null} tabId
+ * @param {string[]} positionals
+ * @param {Record<string, string|boolean>} flags
+ */
+export function typePlan(tabId, positionals, flags) {
+  if (flags.focused === true) {
+    return buildType(tabId, null, positionals.join(' ') || flags.text, { focused: true })
+  }
+  return buildType(tabId, positionals[0], positionals.slice(1).join(' ') || flags.text)
 }
 
 /**
@@ -1051,7 +1091,7 @@ export function buildLineRequest(argv, env) {
     case 'snapshot':
       return { request: buildSnapshot(tabId) }
     case 'type':
-      return buildType(tabId, positionals[0], positionals.slice(1).join(' ') || flags.text)
+      return typePlan(tabId, positionals, flags)
     case 'select':
       return buildSelect(tabId, positionals[0], {
         label: positionals.slice(1).join(' ') || flags.label,

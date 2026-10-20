@@ -41,6 +41,7 @@
 //   mira snap                       the page as a numbered table of what it lets you do + its visible text
 //   mira click <ref>                click element [ref] from the last snap (also --ref <n>)
 //   mira type <ref> <text>          replace the text of field [ref] (real click + CDP text insertion)
+//   mira type --focused <text>      same, into the field that has focus (no ref, no click): iframes
 //   mira select <ref> <label>       pick a native dropdown option by label (--value <v>: by value)
 //                                   A ref action is REFUSED once the page moved since the snap: snap again.
 //   mira wait --selector <css>|--text <str>|--url <substr>|--host <domain>  block until it holds, instead of sleeping blind
@@ -117,6 +118,7 @@ import {
   buildSnapshot,
   clickPositional,
   buildType,
+  typePlan,
   buildSelect,
   formatSnapshot,
   parseBatchScript,
@@ -589,7 +591,7 @@ async function main() {
       return send(buildSnapshot(tabId), { json, pretty: (r) => formatSnapshot(r) })
 
     case 'type': {
-      const built = buildType(tabId, positionals[0], positionals.slice(1).join(' ') || flags.text)
+      const built = typePlan(tabId, positionals, flags)
       if ('error' in built) return die(built.error, 2)
       return send(built.request, { json, pretty: (r) => `typed into ${r.target}` })
     }

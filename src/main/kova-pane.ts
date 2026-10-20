@@ -45,10 +45,24 @@ export function shellQuote(word: string): string {
   return `'${word.replace(/'/g, `'\\''`)}'`
 }
 
-/** The variables a parent Claude Code session leaves in Mira's environment (a
- * Mira started from a Claude session, in dev): unset so the embedded claude is a
- * session of its own, not taken for a nested one. */
-const PARENT_CLAUDE_VARS = ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ID']
+/** The per-session markers a parent Claude Code session leaves in Mira's
+ * environment (a Mira started from a Claude session), as read from a session's
+ * env: unset so the embedded claude is a session of its own, not a child one.
+ * CLAUDE_CODE_CHILD_SESSION is the one that bites: inherited, it turns the
+ * embedded session's transcript saving off, so it can neither be resumed nor
+ * read back. The user-level settings (CLAUDE_EFFORT, CLAUDE_CODE_PLUGIN_DIRS,
+ * CLAUDE_CODE_NO_FLICKER…) are kept on purpose. */
+export const PARENT_CLAUDE_VARS = [
+  'CLAUDECODE',
+  'CLAUDE_CODE_CHILD_SESSION',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_MESSAGING_SOCKET',
+  'CLAUDE_CODE_MESSAGING_TOKEN',
+  'CLAUDE_CODE_SESSION_ATTENDED',
+  'CLAUDE_CODE_SESSION_ID',
+  'CLAUDE_PID'
+]
 
 /** The command line typed into the pane's login shell, and the extra env. `exec`
  * replaces the shell with `claude`: when the user quits Claude Code, the shell

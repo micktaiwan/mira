@@ -121,8 +121,12 @@ import {
   findTheme,
   type Theme
 } from '../theme-store'
-import { setProfileTheme as setProfileThemePure } from '../profile-store'
+import {
+  setProfileTerminalCwd as setProfileTerminalCwdPure,
+  setProfileTheme as setProfileThemePure
+} from '../profile-store'
 import type { TerminalRect } from '../kova-pane'
+import { parseTerminalCwdInput } from '../terminal-cwd'
 
 export interface FakeContext {
   ctx: CommandContext
@@ -215,7 +219,7 @@ export interface FakeContext {
   /** Every click passed to clickInTab (click spy). */
   clicks: ParsedClick[]
   /** Every by-ref typing passed to typeInTab (type-text spy). */
-  typings: Array<{ ref: number; text: string; tabId: string | null }>
+  typings: Array<{ ref: number | null; text: string; tabId: string | null }>
   /** Every wait passed to waitInTab (wait-for spy). */
   waits: Array<{ condition: WaitCondition; tabId: string | null; timeoutMs: number }>
   /** Flip to make every wait time out, so the failure path is testable. */
@@ -323,7 +327,7 @@ export function makeContext(
   const keyPresses: Array<{ key: string; tabId: string | null; modifiers: string[] | undefined }> =
     []
   const clicks: ParsedClick[] = []
-  const typings: Array<{ ref: number; text: string; tabId: string | null }> = []
+  const typings: Array<{ ref: number | null; text: string; tabId: string | null }> = []
   const waits: Array<{ condition: WaitCondition; tabId: string | null; timeoutMs: number }> = []
   const waitFails = { value: false }
   const extractCalls: SkillSource[] = []
@@ -814,6 +818,22 @@ export function makeContext(
       delete profile.color
       return { id, label: profile.label, ...(profile.themeId ? { themeId: profile.themeId } : {}) }
     },
+    setProfileTerminalCwd: (id, cwd) => {
+      const profile = state.profiles.find((p) => p.id === id)
+      if (!profile) throw new Error(`unknown profile: ${id}`)
+      // The fake disk: a home and one project folder under it.
+      const dirs = new Set(['/Users/me', '/Users/me/projects/notes'])
+      const next = parseTerminalCwdInput(cwd, '/Users/me', (p) => dirs.has(p))
+      // Reuse the pure model so the fake matches the manager's write.
+      const [written] = setProfileTerminalCwdPure(
+        [{ id: profile.id, label: profile.label }],
+        id,
+        next
+      )
+      if (written.terminalCwd) profile.terminalCwd = written.terminalCwd
+      else delete profile.terminalCwd
+      return { id, label: profile.label, ...(next ? { terminalCwd: next } : {}) }
+    },
     openSettings: (section?: string) => {
       settingsOpened.push(section ?? null)
       // Model the singleton Settings tab (url carries the section, like the
@@ -1225,7 +1245,7 @@ export function makeContext(
         click.target.kind === 'point' ? { x: click.target.x, y: click.target.y } : { x: 10, y: 20 }
       return Promise.resolve({ ...point, target: describeClickTarget(click.target) })
     },
-    typeInTab: (ref: number, text: string, tabId?: string) => {
+    typeInTab: (ref: number | null, text: string, tabId?: string) => {
       // Same tab resolution as clickInTab; the fake has no page, so the ref is
       // taken at its word (the in-page checks are page-snapshot.test.ts).
       if (tabId !== undefined) {
@@ -1238,7 +1258,7 @@ export function makeContext(
         }
       }
       typings.push({ ref, text, tabId: tabId ?? null })
-      return Promise.resolve({ target: `[${ref}] <input>` })
+      return Promise.resolve({ target: ref === null ? 'focused element' : `[${ref}] <input>` })
     },
     waitInTab: (condition: WaitCondition, tabId: string | undefined, timeoutMs: number) => {
       // Records the wait and answers instantly. Whether the condition ever holds

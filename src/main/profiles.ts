@@ -17,7 +17,7 @@ import {
   shouldRestorePageFocus,
   type FocusTarget
 } from './focus-restore'
-import { existsSync, rmSync } from 'node:fs'
+import { existsSync, rmSync, statSync } from 'node:fs'
 import { appendFile, mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, extname, join } from 'node:path'
@@ -136,9 +136,11 @@ import {
   type ProfileOrigin,
   setProfileColor as setProfileColorPure,
   setProfileTheme as setProfileThemePure,
+  setProfileTerminalCwd as setProfileTerminalCwdPure,
   findById,
   nextProfileLabel
 } from './profile-store'
+import { parseTerminalCwdInput, resolveTerminalCwd } from './terminal-cwd'
 import {
   type Theme,
   type ThemeInput,
@@ -392,6 +394,15 @@ function uniqueFileName(name: string, dir: string, used: Set<string>): string {
     if (!taken(candidate)) return candidate
   }
   return name
+}
+
+/** Whether `path` is an existing directory (the terminal folder check). */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
 }
 
 interface ProfileWindow {
@@ -1546,7 +1557,8 @@ export class ProfileManager {
       label: profile.label,
       origin: profileOrigin(profile),
       ...(profile.themeId ? { themeId: profile.themeId } : {}),
-      ...(profile.color ? { color: profile.color } : {})
+      ...(profile.color ? { color: profile.color } : {}),
+      ...(profile.terminalCwd ? { terminalCwd: profile.terminalCwd } : {})
     }
   }
 
@@ -1572,6 +1584,18 @@ export class ProfileManager {
     this.profiles = setProfileThemePure(this.profiles, id, themeId)
     this.deps.persist(this.profiles)
     this.pushProfileTheme(id)
+    this.broadcastProfilesChanged()
+    return this.toProfileInfo(findById(this.profiles, id)!)
+  }
+
+  /** Set (an existing folder, `~/…` accepted) or clear (null) the folder this
+   * profile's embedded terminal starts in, and persist it. Applies to the next
+   * pane opened: a running claude keeps its folder. */
+  setProfileTerminalCwd(id: string, cwd: string | null): ProfileInfo {
+    if (!findById(this.profiles, id)) throw new Error(`unknown profile: ${id}`)
+    const next = parseTerminalCwdInput(cwd, homedir(), isDirectory)
+    this.profiles = setProfileTerminalCwdPure(this.profiles, id, next)
+    this.deps.persist(this.profiles)
     this.broadcastProfilesChanged()
     return this.toProfileInfo(findById(this.profiles, id)!)
   }
@@ -3317,7 +3341,7 @@ export class ProfileManager {
     if (wid === undefined) return false
     setKovaExitHandler((id) => this.onKovaPaneExited(id))
     const id = kovaPaneNew(wid, {
-      cwd: homedir(),
+      cwd: resolveTerminalCwd(findById(this.profiles, pw.id)?.terminalCwd, homedir(), isDirectory),
       ...buildClaudeLaunch(initialPrompt, process.env)
     })
     if (id === null) return false
@@ -6282,6 +6306,7 @@ export class ProfileManager {
       updateTheme: (id, patch) => this.updateTheme(id, patch),
       deleteTheme: (id) => this.deleteTheme(id),
       setProfileTheme: (id, themeId) => this.setProfileTheme(id, themeId),
+      setProfileTerminalCwd: (id, cwd) => this.setProfileTerminalCwd(id, cwd),
       openSettings: (section?: string) => {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
         this.openSettingsTabIn(target, section)
@@ -6785,8 +6810,13 @@ export class ProfileManager {
             'page is hidden, input would be dropped (tab unknown, or Mira window minimized/occluded)'
           )
         }
-        const point = interpretClickTarget(await evalInWebContents(wc, refTargetScript(ref, 'type')))
-        if ('error' in point) throw new Error(point.error)
+        // A null ref types into the element that already has focus (no click):
+        // the way into a cross-origin iframe, which the snapshot cannot see.
+        const point =
+          ref === null
+            ? null
+            : interpretClickTarget(await evalInWebContents(wc, refTargetScript(ref, 'type')))
+        if (point && 'error' in point) throw new Error(point.error)
         const selectAll = { key: 'a', code: 'KeyA', modifiers: 4 }
         const dbg = wc.debugger
         const wasAttached = dbg.isAttached()
@@ -6794,11 +6824,13 @@ export class ProfileManager {
         try {
           // The click is the checked part: if the page does not get it, the
           // text below would be inserted into nothing.
-          await this.dispatchChecked(wc, 'mouse', point, async () => {
-            for (const ev of mouseDispatchEvents(point.x, point.y)) {
-              await dbg.sendCommand('Input.dispatchMouseEvent', ev)
-            }
-          })
+          if (point) {
+            await this.dispatchChecked(wc, 'mouse', point, async () => {
+              for (const ev of mouseDispatchEvents(point.x, point.y)) {
+                await dbg.sendCommand('Input.dispatchMouseEvent', ev)
+              }
+            })
+          }
           await dbg.sendCommand('Input.dispatchKeyEvent', {
             type: 'keyDown',
             ...selectAll,
@@ -6810,7 +6842,7 @@ export class ProfileManager {
           // Only detach a debugger we attached; leave stealth's in place.
           if (!wasAttached) dbg.detach()
         }
-        return { target: point.label }
+        return { target: point ? point.label : 'focused element' }
       },
       waitInTab: async (condition, tabId, timeoutMs) => {
         // Poll the condition in the page. Each probe is its own short evaluation:

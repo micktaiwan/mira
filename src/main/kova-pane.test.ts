@@ -9,7 +9,8 @@ import {
   terminalText,
   firstMessage,
   localeEnv,
-  TERMINAL_SYSTEM_PROMPT
+  TERMINAL_SYSTEM_PROMPT,
+  PARENT_CLAUDE_VARS
 } from './kova-pane'
 
 describe('terminalModeOn', () => {
@@ -33,7 +34,7 @@ describe('buildClaudeLaunch', () => {
   it('execs claude with the system prompt and opts out of the session window', () => {
     const { command, env } = buildClaudeLaunch(undefined, { LANG: 'C.UTF-8' })
     expect(command).toBe(
-      'unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID; ' +
+      `unset ${PARENT_CLAUDE_VARS.join(' ')}; ` +
         `exec claude --append-system-prompt ${shellQuote(TERMINAL_SYSTEM_PROMPT)} || exit`
     )
     expect(env).toEqual(['MIRA_NO_SESSION_WINDOW=1'])
@@ -154,5 +155,20 @@ describe('localeEnv', () => {
     expect(buildClaudeLaunch(undefined, { LANG: 'C.UTF-8' }).env).toEqual([
       'MIRA_NO_SESSION_WINDOW=1'
     ])
+  })
+})
+
+describe('PARENT_CLAUDE_VARS', () => {
+  it('unsets the inherited session markers, transcript one included', () => {
+    const { command } = buildClaudeLaunch()
+    for (const v of ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_SESSION_ID']) {
+      expect(command.startsWith('unset ') && command.split(';')[0].split(' ')).toContain(v)
+    }
+  })
+
+  it('keeps the user-level Claude settings', () => {
+    for (const v of ['CLAUDE_EFFORT', 'CLAUDE_CODE_PLUGIN_DIRS', 'CLAUDE_CODE_NO_FLICKER']) {
+      expect(PARENT_CLAUDE_VARS).not.toContain(v)
+    }
   })
 })
