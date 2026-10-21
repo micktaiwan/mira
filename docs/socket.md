@@ -369,6 +369,7 @@ Every file a page triggers is saved straight to `~/Downloads` (no OS save dialog
 | `clear-chat` / `copy-chat`            | —                           | reset / copy the pane thread                                   |
 | `set-chat-options`                    | `model?`, `loadMcp?`        | per-chat LLM options                                           |
 | `set-terminal-rect`                   | `rect`                      | chrome-internal: `{x,y,width,height}` of the terminal view, or `null` |
+| `end-terminal-session`                | —                           | end the embedded terminal's claude session (Cmd+W when the terminal has the keyboard); pane closes |
 
 **Terminal mode.** When Mira was built with Kova's terminal library (`native/mira-kova`, built only
 if `libkova.a` exists on the build machine) and the AI engine is `claude-cli`, the pane hosts a real

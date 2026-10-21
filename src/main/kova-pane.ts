@@ -148,3 +148,12 @@ export function parseTerminalRect(value: unknown): TerminalRect | null | undefin
   if (width < 0 || height < 0) return undefined
   return { x, y, width, height }
 }
+
+/** What Cmd+W runs: with the terminal holding the keyboard it ends the claude
+ * session (as Cmd+W closes a pane in Kova.app), never the browser tab behind it.
+ * The terminal view takes no key equivalent itself, so the menu decides. */
+export function closeKeyCommand(
+  terminalFocused: boolean
+): 'end-terminal-session' | 'close-active-tab' {
+  return terminalFocused ? 'end-terminal-session' : 'close-active-tab'
+}

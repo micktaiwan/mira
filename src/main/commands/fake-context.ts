@@ -242,6 +242,11 @@ export interface FakeContext {
   terminalTyped: string[]
   /** Rects passed to setTerminalRect (set-terminal-rect spy). */
   terminalRects: Array<TerminalRect | null>
+  /** Model the embedded terminal: whether a claude session lives and whether it
+   * holds the keyboard. */
+  setTerminal: (input: { session: boolean; focused?: boolean }) => void
+  /** Live view: a terminal session still lives (end-terminal-session spy). */
+  terminalSession: () => boolean
   /** Messages flashed via showToast (show-toast / copy-tab-id spy). */
   toasts: string[]
   /** Live view of the fake app's LLM config (set-llm-config spy). */
@@ -412,6 +417,10 @@ export function makeContext(
     sidebarWidth: 240,
     skillPaneWidth: 360,
     skillPane: { open: false, title: '', status: 'idle', messages: [] } as SkillPaneState,
+    // Embedded Kova terminal: a claude session lives, and whether it holds the
+    // keyboard (end-terminal-session / Cmd+W spies, set via setTerminal).
+    terminalSession: false,
+    terminalFocused: false,
     settingsTabId: null as string | null,
     // Tab armed by a first Cmd+W on a pinned tab (see closeActiveDecision);
     // reset whenever the active tab changes, mirroring the manager.
@@ -886,6 +895,15 @@ export function makeContext(
     },
     setTerminalRect: (rect: TerminalRect | null) => {
       terminalRects.push(rect)
+    },
+    terminalFocused: () => state.terminalSession && state.terminalFocused,
+    endTerminalSession: () => {
+      if (!state.terminalSession) return false
+      state.terminalSession = false
+      state.terminalFocused = false
+      state.skillPane = { ...state.skillPane, open: false }
+      skillPaneStates.push(state.skillPane)
+      return true
     },
     setHomeUrl: (url: string) => {
       // Empty is allowed: it clears the home so new tabs open blank.
@@ -2290,6 +2308,11 @@ export function makeContext(
     clipboardWrites,
     terminalTyped,
     terminalRects,
+    setTerminal: (input: { session: boolean; focused?: boolean }) => {
+      state.terminalSession = input.session
+      state.terminalFocused = input.focused ?? false
+    },
+    terminalSession: () => state.terminalSession,
     toasts,
     llm: () => state.llm,
     devToolsOpen: () => state.devToolsOpen,

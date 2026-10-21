@@ -381,7 +381,9 @@ function setup(): {
     closeSkillPane: () => {},
     getSkillPane: () => ({ open: false, title: '', status: 'idle' as const, messages: [] }),
     writeClipboard: () => {},
-    setTerminalRect: () => {}
+    setTerminalRect: () => {},
+    terminalFocused: () => false,
+    endTerminalSession: () => false
   }
   return { registry: createCommandRegistry(), ctx, loaded }
 }

@@ -202,8 +202,11 @@ export function sessionTarget({ command, positionals = [], flags = {}, tabId, en
   if (!command) return null
   // `mira call get-console --params '{"tabId":…}'` names its tab too: routing it
   // to the session window refused with "3 profiles are open" while the tab id
-  // already said which page (and so which profile) was meant.
-  if (command === 'call' && paramsTabId(flags.params)) return null
+  // already said which page (and so which profile) was meant. `close-tab` and
+  // `close-window` name the same thing as `id` / `windowId` (docs/socket.md), so
+  // the three keys count alike: `mira call close-tab --params '{"id":…}'` hit the
+  // same refusal (2026-10-20).
+  if (command === 'call' && paramsTarget(flags.params)) return null
   const registryName = command === 'call' ? positionals[0] : command
   const wantsTab = SESSION_VERBS.has(command) || TAB_BOUND.has(registryName ?? '')
   if (!wantsTab) return null
@@ -216,12 +219,18 @@ export function sessionTarget({ command, positionals = [], flags = {}, tabId, en
   return out
 }
 
-/** The tabId a `--params` JSON names, or null (absent, empty, or not JSON). */
-function paramsTabId(params) {
+/** The target a `--params` JSON names -- `tabId`, `id` or `windowId` -- or null
+ * (absent, empty, or not JSON). Only consulted for a command that takes a tab,
+ * so a bare `id` there is a tab or a window, never some other object. */
+function paramsTarget(params) {
   if (typeof params !== 'string') return null
   try {
     const parsed = JSON.parse(params)
-    return typeof parsed?.tabId === 'string' && parsed.tabId.trim() !== '' ? parsed.tabId : null
+    for (const key of ['tabId', 'id', 'windowId']) {
+      const value = parsed?.[key]
+      if (typeof value === 'string' && value.trim() !== '') return value
+    }
+    return null
   } catch {
     return null
   }

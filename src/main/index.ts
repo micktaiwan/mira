@@ -53,6 +53,7 @@ import { applyStagedUpdateOnQuit } from './self-update-service'
 import { QuitTimeline, lockingStepLabel } from './quit-progress'
 import { showQuitProgress } from './quit-progress-window'
 import { aboutPanelOptions } from './about'
+import { closeKeyCommand } from './kova-pane'
 
 // External control socket (see CLAUDE.md, "tout pilotable"). Override with the
 // MIRA_SOCKET env var; defaults to a fixed path for the single-instance case.
@@ -619,7 +620,12 @@ app.whenReady().then(async () => {
       duplicateTab: () => runDetached('duplicate-active-tab', {}, profiles.contextForFocused()),
       // Menu context like closeWindow: Cmd+W on the last tab closes the window
       // (lastTabClosesWindow), which only a user close may do.
-      closeTab: () => runDetached('close-active-tab', {}, profiles.contextForMenu()),
+      // With the embedded terminal holding the keyboard, Cmd+W ends its claude
+      // session instead of closing the tab behind it (closeKeyCommand).
+      closeTab: () => {
+        const ctx = profiles.contextForMenu()
+        runDetached(closeKeyCommand(ctx.terminalFocused()), {}, ctx)
+      },
       toggleFullScreen: () =>
         runDetached('set-window-fullscreen', {}, profiles.contextForFocused()),
       exitFullScreen: () =>

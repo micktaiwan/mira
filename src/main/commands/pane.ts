@@ -59,6 +59,12 @@ export interface PaneContext {
   /** Where the terminal pane's native view goes (top-left window-content points),
    * as measured by the chrome; null when the chrome unmounted the terminal area. */
   setTerminalRect: (rect: TerminalRect | null) => void
+  /** True when the embedded terminal holds the keyboard of the target window
+   * (what Cmd+W acts on: the claude session instead of the tab). */
+  terminalFocused: () => boolean
+  /** End the target window's terminal session (its claude is killed, the pane
+   * closes). False when no session lives there. */
+  endTerminalSession: () => boolean
 }
 
 /** The most recent assistant answer in a thread, or undefined if none yet. */
@@ -129,6 +135,18 @@ export const paneCommands: CommandMap<CommandContext> = {
     try {
       ctx.setTerminalRect(parsed)
       return { ok: true }
+    } catch (error) {
+      return fail(error)
+    }
+  },
+
+  // End the embedded terminal's claude session (Cmd+W while the terminal holds
+  // the keyboard, see the menu wiring in index.ts). The pane closes with it and
+  // the next open starts a fresh session. Fails when no session lives there.
+  'end-terminal-session': (ctx) => {
+    try {
+      if (!ctx.endTerminalSession()) return { ok: false, error: 'no terminal session' }
+      return { ok: true, ended: true }
     } catch (error) {
       return fail(error)
     }

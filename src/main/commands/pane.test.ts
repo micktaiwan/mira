@@ -144,3 +144,27 @@ describe('set-terminal-rect', () => {
     expect(terminalRects).toEqual([])
   })
 })
+
+describe('end-terminal-session', () => {
+  it('ends the live session and closes the pane', () => {
+    const fake = makeContext()
+    fake.setTerminal({ session: true, focused: true })
+    registry.execute('toggle-skill-pane', { open: true }, fake.ctx)
+    expect(fake.ctx.terminalFocused()).toBe(true)
+    expect(registry.execute('end-terminal-session', {}, fake.ctx)).toEqual({
+      ok: true,
+      ended: true
+    })
+    expect(fake.terminalSession()).toBe(false)
+    expect(fake.ctx.terminalFocused()).toBe(false)
+    expect(pane(fake.ctx).open).toBe(false)
+  })
+
+  it('fails when no session lives', () => {
+    const { ctx } = makeContext()
+    expect(registry.execute('end-terminal-session', {}, ctx)).toEqual({
+      ok: false,
+      error: 'no terminal session'
+    })
+  })
+})

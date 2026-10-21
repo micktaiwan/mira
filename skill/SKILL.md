@@ -216,6 +216,13 @@ What snap does not see: elements inside iframes or shadow DOM, canvas apps, pass
 fields, and text below the fold (scroll, then snap again). For those, fall back to
 `mira click --selector/--text` and `mira exec`.
 
+**Reading a page whose content lives in a cross-origin iframe** (a hosted artifact or embed: the
+top document's `innerText` holds only the header): `mira exec` cannot reach into the frame, and
+opening the frame's `src` in its own tab usually redirects back to the parent page (the frame
+token is bound to its embedder). What works is reading pixels: `mira click --at <x,y>` on an
+empty spot of the frame to focus it, `mira press Home`, then `mira shot` and `mira press PageDown`
+in a loop until two consecutive shots have the same `md5`, and read the PNGs.
+
 `mira wait` replaces `sleep`. A `sleep 3` is too long when the page is already ready, and too short
 when it is not — and that second case does not read as "too early", it reads as "the element does
 not exist", two hundred milliseconds before it appears. It returns the time actually waited, and on

@@ -9,6 +9,7 @@ import {
   terminalText,
   firstMessage,
   localeEnv,
+  closeKeyCommand,
   TERMINAL_SYSTEM_PROMPT,
   PARENT_CLAUDE_VARS
 } from './kova-pane'
@@ -170,5 +171,12 @@ describe('PARENT_CLAUDE_VARS', () => {
     for (const v of ['CLAUDE_EFFORT', 'CLAUDE_CODE_PLUGIN_DIRS', 'CLAUDE_CODE_NO_FLICKER']) {
       expect(PARENT_CLAUDE_VARS).not.toContain(v)
     }
+  })
+})
+
+describe('closeKeyCommand', () => {
+  it('ends the claude session when the terminal holds the keyboard, else closes the tab', () => {
+    expect(closeKeyCommand(true)).toBe('end-terminal-session')
+    expect(closeKeyCommand(false)).toBe('close-active-tab')
   })
 })

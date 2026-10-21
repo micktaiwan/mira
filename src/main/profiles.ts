@@ -110,6 +110,7 @@ import {
   kovaPaneNew,
   kovaPaneShow,
   kovaPaneFocus,
+  kovaPaneIsFocused,
   kovaPanePaste,
   kovaPaneFree,
   kovaShutdown,
@@ -3355,11 +3356,26 @@ export class ProfileManager {
   private onKovaPaneExited(id: number): void {
     for (const pw of this.openById.values()) {
       if (pw.kovaPaneId !== id) continue
-      kovaPaneFree(id)
-      pw.kovaPaneId = null
-      pw.kovaFocusPending = false
-      if (pw.skillPane.open) this.setSkillPaneIn(pw, { ...pw.skillPane, open: false })
+      this.endKovaSessionIn(pw)
     }
+  }
+
+  /** End this window's terminal session: free the pane (its claude is killed),
+   * close the skill pane and hand the keyboard back to the page. The next open
+   * starts a fresh session. False when no session lives in this window. */
+  private endKovaSessionIn(pw: ProfileWindow): boolean {
+    if (pw.kovaPaneId === null) return false
+    kovaPaneFree(pw.kovaPaneId)
+    pw.kovaPaneId = null
+    pw.kovaFocusPending = false
+    if (pw.skillPane.open) this.setSkillPaneIn(pw, { ...pw.skillPane, open: false })
+    if (!pw.window.isDestroyed()) this.focusActivePageIn(pw)
+    return true
+  }
+
+  /** True when this window's terminal view holds the keyboard (Cmd+W target). */
+  private terminalFocusedIn(pw: ProfileWindow): boolean {
+    return pw.kovaPaneId !== null && kovaPaneIsFocused(pw.kovaPaneId)
   }
 
   /** Terminal mode: open this window's pane and hand `text` to claude — as the
@@ -6953,6 +6969,8 @@ export class ProfileManager {
         this.syncKovaPane(target)
       },
       typeInTerminal: (text: string) => (target ? this.typeInTerminalIn(target, text) : false),
+      terminalFocused: () => (target ? this.terminalFocusedIn(target) : false),
+      endTerminalSession: () => (target ? this.endKovaSessionIn(target) : false),
       newTab: (url, background = false) => {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
         // focusChrome: opening a tab (click or Cmd+T) focuses the address bar so a

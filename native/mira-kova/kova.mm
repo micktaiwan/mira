@@ -278,6 +278,21 @@ static napi_value PaneFocus(napi_env env, napi_callback_info info) {
   return Bool(env, [window makeFirstResponder:view] == YES);
 }
 
+// paneIsFocused(id): the pane's view (or one of its subviews) is the first
+// responder of its window, i.e. it holds the keyboard.
+static napi_value PaneIsFocused(napi_env env, napi_callback_info info) {
+  napi_value args[1];
+  size_t argc = Args(env, info, args, 1);
+  KovaPaneId id = PaneArg(env, args, argc, 0);
+  if (id == 0) return Bool(env, false);
+  NSView *view = PaneView(id);
+  NSWindow *window = view != nil ? [view window] : nil;
+  if (window == nil || [view isHidden]) return Bool(env, false);
+  NSResponder *responder = [window firstResponder];
+  if (![responder isKindOfClass:[NSView class]]) return Bool(env, false);
+  return Bool(env, [(NSView *)responder isDescendantOf:view] == YES);
+}
+
 /** Shared body of panePaste / paneText: (id, string) -> kova call == 0. */
 static napi_value PaneWrite(napi_env env, napi_callback_info info,
                             int (*fn)(KovaPaneId, const char *)) {
@@ -376,6 +391,7 @@ static napi_value Init(napi_env env, napi_value exports) {
   Export(env, exports, "paneSetFrame", PaneSetFrame);
   Export(env, exports, "paneSetHidden", PaneSetHidden);
   Export(env, exports, "paneFocus", PaneFocus);
+  Export(env, exports, "paneIsFocused", PaneIsFocused);
   Export(env, exports, "panePaste", PanePaste);
   Export(env, exports, "paneText", PaneText);
   Export(env, exports, "paneIsAlive", PaneIsAlive);

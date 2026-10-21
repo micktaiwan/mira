@@ -23,6 +23,8 @@ interface MiraKovaAddon {
   paneSetFrame(id: number, x: number, y: number, w: number, h: number): boolean
   paneSetHidden(id: number, hidden: boolean): boolean
   paneFocus(id: number): boolean
+  /** Absent from an addon built before it existed: treated as "not focused". */
+  paneIsFocused?(id: number): boolean
   panePaste(id: number, text: string): boolean
   paneText(id: number, text: string): boolean
   paneIsAlive(id: number): boolean
@@ -142,6 +144,16 @@ export function kovaPaneFocus(id: number): void {
     loadAddon()?.paneFocus(id)
   } catch (error) {
     console.error('[mira] kova focus failed:', error)
+  }
+}
+
+/** True when the pane's view holds the keyboard (first responder of its window). */
+export function kovaPaneIsFocused(id: number): boolean {
+  try {
+    return loadAddon()?.paneIsFocused?.(id) ?? false
+  } catch (error) {
+    console.error('[mira] kova isFocused failed:', error)
+    return false
   }
 }
 

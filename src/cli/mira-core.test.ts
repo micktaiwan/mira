@@ -648,6 +648,24 @@ describe('sessionTarget', () => {
     expect(
       sessionTarget({ command: 'call', positionals: ['exec-js'], flags: { params: '{}' }, env })
     ).toMatchObject({ sessionId: 'sess-1' })
+    // close-tab names its target `id`, close-window names it `windowId`: both
+    // say which window is meant, so neither opens a session window.
+    expect(
+      sessionTarget({
+        command: 'call',
+        positionals: ['close-tab'],
+        flags: { params: '{"id":"t1"}' },
+        env
+      })
+    ).toBeNull()
+    expect(
+      sessionTarget({
+        command: 'call',
+        positionals: ['close-tab'],
+        flags: { params: '{"windowId":"w1"}' },
+        env
+      })
+    ).toBeNull()
   })
 
   it('never opens a window for a verb that does not target a tab', () => {
