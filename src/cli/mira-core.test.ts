@@ -28,6 +28,8 @@ import {
   resolveNavTarget,
   clientName,
   withClient,
+  timeoutMessage,
+  socketPathError,
   profileWindow,
   userWindowForOpen,
   typePlan
@@ -774,6 +776,40 @@ describe('withClient', () => {
       client: 'other',
       command: 'ping'
     })
+  })
+})
+
+describe('timeoutMessage', () => {
+  it('says the command was slow when Mira answered the probe', () => {
+    const m = timeoutMessage({ timeoutMs: 30000, probe: 'answered', pid: 42 })
+    expect(m).toMatch(/^timed out after 30000ms: Mira is responsive/)
+    expect(m).not.toMatch(/frozen/)
+  })
+
+  it('says Mira is frozen and names the pid to sample and kill when the probe got no answer', () => {
+    const m = timeoutMessage({ timeoutMs: 30000, probe: 'silent', pid: 70156 })
+    expect(m).toMatch(/^timed out after 30000ms: Mira is frozen/)
+    expect(m).toContain('`sample 70156 3`')
+    expect(m).toContain('killing pid 70156')
+  })
+
+  it('still gives the recipe when the pid is unknown', () => {
+    const m = timeoutMessage({ timeoutMs: 5000, probe: 'silent', pid: null })
+    expect(m).toContain('`sample <pid> 3`')
+    expect(m).toContain('killing its process')
+  })
+})
+
+describe('socketPathError', () => {
+  it('accepts the default path and one at the 103-byte limit', () => {
+    expect(socketPathError('/tmp/mira.sock')).toBeNull()
+    expect(socketPathError('/' + 'a'.repeat(102))).toBeNull()
+  })
+
+  it('refuses a path over the macOS limit, saying its size', () => {
+    expect(socketPathError('/' + 'a'.repeat(103))).toMatch(
+      /^socket path is 104 bytes, over the macOS limit of 103/
+    )
   })
 })
 

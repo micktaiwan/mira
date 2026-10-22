@@ -1263,6 +1263,52 @@ export function withClient(request, client) {
   return { client, ...request }
 }
 
+/** macOS `sun_path` holds 104 bytes including the trailing NUL. */
+export const MAX_SOCKET_PATH_BYTES = 103
+
+/**
+ * Why a socket path cannot work, or null. A path over the macOS limit fails with
+ * a misleading errno (EADDRINUSE to listen, ECONNREFUSED to connect, which the
+ * CLI used to report as "stale socket"), so it is caught before any connect.
+ *
+ * @param {string} path
+ * @returns {string | null}
+ */
+export function socketPathError(path) {
+  const bytes = Buffer.byteLength(path)
+  if (bytes <= MAX_SOCKET_PATH_BYTES) return null
+  return (
+    `socket path is ${bytes} bytes, over the macOS limit of ${MAX_SOCKET_PATH_BYTES}: ${path} ` +
+    `(use a shorter or relative path)`
+  )
+}
+
+/** How long the post-timeout probe waits for `version`: the socket round-trip is
+ * under a millisecond, so two seconds of silence means nobody is serving it. */
+export const PROBE_TIMEOUT_MS = 2000
+
+/**
+ * The error text for a request that timed out, once a cheap `version` probe has
+ * said why. A frozen main process still accepts connections (the kernel queues
+ * them) but never answers, so a bare "timed out" hides the one thing that
+ * matters: whether to wait or to kill.
+ *
+ * @param {{ timeoutMs: number, probe: 'answered' | 'silent', pid?: number | null }} o
+ * @returns {string}
+ */
+export function timeoutMessage({ timeoutMs, probe, pid }) {
+  const head = `timed out after ${timeoutMs}ms`
+  if (probe === 'answered')
+    return `${head}: Mira is responsive (it answered a probe), this command itself was slow`
+  const who = pid ? `pid ${pid}` : 'its process'
+  const sample = pid ? `sample ${pid} 3` : 'sample <pid> 3'
+  return (
+    `${head}: Mira is frozen, it accepts connections but answered no probe within ${PROBE_TIMEOUT_MS}ms ` +
+    `(${who}, main thread blocked). See where: \`${sample}\`. ` +
+    `A socket \`quit\` cannot get through; only killing ${who} recovers it.`
+  )
+}
+
 /** Max base64 characters per exec-js call: exec times out at ~5 s, and a
  * multi-MB literal is what blew it (see skill, upload recipe). */
 export const UPLOAD_CHUNK = 1_500_000

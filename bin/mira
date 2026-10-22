@@ -82,6 +82,7 @@
 // Global flags: --tab <id>, --json (raw response), --socket <path>.
 
 import { createConnection } from 'node:net'
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
@@ -125,7 +126,10 @@ import {
   parseBatchScript,
   buildBatch,
   formatBatchResults,
-  buildUploadScripts
+  buildUploadScripts,
+  timeoutMessage,
+  socketPathError,
+  PROBE_TIMEOUT_MS
 } from '../src/cli/mira-core.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -153,9 +157,11 @@ function call(request, socketPath, timeoutMs = 30000) {
         }
       }
     })
+    let timedOut = false
     conn.on('timeout', () => {
+      timedOut = true
       conn.destroy()
-      reject(new Error(`timed out after ${timeoutMs}ms`))
+      explainTimeout(socketPath, timeoutMs).then(reject)
     })
     conn.on('error', (e) => {
       if (e && e.code === 'ENOENT')
@@ -164,7 +170,51 @@ function call(request, socketPath, timeoutMs = 30000) {
         reject(new Error(`stale socket at ${socketPath} (Mira not listening)`))
       else reject(e)
     })
+    // A connection closed before any reply line (Mira quit or crashed mid-request)
+    // used to leave the promise pending: node then exited 0 with nothing printed.
+    conn.on('close', () => {
+      if (!timedOut && buf.indexOf('\n') < 0)
+        reject(new Error('Mira closed the connection without answering (quit or crashed?)'))
+    })
   })
+}
+
+/** After a timeout, tell a slow command from a frozen Mira: a frozen main process
+ * still accepts the connection (the kernel queues it) but never answers, so a
+ * bare "timed out" left the caller guessing whether to wait or to kill. One cheap
+ * `version` on a fresh connection settles it. */
+function explainTimeout(socketPath, timeoutMs) {
+  return new Promise((resolveP) => {
+    const conn = createConnection(socketPath)
+    let settled = false
+    const done = (probe) => {
+      if (settled) return
+      settled = true
+      conn.destroy()
+      resolveP(
+        new Error(timeoutMessage({ timeoutMs, probe, pid: probe === 'silent' ? miraPid() : null }))
+      )
+    }
+    conn.setTimeout(PROBE_TIMEOUT_MS)
+    conn.on('connect', () =>
+      conn.write(JSON.stringify(withClient({ command: 'version' }, CLIENT)) + '\n')
+    )
+    conn.on('data', (chunk) => {
+      if (chunk.toString().includes('\n')) done('answered')
+    })
+    conn.on('timeout', () => done('silent'))
+    conn.on('error', () => done('silent'))
+  })
+}
+
+/** Pid of the packaged Mira main process, or null (dev runs as Electron). */
+function miraPid() {
+  try {
+    const out = execFileSync('pgrep', ['-x', 'Mira'], { encoding: 'utf8' }).trim().split('\n')[0]
+    return out ? Number(out) : null
+  } catch {
+    return null
+  }
 }
 
 /** Open ONE connection and run requests over it, in order, each awaiting its own
@@ -204,8 +254,9 @@ function openSession(socketPath, timeoutMs = 30000) {
     })
     conn.on('timeout', () => {
       conn.destroy()
-      const e = new Error(`timed out after ${timeoutMs}ms`)
-      while (pending.length) pending.shift().reject(e)
+      explainTimeout(socketPath, timeoutMs).then((e) => {
+        while (pending.length) pending.shift().reject(e)
+      })
     })
     conn.on('error', (e) => {
       const err =
@@ -335,6 +386,8 @@ async function main() {
     (typeof flags.socket === 'string' && flags.socket) ||
     process.env.MIRA_SOCKET ||
     '/tmp/mira.sock'
+  const badSocket = socketPathError(socketPath)
+  if (badSocket) return die(badSocket, 2)
   const json = flags.json === true
   let tabId = resolveTabId({ flagTab: flags.tab, envTab: process.env.MIRA_TAB })
 

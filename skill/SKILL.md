@@ -256,6 +256,12 @@ pinned tab wherever it lives, `open` opens the new tab next to it — so in ITS 
 focused one. Verbose exec-js code: `mira exec @file.js` or `… | mira exec -` to dodge shell
 quoting. `--json` gives the raw reply. Exit 0 or 1 depending on `ok`, 2 on a transport error. The
 socket is `/tmp/mira.sock`, overridable with `--socket <path>` or `$MIRA_SOCKET`.
+On a timeout (`--timeout <seconds>`, default 30) the CLI probes Mira once and says which case it
+is: `Mira is responsive … this command itself was slow` (wait, or retry with a longer timeout), or
+`Mira is frozen` with the pid. A frozen Mira has its main thread blocked: a socket `quit` cannot get
+through, `sample <pid> 3` shows where it is stuck, and only killing the process recovers it, which is
+the user's call (ask first). `Mira closed the connection without answering` means it quit or
+crashed mid-request.
 
 ## One profile per identity — resolve the profile BEFORE opening
 
