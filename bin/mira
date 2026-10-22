@@ -31,7 +31,8 @@
 //   mira use --url <substr>         resolve a tab by url, print export MIRA_TAB=<id>
 //   mira use --active               pin the focused window's active tab
 //   mira use <id>                   pin an explicit id
-//   mira exec <code|-|@file>        run JS in the pinned/active tab
+//   mira exec <code|-|@file>        run JS in the pinned/active tab; prints {"ok":…,"result":…}
+//                                   (--bare: the result alone, exit 1 on failure — for shell tests)
 //   mira upload <file>... [--selector <css>] [--nth <n>]   put local files into the page's <input type=file>
 //                                   (no native picker; chunked so big files pass the exec timeout;
 //                                    default selector input[type=file], --nth picks among matches)
@@ -540,7 +541,13 @@ async function main() {
         readFile: (p) => readFileSync(p, 'utf8')
       })
       if ('error' in cr) return die(cr.error, 2)
-      return send(buildExec(cr.code, tabId), { json })
+      // Default stays the {"ok","result"} envelope (scripts parse it). --bare
+      // prints the result alone, so a shell test on `true` cannot match `"ok":true`.
+      if (flags.bare !== true) return send(buildExec(cr.code, tabId), { json })
+      return send(buildExec(cr.code, tabId), {
+        json,
+        pretty: (r) => (typeof r.result === 'string' ? r.result : JSON.stringify(r.result ?? null))
+      })
     }
 
     case 'upload': {

@@ -36,7 +36,10 @@ export const BOOLEAN_FLAGS = new Set([
   // tabs: --session lists this Claude session's own window.
   'session',
   // type: --focused types into the element that has focus (iframes included).
-  'focused'
+  'focused',
+  // exec: --bare prints the result alone instead of the {ok,result} envelope
+  // (not --value: select already takes --value <v>).
+  'bare'
 ])
 
 /** Single-letter short flags, mapped to their long boolean name. `-n` == `--new-tab`.

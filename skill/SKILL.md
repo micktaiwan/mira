@@ -47,6 +47,8 @@ mira windows                           # open windows (id / profile / tabs), * =
 mira close-window --params '{"windowId":"<id>"}'  # close ONE window (no id: the focused one)
 eval "$(mira use --url <substr>)"      # pin a tab → export MIRA_TAB=<uuid> (also: use <id>, use --active)
 mira exec "document.title"             # exec-js in the pinned tab (or the active one if nothing is pinned)
+                                       # prints {"ok":true,"result":…}: a shell `case *true*` matches "ok":true
+mira exec --bare "!!document.querySelector('x')"   # the result alone (exit 1 on failure): use it in shell tests
 mira press e --mod meta,shift          # a REAL keystroke (CDP, isTrusted) — for keyboard-driven web apps
 mira click --text 'Settings'           # a REAL mouse click (CDP) — also --selector <css>, --at x,y, --nth n, --scroll
 mira snap                              # the page as a numbered list of what you can act on + its visible text
@@ -463,6 +465,10 @@ before concluding.
   human" checkbox — which only the user may tick, so the page was lost until they came back. The
   DOM of the tab as it stands is still readable with `exec`; read
   `new Date(performance.timeOrigin)` alongside it so the answer says how old that state is.
+- **A success toast can carry `role="dialog"` too.** After confirming a modal, `wait --selector
+  '[role=dialog]' --gone` then waits on the toast ("Member removed"), and while it shows, a `click`
+  on a pager button below it fails with `the target is covered`. Wait for the change itself instead
+  (`wait --text 'of 112'`), then for the toast to go before paging.
 - **`mira wait` right after `mira reload` can match the page being replaced.** `reload` answers
   `ok` as soon as it is sent; a `wait --text` launched next found its text "after 1ms" in the
   old document. To know the reload happened, compare `performance.timeOrigin`
