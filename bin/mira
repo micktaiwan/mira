@@ -399,7 +399,8 @@ async function main() {
         .map((l) => l.slice(3))
         .join('\n') + '\n'
     )
-    process.exit(command ? 0 : 2)
+    // Bare `mira` is a usage error; an explicit `help` / `--help` is not.
+    process.exit(command || flags.help ? 0 : 2)
   }
 
   // --timeout <seconds>: some commands wait on a human (the card vault unlock

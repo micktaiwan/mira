@@ -187,11 +187,10 @@ import {
   emptyMru,
   mruRecord,
   mruStep,
-  mruPrune,
-  mruFocusAfterClose,
-  mruFocusAfterCloseLastUnpinned
+  mruPrune
 } from './tab-mru'
 import type { CloseFocus } from './tab-mru'
+import { focusAfterClose } from './close-focus'
 import {
   type PersistedSessions,
   type PersistedWindow,
@@ -3706,21 +3705,11 @@ export class ProfileManager {
     // 'neighbor' keeps closeTabPure's strip pick, so closing a run of tabs one by
     // one walks the strip; 'recent' goes back to the last tab actually looked at
     // (the focus history), so a link opened from a pinned tab returns to it.
-    // Computed before the id is pruned; 'recent' falls back to the neighbor when
-    // the history has nothing left alive.
-    const survivors = pw.state.tabs.filter((t) => t.id !== id)
-    const back = !wasActive
-      ? null
-      : focus === 'recent'
-        ? mruFocusAfterClose(pw.mru, id, new Set(survivors.map((t) => t.id)))
-        : // 'neighbor', with the one exception: closing the LAST unpinned tab lands
-          // on the pinned tab last looked at, not on the end of the pinned grid.
-          mruFocusAfterCloseLastUnpinned(
-            pw.mru,
-            id,
-            pw.state.tabs[index].pinned === true,
-            survivors
-          )
+    // Computed before the id is pruned. Both modes skip asleep tabs while a loaded
+    // one survives (focusing a sleeper would reload it); 'recent' falls back to the
+    // neighbor when the history has nothing left alive, and closing the LAST
+    // unpinned tab lands on the pinned tab last looked at.
+    const back = focusAfterClose(pw.state, pw.mru, id, focus, new Set(pw.views.keys()))
     pw.state = closeTabPure(pw.state, id)
     if (back) pw.state = selectTabPure(pw.state, back)
     // Whoever inherited focus (the strip neighbor, or the MRU pick) is being
