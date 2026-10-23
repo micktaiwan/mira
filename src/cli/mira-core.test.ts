@@ -13,6 +13,7 @@ import {
   buildCall,
   buildNav,
   buildFocus,
+  buildActivateTab,
   buildConsole,
   buildScreenshot,
   absolutePath,
@@ -168,6 +169,27 @@ describe('buildNav — the pinned tab is the target, not the focused window', ()
     expect(buildNav('example.com', null, { background: true })).toEqual({
       command: 'navigate',
       params: { url: 'example.com' }
+    })
+  })
+})
+
+describe('buildActivateTab', () => {
+  it('refuses a missing or blank tab id, naming where ids come from', () => {
+    expect(buildActivateTab(undefined)).toEqual({
+      error: 'focus --tab needs a tab id (from `mira tabs`)'
+    })
+    expect(buildActivateTab(true)).toEqual({
+      error: 'focus --tab needs a tab id (from `mira tabs`)'
+    })
+    expect(buildActivateTab('   ')).toEqual({
+      error: 'focus --tab needs a tab id (from `mira tabs`)'
+    })
+  })
+
+  it('activates the trimmed tab id', () => {
+    expect(buildActivateTab(' tab-7 ')).toEqual({
+      command: 'activate-tab',
+      params: { id: 'tab-7' }
     })
   })
 })

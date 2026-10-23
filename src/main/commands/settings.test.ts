@@ -53,7 +53,8 @@ describe('get-settings', () => {
       llm: { provider: 'claude-cli' },
       sidebarWidth: 240,
       skillPaneWidth: 360,
-      magnifierEnabled: false
+      magnifierEnabled: false,
+      autoSleep: { enabled: true, idleHours: 12 }
     })
   })
 })
@@ -104,7 +105,8 @@ describe('set-llm-config', () => {
       llm: { provider: 'anthropic-api', apiKey: 'sk-x' },
       sidebarWidth: 240,
       skillPaneWidth: 360,
-      magnifierEnabled: false
+      magnifierEnabled: false,
+      autoSleep: { enabled: true, idleHours: 12 }
     })
   })
 
@@ -133,7 +135,8 @@ describe('set-home-url', () => {
       llm: { provider: 'claude-cli' },
       sidebarWidth: 240,
       skillPaneWidth: 360,
-      magnifierEnabled: false
+      magnifierEnabled: false,
+      autoSleep: { enabled: true, idleHours: 12 }
     })
   })
 
@@ -150,7 +153,8 @@ describe('set-home-url', () => {
       llm: { provider: 'claude-cli' },
       sidebarWidth: 240,
       skillPaneWidth: 360,
-      magnifierEnabled: false
+      magnifierEnabled: false,
+      autoSleep: { enabled: true, idleHours: 12 }
     })
   })
 

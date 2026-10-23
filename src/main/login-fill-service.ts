@@ -5,8 +5,9 @@
 //   a tab + a profile -> the profile's vault (unmapped = refuse, the account
 //   wall) -> the logins it holds, unlocking through Mira's own bubble if needed
 //   -> the candidates for the page's host -> chooseLogin -> the pair goes to
-//   EVERY frame of the tab -> each frame answers what it filled -> the choice is
-//   remembered for that site.
+//   every frame of the tab whose OWN url the picked item covers (never a
+//   cross-site ad or widget) -> each frame answers what it filled -> the choice
+//   is remembered for that site.
 //
 // THE ONE RULE THAT SHAPES THIS FILE: a password crosses exactly one boundary,
 // main -> the frame's isolated world, over a private ipc channel. It is never
@@ -55,8 +56,9 @@ export interface LoginFillDeps {
    * when the vault is locked, so a fill never dead-ends on "locked" — this is
    * LoginService.readLogins. */
   readLogins: (profileId: string, vault: CardVault) => Promise<VaultLogin[]>
-  /** Every frame of a tab that could hold a login form. */
-  framesOf: (contents: WebContents) => WebFrameMain[]
+  /** Every frame of a tab that could hold a login form. Only `url` and `send`
+   * are used: the url decides whether that frame may receive the credential. */
+  framesOf: (contents: WebContents) => Pick<WebFrameMain, 'url' | 'send'>[]
   /** The tab's current top-level url, for host matching and for the report. */
   urlOf: (contents: WebContents) => string
   /** Ask WHICH account, in Mira's own bubble, and resolve with the chosen item
@@ -109,6 +111,28 @@ export class LoginFillError extends Error {
     super(message)
     this.name = 'LoginFillError'
   }
+}
+
+/** True when `url` is an http(s) page on a host the login matches, by the same
+ * rule that made it a candidate (exact host or same registrable domain). */
+function coversUrl(login: VaultLogin, url: string): boolean {
+  const host = fillHost(url)
+  return host !== '' && candidatesForHost([login], host).length > 0
+}
+
+/** True when a FRAME at `frameUrl` may receive the credential: its host is the
+ * page's own host, or a host the login lists, or a subdomain of one. Stricter
+ * than coversUrl on purpose: the "same registrable domain" rule only knows a
+ * short list of shared-hosting suffixes (domain.ts), so an unlisted one would
+ * still merge tenants and hand the password to another tenant's iframe. */
+function frameCovered(login: VaultLogin, frameUrl: string, pageHost: string): boolean {
+  const host = fillHost(frameUrl)
+  if (host === '') return false
+  if (host === pageHost) return true
+  return login.hosts.some((h) => {
+    const listed = h.toLowerCase()
+    return host === listed || host.endsWith(`.${listed}`)
+  })
 }
 
 export class LoginFillService {
@@ -234,6 +258,12 @@ export class LoginFillService {
           : 'no-match'
       throw new LoginFillError(reason, this.explain(choice.reason, host, params))
     }
+    // The vault read and the picker both awaited: the tab may have navigated
+    // since `host` was read. Fill only if the page is still on a host the picked
+    // item covers, or the credential would land on whatever loaded meanwhile.
+    if (!coversUrl(picked, this.deps.urlOf(params.contents))) {
+      throw new LoginFillError('no-page', `the page left ${host} before the fill — nothing filled`)
+    }
     const merged = await this.apply(params.contents, picked)
     // Remember only a fill that actually landed: recording a choice that filled
     // nothing would make the next call skip the list for no reason.
@@ -259,16 +289,23 @@ export class LoginFillService {
 
   // ── internals ────────────────────────────────────────────────────────────
 
-  /** Hand the pair to every frame of the tab and collect what they filled. Every
-   * frame is asked because a login form is often in an iframe (SSO widgets), and
-   * a frame with no form simply answers that it filled nothing. */
+  /** Hand the pair to the frames of the tab that may hold it, and collect what
+   * they filled. Every frame is considered because a login form is often in an
+   * iframe (SSO widgets), but a frame only receives the credential when its OWN
+   * host is the page's host, a host the picked item lists, or a subdomain of one
+   * (frameCovered — stricter than the candidates' same-site rule). A cross-site iframe — an ad, a third-party widget — with a
+   * password input would otherwise get the real password in its DOM. Frames
+   * with no http(s) url (about:blank, srcdoc, data:) are skipped too. */
   private async apply(
     contents: WebContents,
     login: VaultLogin
   ): Promise<{ username: boolean; password: boolean; frames: number; passwordFields: number }> {
     const token = `fill-${++this.nextToken}-${Date.now()}`
     this.pending.set(token, [])
-    const frames = this.deps.framesOf(contents)
+    const pageHost = fillHost(this.deps.urlOf(contents))
+    const frames = this.deps
+      .framesOf(contents)
+      .filter((frame) => frameCovered(login, frame.url, pageHost))
     for (const frame of frames) {
       try {
         frame.send(LOGIN_FILL_APPLY_CHANNEL, {

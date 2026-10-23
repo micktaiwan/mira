@@ -159,15 +159,17 @@ export class ExtensionCaptureService {
   }
 
   /** The two page->main channels, once per app (ipcMain is global). Senders
-   * are validated to extension pages — a web page invoking these channels gets
-   * an error, not a capture. */
+   * are validated to extension pages whose manifest declares the matching
+   * permission ('desktopCapture' / 'tabCapture', as Chrome requires) — a web
+   * page, or an extension without the permission, gets an error, not a
+   * capture. */
   private installIpc(): void {
     if (this.ipcInstalled) return
     this.ipcInstalled = true
     ipcMain.handle(
       CHOOSE_DESKTOP_MEDIA_IPC_CHANNEL,
       async (event, payload: { sources?: unknown }) => {
-        if (!isExtensionSender(event)) return { streamId: '' }
+        if (!senderMayCapture(event, 'desktopCapture')) return { streamId: '' }
         const wanted = Array.isArray(payload?.sources)
           ? payload.sources.filter((s): s is string => typeof s === 'string')
           : []
@@ -191,7 +193,8 @@ export class ExtensionCaptureService {
       }
     )
     ipcMain.handle(BEGIN_TAB_CAPTURE_IPC_CHANNEL, (event) => {
-      if (!isExtensionSender(event)) return { ok: false, error: 'not an extension page' }
+      if (!senderMayCapture(event, 'tabCapture'))
+        return { ok: false, error: 'extension lacks the "tabCapture" permission' }
       const frame = event.senderFrame
       if (!frame) return { ok: false, error: 'no sender frame' }
       armFrame(this.pendingTabCapture, frameKey(frame.processId, frame.routingId), Date.now())
@@ -296,7 +299,49 @@ function frameKey(processId: number, routingId: number): string {
   return `${processId}:${routingId}`
 }
 
-/** Only extension pages may drive the capture channels. */
-function isExtensionSender(event: IpcMainInvokeEvent): boolean {
-  return event.senderFrame?.url?.startsWith('chrome-extension://') ?? false
+/** The capture APIs, named as their manifest permissions. */
+export type CaptureApi = 'tabCapture' | 'desktopCapture'
+
+/** The extension id of a chrome-extension:// URL, or null for anything else.
+ * Pure. */
+export function extensionIdFromUrl(url: string | null | undefined): string | null {
+  if (typeof url !== 'string' || !url.startsWith('chrome-extension://')) return null
+  try {
+    return new URL(url).host || null
+  } catch {
+    return null
+  }
+}
+
+/** True when `manifest.permissions` lists `api`. Chrome gates
+ * chrome.tabCapture / chrome.desktopCapture on these permissions. Known
+ * limitation: an api listed only in optional_permissions and granted at runtime
+ * through the lib's permissions.request is NOT honoured here (refused). Pure. */
+export function extensionMayCapture(manifest: unknown, api: CaptureApi): boolean {
+  if (!manifest || typeof manifest !== 'object') return false
+  const permissions = (manifest as { permissions?: unknown }).permissions
+  return Array.isArray(permissions) && permissions.includes(api)
+}
+
+/** The capture channels' authorization decision: the sender must be an
+ * extension page, the extension must be loaded (its manifest found by
+ * `getManifest`), and its manifest must declare `api`. Pure. */
+export function authorizeCaptureSender(
+  senderUrl: string | null | undefined,
+  getManifest: (extensionId: string) => unknown,
+  api: CaptureApi
+): boolean {
+  const id = extensionIdFromUrl(senderUrl)
+  if (!id) return false
+  return extensionMayCapture(getManifest(id), api)
+}
+
+/** Native glue: resolve the sender's extension in its own session. */
+function senderMayCapture(event: IpcMainInvokeEvent, api: CaptureApi): boolean {
+  const ses = event.sender.session
+  return authorizeCaptureSender(
+    event.senderFrame?.url,
+    (id) => ses.extensions.getExtension(id)?.manifest ?? null,
+    api
+  )
 }

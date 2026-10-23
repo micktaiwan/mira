@@ -34,9 +34,43 @@ const COUNTRY_SECOND_LEVEL = new Set([
   'or'
 ])
 
+/** Shared-hosting suffixes (the "private" part of the Public Suffix List) where
+ * every subdomain is a different owner: a.github.io and evil.github.io are two
+ * sites, not one. Without this list the two-label rule merges every tenant, and
+ * the saved-login fill (login-fill.ts) would offer a.github.io's password on
+ * evil.github.io. Only the common ones; extend when one is met. */
+const SHARED_HOSTING_SUFFIXES = new Set([
+  'github.io',
+  'gitlab.io',
+  'vercel.app',
+  'netlify.app',
+  'pages.dev',
+  'workers.dev',
+  'web.app',
+  'firebaseapp.com',
+  'herokuapp.com',
+  'appspot.com',
+  'blogspot.com',
+  'azurewebsites.net',
+  'cloudfront.net',
+  'onrender.com',
+  'fly.dev',
+  'glitch.me',
+  'ngrok.io',
+  'ngrok-free.app',
+  'surge.sh'
+])
+
+/** Whether `suffix` (two labels, lower-cased, e.g. "github.io") is a
+ * shared-hosting suffix. Exported so the other "same site" rule
+ * (bitwarden-login.ts) cannot drift from this one. Pure. */
+export function isSharedHostingSuffix(suffix: string): boolean {
+  return SHARED_HOSTING_SUFFIXES.has(suffix)
+}
+
 /** The registrable domain of `host`, lower-cased: its last two labels, or its
  * last three when the last two form a country public suffix (see
- * COUNTRY_SECOND_LEVEL). Returns the host unchanged for a bare hostname
+ * COUNTRY_SECOND_LEVEL) or a shared-hosting suffix (SHARED_HOSTING_SUFFIXES). Returns the host unchanged for a bare hostname
  * (≤ 2 labels), an IPv4/IPv6 literal, or an empty/invalid host — anything
  * without a meaningful "domain + TLD" split. */
 export function registrableDomain(host: string): string {
@@ -48,7 +82,11 @@ export function registrableDomain(host: string): string {
   const labels = h.split('.')
   if (labels.length <= 2) return h
   const [second, top] = labels.slice(-2)
-  const keep = top.length === 2 && COUNTRY_SECOND_LEVEL.has(second) ? 3 : 2
+  const keep =
+    (top.length === 2 && COUNTRY_SECOND_LEVEL.has(second)) ||
+    SHARED_HOSTING_SUFFIXES.has(`${second}.${top}`)
+      ? 3
+      : 2
   if (labels.length <= keep) return h
   return labels.slice(-keep).join('.')
 }

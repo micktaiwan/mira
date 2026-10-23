@@ -451,7 +451,7 @@ function App(): React.JSX.Element {
           <button
             type="button"
             className="nav-button"
-            title="Forward (⌘→) — hold for history"
+            title="Forward — hold for history"
             aria-label="Forward"
             {...forwardButton}
           >

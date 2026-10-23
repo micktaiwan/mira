@@ -401,6 +401,21 @@ export function buildFocus(windowId) {
 }
 
 /**
+ * Build the activate-tab request. Making a tab active is what "bring that page
+ * to the front" means: `focus` alone raises a window and leaves whatever tab
+ * was showing, which looks like a no-op to whoever asked.
+ *
+ * @param {string|boolean|undefined} tabId  raw value of --tab
+ * @returns {{ command: 'activate-tab', params: { id: string } }|{ error: string }}
+ */
+export function buildActivateTab(tabId) {
+  if (typeof tabId !== 'string' || tabId.trim() === '') {
+    return { error: 'focus --tab needs a tab id (from `mira tabs`)' }
+  }
+  return { command: 'activate-tab', params: { id: tabId.trim() } }
+}
+
+/**
  * Reload plan. `reload` takes a tabId, so a pinned tab is reloaded server-side.
  *
  * It used to go through exec-js (`location.reload()`) for lack of that param,

@@ -22,6 +22,36 @@ export interface AppSettings {
    * default: the gesture fires too easily while scrolling with Cmd held, so it is
    * armed on demand via the toolbar toggle beside the address bar. */
   magnifierEnabled: boolean
+  /** Auto-sleep (auto-sleep.ts): whether long-unseen tabs are put to sleep, and
+   * after how many hours unseen. */
+  autoSleep: AutoSleepSettings
+}
+
+/** Auto-sleep settings. On by default: loaded tabs piling up over the days is
+ * what exhausted the machine's memory. */
+export interface AutoSleepSettings {
+  enabled: boolean
+  /** Hours a tab may go unseen before it sleeps; one of AUTO_SLEEP_HOURS. */
+  idleHours: number
+}
+
+/** The delays Settings offers, in hours. A persisted value outside the list
+ * falls back to the default rather than inventing a delay nobody picked. */
+export const AUTO_SLEEP_HOURS = [1, 2, 4, 8, 12, 24, 48, 168]
+
+export function defaultAutoSleep(): AutoSleepSettings {
+  return { enabled: true, idleHours: 12 }
+}
+
+/** Defensively parse persisted auto-sleep settings: anything but an explicit
+ * false keeps it on, an unlisted delay degrades to the default. */
+export function normalizeAutoSleep(raw: unknown): AutoSleepSettings {
+  const v = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const idleHours =
+    typeof v.idleHours === 'number' && AUTO_SLEEP_HOURS.includes(v.idleHours)
+      ? v.idleHours
+      : defaultAutoSleep().idleHours
+  return { enabled: v.enabled !== false, idleHours }
 }
 
 /** Allowed range + default for each resizable panel width. Main clamps to these
@@ -61,7 +91,8 @@ export function defaultSettings(): AppSettings {
     llm: defaultLlm(),
     sidebarWidth: SIDEBAR_WIDTH.default,
     skillPaneWidth: SKILL_PANE_WIDTH.default,
-    magnifierEnabled: false
+    magnifierEnabled: false,
+    autoSleep: defaultAutoSleep()
   }
 }
 
@@ -96,7 +127,8 @@ export function normalizeSettings(raw: unknown): AppSettings {
     skillPaneWidth: clampWidth(v.skillPaneWidth, SKILL_PANE_WIDTH),
     // Anything but an explicit true (including a legacy file without the key)
     // keeps the gesture off — off is the safe default.
-    magnifierEnabled: v.magnifierEnabled === true
+    magnifierEnabled: v.magnifierEnabled === true,
+    autoSleep: normalizeAutoSleep(v.autoSleep)
   }
 }
 
@@ -124,4 +156,13 @@ export function withSkillPaneWidth(settings: AppSettings, width: number): AppSet
 /** Return settings with the Cmd+scroll page-zoom gesture armed or disarmed. */
 export function withMagnifierEnabled(settings: AppSettings, enabled: boolean): AppSettings {
   return { ...settings, magnifierEnabled: enabled }
+}
+
+/** Return settings with auto-sleep changed: each given field replaces the current
+ * one, then the whole is normalized (an unlisted delay is refused, not stored). */
+export function withAutoSleep(
+  settings: AppSettings,
+  patch: Partial<AutoSleepSettings>
+): AppSettings {
+  return { ...settings, autoSleep: normalizeAutoSleep({ ...settings.autoSleep, ...patch }) }
 }

@@ -15,6 +15,7 @@
 
 import type { ValidatedLogin } from './login-capture'
 import { loginItemName } from './login-capture'
+import { isSharedHostingSuffix } from './domain'
 
 /** A Bitwarden login item, as `bw create item` wants it (type 1). Mirrors `bw get
  * template item` + `bw get template item.login`. */
@@ -140,7 +141,12 @@ export function registrableDomain(host: string): string {
   const parts = bare.split('.').filter((p) => p !== '')
   if (parts.length <= 2) return parts.join('.')
   const lastTwo = parts.slice(-2).join('.')
-  return TWO_LABEL_SUFFIXES.has(lastTwo) ? parts.slice(-3).join('.') : lastTwo
+  // A shared-hosting suffix (github.io, vercel.app…) makes every tenant its own
+  // site: without it, a phished evil.github.io would be linked to a.github.io's
+  // item and receive its password at every later fill.
+  return TWO_LABEL_SUFFIXES.has(lastTwo) || isSharedHostingSuffix(lastTwo)
+    ? parts.slice(-3).join('.')
+    : lastTwo
 }
 
 /** Read `bw list items` output and keep the LOGINS (type 1). bw has no

@@ -12,7 +12,9 @@ import {
   withMagnifierEnabled,
   SIDEBAR_WIDTH,
   SKILL_PANE_WIDTH,
-  DEFAULT_HOME_URL
+  DEFAULT_HOME_URL,
+  normalizeAutoSleep,
+  withAutoSleep
 } from './settings-store'
 
 describe('normalizeSettings', () => {
@@ -52,7 +54,8 @@ describe('normalizeSettings', () => {
       llm: { provider: 'anthropic-api', apiKey: 'k' },
       sidebarWidth: 300,
       skillPaneWidth: SKILL_PANE_WIDTH.max,
-      magnifierEnabled: false
+      magnifierEnabled: false,
+      autoSleep: { enabled: true, idleHours: 12 }
     })
   })
 
@@ -168,5 +171,33 @@ describe('DEFAULT_HOME_URL', () => {
   it('is the built-in home', () => {
     expect(defaultSettings().homeUrl).toBe(DEFAULT_HOME_URL)
     expect(defaultLlm()).toEqual({ provider: 'claude-cli' })
+  })
+})
+
+describe('auto-sleep settings', () => {
+  it('is on, at 12 h, by default and for a file written before it existed', () => {
+    expect(defaultSettings().autoSleep).toEqual({ enabled: true, idleHours: 12 })
+    expect(normalizeSettings({ homeUrl: 'https://example.com' }).autoSleep).toEqual({
+      enabled: true,
+      idleHours: 12
+    })
+  })
+
+  it('keeps an explicit off and a listed delay', () => {
+    expect(normalizeAutoSleep({ enabled: false, idleHours: 4 })).toEqual({
+      enabled: false,
+      idleHours: 4
+    })
+  })
+
+  it('falls back to the default delay for an unlisted or bad value', () => {
+    expect(normalizeAutoSleep({ idleHours: 5 }).idleHours).toBe(12)
+    expect(normalizeAutoSleep({ idleHours: '4' }).idleHours).toBe(12)
+  })
+
+  it('withAutoSleep changes only the given field', () => {
+    const s = withAutoSleep(defaultSettings(), { enabled: false })
+    expect(s.autoSleep).toEqual({ enabled: false, idleHours: 12 })
+    expect(withAutoSleep(s, { idleHours: 24 }).autoSleep).toEqual({ enabled: false, idleHours: 24 })
   })
 })

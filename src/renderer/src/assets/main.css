@@ -764,7 +764,7 @@ body {
   color: var(--text-muted);
   font-size: 12px;
   margin-bottom: 16px;
-  max-width: 42ch;
+  max-width: 110ch;
 }
 
 .settings-error {

@@ -36,6 +36,7 @@ import type { PermissionContext } from './permissions'
 import type { ProfileContext } from './profiles'
 import type { RevealTabContext } from './reveal-tab'
 import type { TabTopContext } from './tab-top'
+import type { TabFileContext } from './tab-file'
 import type { ScreenshotContext } from './screenshot'
 import type { SessionWindowContext } from './session-window'
 import type { SettingsContext } from './settings'
@@ -59,6 +60,7 @@ import type { VaultContext } from './vault'
 import type { WaitContext } from './wait'
 import type { WindowStateContext } from './window-state'
 import type { ZenContext } from './zen'
+import type { AutoSleepContext } from './auto-sleep'
 
 export type CommandContext = AppContext &
   AudioContext &
@@ -102,6 +104,7 @@ export type CommandContext = AppContext &
   TabMenuContext &
   TabTidyContext &
   TabTopContext &
+  TabFileContext &
   TabsContext &
   TerminalCwdContext &
   ThemeContext &
@@ -112,4 +115,5 @@ export type CommandContext = AppContext &
   VaultContext &
   WaitContext &
   WindowStateContext &
-  ZenContext
+  ZenContext &
+  AutoSleepContext

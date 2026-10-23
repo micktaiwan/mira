@@ -69,6 +69,7 @@ import {
   nextZen,
   planReveal,
   topIndexOf,
+  planFileIntoFolder,
   buildTabMemoryReport,
   TracingSession,
   parseTraceParams
@@ -212,6 +213,14 @@ import {
   updateHeavyTabs
 } from './heavy-tabs'
 import { sampleFootprint } from './footprint'
+import {
+  AUTO_SLEEP_SWEEP_MS,
+  PAGE_TEXT_PROBE,
+  autoSleepCandidates,
+  isTypingInput,
+  keepForText
+} from './auto-sleep'
+import type { AutoSleepReport, AutoSleepTab } from './commands'
 import { buildPageMenu, imageUnderPointSource, needsImageProbe } from './page-menu'
 import { buildTabMenu, type TabMenuItem } from './tab-menu'
 import { formatTabCloseLog, type TabCloseReason } from './tab-close-log'
@@ -300,7 +309,9 @@ import {
   withLlm,
   withSidebarWidth,
   withSkillPaneWidth,
-  withMagnifierEnabled
+  withMagnifierEnabled,
+  withAutoSleep,
+  type AutoSleepSettings
 } from './settings-store'
 
 /** Sentinel URL of the internal Settings tab (like chrome://settings). It never
@@ -572,6 +583,8 @@ export interface ProfileManagerDeps {
   /** Whether the Cmd+scroll page-zoom gesture is armed at startup (persisted
    * setting, off by default — see settings-store.ts). */
   magnifierEnabled: boolean
+  /** Auto-sleep settings at startup (persisted, see settings-store.ts). */
+  autoSleep: AutoSleepSettings
   preloadPath: string
   icon?: string
   /** The app's userData directory. Vault paths (the per-profile encrypted image and
@@ -765,6 +778,14 @@ export class ProfileManager {
   private heavyTabs = new Map<string, number>()
   private heavyTimer: ReturnType<typeof setInterval> | null = null
   private heavySampling = false
+  /** Auto-sleep (auto-sleep.ts): tabs the user typed in since their last page
+   * load, the last time each tab was seen active by a sweep (in memory only, it
+   * measures "left" where lastActiveAt measures "brought to the front"), the
+   * sweep timer, and a guard against overlapping sweeps. */
+  private typedTabs = new Set<string>()
+  private seenAt = new Map<string, number>()
+  private autoSleepTimer: ReturnType<typeof setInterval> | null = null
+  private autoSleeping = false
   private lastFootprint = new Map<number, number>()
   /** yt-dlp video downloads in flight, keyed by a unique id, with when each
    * started. A download runs in a background process (independent of any UI), so
@@ -835,7 +856,8 @@ export class ProfileManager {
       llm: deps.initialLlm,
       sidebarWidth: deps.sidebarWidth,
       skillPaneWidth: deps.skillPaneWidth,
-      magnifierEnabled: deps.magnifierEnabled
+      magnifierEnabled: deps.magnifierEnabled,
+      autoSleep: deps.autoSleep
     }
     this.startActivationTrace()
     this.checker()
@@ -2571,8 +2593,9 @@ export class ProfileManager {
   /** Install the web-permission handlers on a profile's session, once per
    * partition. Electron does NOT show Chromium's native "Allow?" bubble: a page's
    * request is routed here instead, and if unhandled the CHECK denies by default —
-   * which is why geolocation (Google Maps) silently failed. Policy: grant all (see
-   * permissions.ts), and record every grant per origin so Settings can list it.
+   * which is why geolocation (Google Maps) silently failed. Policy: grant all except
+   * clipboard-read and non-allowlisted openExternal (see permissions.ts), and record
+   * every grant per origin so Settings can list it.
    * Both handlers exist because most web APIs consult the synchronous CHECK first
    * and only raise a REQUEST if it denies (electron.d.ts). */
   private ensurePermissionHandlers(partition: string | undefined, profileId: string): void {
@@ -2594,7 +2617,9 @@ export class ProfileManager {
       return granted
     })
     ses.setPermissionRequestHandler((_wc, permission, callback, details) => {
-      const granted = shouldGrantPermission(permission)
+      // Only OpenExternalPermissionRequest carries externalURL (the openExternal rule).
+      const externalURL = 'externalURL' in details ? details.externalURL : undefined
+      const granted = shouldGrantPermission(permission, { externalURL })
       if (granted) this.dataFor(profileId).recordGrant(originOf(details.requestingUrl), permission)
       this.maybeHandleLocation(permission)
       callback(granted)
@@ -3009,7 +3034,12 @@ export class ProfileManager {
       console.error(processGoneLine(`tab ${tabId}`, details))
     })
     wc.on('page-title-updated', (_e, title) => patch({ title }))
+    // Typed text keeps a tab out of auto-sleep until its page is replaced.
+    wc.on('before-input-event', (_e, input) => {
+      if (isTypingInput(input)) this.typedTabs.add(tabId)
+    })
     wc.on('did-navigate', (_e, navUrl) => {
+      this.typedTabs.delete(tabId)
       // A commit that is NOT the error page means the tab left the failure
       // behind (the retry worked, or the user went elsewhere): forget it, so a
       // later reload reloads the page that is actually on screen.
@@ -3878,6 +3908,7 @@ export class ProfileManager {
     // with the view still mapped the hook would resolve the tab and closeTabIn
     // it — turning a discard into a close (see the same guard in closeTabIn).
     pw.views.delete(id)
+    this.typedTabs.delete(id)
     // Drop this tab's media buffer — the webContents (and its debugger) die here.
     pw.media.delete(id)
     this.deps.extensions.removeTab(view.webContents)
@@ -4909,6 +4940,13 @@ export class ProfileManager {
       else if (input.alt && !input.shift && input.key === 'ArrowUp') {
         this.moveTabToTopIn(pw)
         event.preventDefault()
+      }
+      // Cmd+Right: file the active tab into the folder right above it, or open a
+      // new folder's name field (Kova's Cmd+Right on a pane in Cmd+P). Taken from
+      // Forward, which has no key now: Cmd+Right never reaches a text field.
+      else if (!input.shift && !input.alt && input.key === 'ArrowRight') {
+        this.fileTabIntoFolderIn(pw, undefined, { edit: true })
+        event.preventDefault()
       } else if (input.alt && input.key === 'ArrowLeft') {
         this.stepMruIn(pw, -1)
         event.preventDefault()
@@ -5367,6 +5405,38 @@ export class ProfileManager {
     return { id, moved, toIndex }
   }
 
+  /** Cmd+Right: file a tab (default: the active one) into the folder drawn
+   * right above it in the sidebar, or into a new folder when there is none (see
+   * commands/tab-file.ts). The active view does not change. */
+  private fileTabIntoFolderIn(
+    pw: ProfileWindow,
+    tabId?: string,
+    opts: { title?: string; edit?: boolean } = {}
+  ): { id: string | null; filed: 'joined' | 'created' | 'none'; folderId: string | null } {
+    const id = tabId ?? pw.state.activeId
+    const plan = id ? planFileIntoFolder(pw.state.tabs, pw.folders, id) : null
+    if (!id || !plan) return { id: null, filed: 'none', folderId: null }
+    if (plan.kind === 'stay') {
+      const tab = pw.state.tabs.find((t) => t.id === id)
+      return { id, filed: 'none', folderId: tab?.folderId ?? null }
+    }
+    if (plan.kind === 'new') {
+      const { id: folderId } = this.createTabFolderIn(
+        pw,
+        opts.title ?? 'New folder',
+        id,
+        opts.edit === true
+      )
+      return { id, filed: 'created', folderId }
+    }
+    pw.state = setTabFolderPure(moveTabPure(pw.state, id, plan.toIndex), id, plan.folderId)
+    // A collapsed folder would hide the tab just filed, the one being looked at.
+    if (plan.expand) pw.folders = setFolderCollapsedPure(pw.folders, plan.folderId, false)
+    this.pushTabs(pw)
+    this.saveSession(pw)
+    return { id, filed: 'joined', folderId: plan.folderId }
+  }
+
   private moveTabIn(pw: ProfileWindow, id: string, toIndex: number): { id: string } {
     if (!pw.state.tabs.some((t) => t.id === id)) throw new Error(`unknown tab: ${id}`)
     pw.state = moveTabPure(pw.state, id, toIndex)
@@ -5743,6 +5813,78 @@ export class ProfileManager {
   stopHeavyTabMonitor(): void {
     if (this.heavyTimer) clearInterval(this.heavyTimer)
     this.heavyTimer = null
+  }
+
+  /** Start the auto-sleep sweep (rules in auto-sleep.ts). Called once by index.ts
+   * after the windows are up. */
+  startAutoSleep(): void {
+    if (this.autoSleepTimer) return
+    // The timer always runs; a sweep while auto-sleep is off only does nothing,
+    // so turning it back on needs no restart.
+    this.autoSleepTimer = setInterval(() => {
+      if (this.appSettings.autoSleep.enabled) void this.autoSleepNow(false)
+    }, AUTO_SLEEP_SWEEP_MS)
+  }
+
+  stopAutoSleep(): void {
+    if (this.autoSleepTimer) clearInterval(this.autoSleepTimer)
+    this.autoSleepTimer = null
+  }
+
+  /** One sweep over every open window: record the active tabs as seen, pick the
+   * long-unseen loaded tabs, keep the ones holding unsent typed text, and put the
+   * rest to sleep (on a dry run, only report them). */
+  async autoSleepNow(dryRun: boolean): Promise<AutoSleepReport> {
+    const report: AutoSleepReport = { slept: [], keptForText: [] }
+    if (this.autoSleeping) return report
+    this.autoSleeping = true
+    try {
+      const now = Date.now()
+      for (const pw of [...this.openById.values()]) {
+        if (pw.state.activeId) this.seenAt.set(pw.state.activeId, now)
+        const loaded = new Set([...pw.views.keys()].filter((id) => id !== pw.settingsTabId))
+        const audible = new Set(
+          [...loaded].filter((id) => this.liveContents(pw, id)?.isCurrentlyAudible() === true)
+        )
+        const idleMs = this.appSettings.autoSleep.idleHours * 60 * 60 * 1000
+        const ids = autoSleepCandidates(pw.state, loaded, audible, this.seenAt, now, idleMs)
+        const toSleep: string[] = []
+        for (const id of ids) {
+          const tab = pw.state.tabs.find((t) => t.id === id)
+          if (!tab) continue
+          const entry: AutoSleepTab = { id, title: tab.title, url: tab.url }
+          const typed = this.typedTabs.has(id)
+          let probe: unknown = false
+          if (typed) {
+            const wc = this.liveContents(pw, id)
+            probe = wc
+              ? await evalInWebContents(wc, PAGE_TEXT_PROBE).catch((e: unknown) =>
+                  e instanceof Error ? e : new Error(String(e))
+                )
+              : new Error('no page')
+          }
+          if (keepForText(typed, probe)) report.keptForText.push(entry)
+          else {
+            report.slept.push(entry)
+            toSleep.push(id)
+          }
+        }
+        // The window may have closed, or the user switched tabs, while a probe ran.
+        if (dryRun || toSleep.length === 0 || !this.openById.has(pw.windowId)) continue
+        const slept = toSleep.filter((id) => id !== pw.state.activeId && pw.views.has(id))
+        for (const id of slept) this.discardView(pw, id)
+        if (slept.length > 0) {
+          console.log(
+            `[mira] auto-sleep: ${slept.length} tab(s) put to sleep in window ${pw.windowId}`
+          )
+          this.pushTabs(pw)
+          this.saveSession(pw)
+        }
+      }
+      return report
+    } finally {
+      this.autoSleeping = false
+    }
   }
 
   /** One sample: read every process footprint with `top`, sum it per loaded tab
@@ -7170,9 +7312,20 @@ export class ProfileManager {
         if (!target) throw new Error('no target window')
         return this.moveTabToTopIn(target, tabId)
       },
+      fileTabIntoFolder: (tabId, opts) => {
+        if (!target) throw new Error('no target window')
+        return this.fileTabIntoFolderIn(target, tabId, opts)
+      },
       revealTab: (tabId) => {
         if (!target) throw new Error('no target window')
         return this.revealTabIn(target, tabId)
+      },
+      autoSleepNow: (dryRun) => this.autoSleepNow(dryRun),
+      getAutoSleep: () => this.appSettings.autoSleep,
+      setAutoSleep: (patch) => {
+        this.appSettings = withAutoSleep(this.appSettings, patch)
+        this.deps.persistSettings(this.appSettings)
+        return this.appSettings.autoSleep
       },
       toggleTabFolder: (id, collapsed) => {
         if (!target) throw new Error('no target window')

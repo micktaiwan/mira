@@ -64,6 +64,7 @@ mira open example.com [-b]             # OPEN X → new tab, leaves the current 
 mira nav example.com                   # "go to X" → loads in place, OVERWRITES the pinned/active tab (-n: new tab)
 mira done                              # close this Claude session's windows (see below)
 mira focus [--window <id>]             # bring ONE window to the front — FORBIDDEN unless explicitly asked
+mira focus --tab <id>                  # make THAT tab active, then raise its window (same ban applies)
 mira watch                             # live stream of the watched tab (Ctrl-C to quit)
 mira cookies [--url <url>] [--netscape] # cookie string of the tab's site, HttpOnly included; --tab reads THAT tab's profile
                                        # --netscape: a cookie jar for yt-dlp --cookies / curl -b (Instagram reels need the login)
@@ -390,6 +391,16 @@ before concluding.
 
 ## Traps
 
+- **`click --text` reads visible text only.** An icon-only button carries its name in `aria-label`
+  or `title`, so `click --text 'Toggle comments'` answers `no match` while the control sits right
+  there: use `click --selector "button[aria-label='Toggle comments']"`. `snap` lists such a button
+  as `"button"` or `"?"`, which is the tell that its name is not in the DOM text.
+- **A disabled button says why in a tooltip, and there is no hover verb.** When an action is greyed
+  out, the reason hangs on its tooltip trigger (Base UI marks it `[data-base-ui-tooltip-trigger]`) and
+  never shows up in the page text. Fire the
+  pointer events yourself to make it render, then read it:
+  `mira exec "(() => { const s = document.querySelector('[data-base-ui-tooltip-trigger]'); const r = s.getBoundingClientRect(); const o = {bubbles: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2, pointerType: 'mouse', isPrimary: true}; for (const e of ['pointerover', 'pointerenter', 'pointermove']) s.dispatchEvent(new PointerEvent(e, o)); return 'hovered'; })()"`,
+  then read `[role=tooltip]`. Guessing the reason instead costs several wrong fixes in a row.
 - **Calling `mira` from an app or a launchd job, not a terminal**: `~/.local/bin/mira` is a node script
   (`#!/usr/bin/env node`), and such callers get launchd's bare PATH, where node is not: it fails with
   `env: node: No such file or directory`, which a caller that hides stderr sees as an empty answer. Give
@@ -399,10 +410,14 @@ before concluding.
 - Every request without a `tabId` binds to the focused window **at call time**: flaky with several
   windows, prefer an explicit `tabId`. Also true of `nav`/`open`: with no pinned tab (and no session
   window), they target the focused window.
-- An asleep tab (lazy-load, discard; `z` in `mira tabs`) makes page-bound commands fail
+- An asleep tab (lazy-load, discard, auto-sleep; `z` in `mira tabs`) makes page-bound commands fail
   (`tab is asleep`). `mira reload --tab <id>` wakes it without switching the window to it, then
   `mira wait --tab <id> --host <site>` before the next `exec`; `select-tab` wakes it too, but makes
-  it the visible tab.
+  it the visible tab. Auto-sleep puts a loaded tab to sleep once it has gone 12 h (setting:
+  `get-auto-sleep` / `set-auto-sleep`, Settings > Tabs) without being on screen (counted from its
+  opening if it never was), except the active, pinned, keep-awake and
+  audible tabs and a page holding typed, unsent text; `mira call auto-sleep --params
+  '{"dryRun":true}'` lists what the next sweep would take.
 - **Every tab carries three ages** (columns between the id and the title, in this order): since it
   opened, since it was last visited, since its page last changed — `3d`, `4h`, or `-` when the data
   is missing (a tab never looked at, or restored from a session older than the feature). In JSON

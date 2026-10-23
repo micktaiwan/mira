@@ -171,6 +171,11 @@ describe('registrableDomain', () => {
     expect(registrableDomain('192.168.1.10')).toBe('192.168.1.10')
     expect(registrableDomain('10.0.1.10:8080')).toBe('10.0.1.10')
   })
+
+  it('keeps each tenant of a shared host apart (a.github.io is not evil.github.io)', () => {
+    expect(registrableDomain('a.github.io')).toBe('a.github.io')
+    expect(registrableDomain('evil.github.io:443')).toBe('evil.github.io')
+  })
 })
 
 describe('findLoginMatch', () => {

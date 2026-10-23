@@ -463,6 +463,7 @@ app.whenReady().then(async () => {
     homeUrl: initialSettings.homeUrl,
     initialLlm: initialSettings.llm,
     magnifierEnabled: initialSettings.magnifierEnabled,
+    autoSleep: initialSettings.autoSleep,
     preloadPath,
     userDataDir: app.getPath('userData'),
     ...(process.platform === 'linux' ? { icon } : {}),
@@ -573,6 +574,8 @@ app.whenReady().then(async () => {
       toggleZen: () => runDetached('toggle-zen', {}, profiles.contextForFocused()),
       revealTab: () => runDetached('reveal-tab', {}, profiles.contextForFocused()),
       moveTabToTop: () => runDetached('move-tab-to-top', {}, profiles.contextForFocused()),
+      fileTabIntoFolder: () =>
+        runDetached('file-tab-into-folder', { edit: true }, profiles.contextForFocused()),
       // Route the accelerators through the registry so they hit the same bus as
       // the toolbar buttons and the socket — the focused window is the target.
       goBack: () => runDetached('back', {}, profiles.contextForFocused()),
@@ -818,6 +821,7 @@ app.whenReady().then(async () => {
   app.on('will-quit', () => {
     quitTimeline.mark('windows closed (will-quit)')
     profiles.stopHeavyTabMonitor()
+    profiles.stopAutoSleep()
     // No embedded claude outlives Mira (waits up to ~2 s for them to die).
     profiles.shutdownKova()
     profiles.flushPendingSaves()
@@ -835,6 +839,8 @@ app.whenReady().then(async () => {
   profiles.openSavedProfiles(parseProfileArg(process.argv, process.env))
   // Flag tabs holding too much memory (badge + toast, heavy-tabs.ts), once a minute.
   profiles.startHeavyTabMonitor()
+  // Put long-unseen tabs to sleep so loaded tabs stop piling up (auto-sleep.ts).
+  profiles.startAutoSleep()
 
   // The manager now exists and has a window: route default-browser link handoffs
   // to it, and flush any links that arrived during a cold launch (see above).

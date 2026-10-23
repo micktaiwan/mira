@@ -19,6 +19,15 @@ describe('registrableDomain', () => {
     expect(registrableDomain('co.uk')).toBe('co.uk')
   })
 
+  it('keeps three labels under a shared-hosting suffix (each tenant is its own site)', () => {
+    expect(registrableDomain('a.github.io')).toBe('a.github.io')
+    expect(registrableDomain('evil.github.io')).not.toBe(registrableDomain('a.github.io'))
+    expect(registrableDomain('docs.app.vercel.app')).toBe('app.vercel.app')
+    expect(registrableDomain('x.netlify.app')).toBe('x.netlify.app')
+    // The bare suffix stays itself.
+    expect(registrableDomain('github.io')).toBe('github.io')
+  })
+
   it('lower-cases and strips a trailing dot', () => {
     expect(registrableDomain('WWW.Example.COM.')).toBe('example.com')
   })

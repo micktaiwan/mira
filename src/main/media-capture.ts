@@ -278,7 +278,10 @@ export function fileNameFor(url: string, mime?: string): string {
   } catch {
     // Leave a malformed percent-escape as-is rather than throwing.
   }
-  if (!base) base = 'download'
+  // Decoding can surface separators (`..%2F..%2Fx`), so keep only the last
+  // component and strip NUL: the result must stay a single path segment.
+  base = (base.split(/[/\\]/).pop() ?? '').replace(/\0/g, '_')
+  if (!base || base === '.' || base === '..') base = 'download'
   if (!extOf(base)) {
     const ext = mimeToExt(mime)
     if (ext) base = `${base}.${ext}`

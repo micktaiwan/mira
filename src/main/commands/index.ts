@@ -57,6 +57,7 @@ import { tabMemoryCommands } from './tab-memory'
 import { tabMenuCommands } from './tab-menu'
 import { tabTidyCommands } from './tab-tidy'
 import { tabTopCommands } from './tab-top'
+import { tabFileCommands } from './tab-file'
 import { tabsCommands } from './tabs'
 import { terminalCwdCommands } from './terminal-cwd'
 import { themeCommands } from './themes'
@@ -69,6 +70,7 @@ import { waitCommands } from './wait'
 import { windowStateCommands } from './window-state'
 import { zenCommands } from './zen'
 import { revealTabCommands } from './reveal-tab'
+import { autoSleepCommands } from './auto-sleep'
 
 // Public types, re-exported so consumers keep importing from './commands'.
 export type { CommandContext } from './context'
@@ -208,10 +210,13 @@ export {
 } from '../wait'
 export type { ZenContext, ZenState, PanelSnapshot } from './zen'
 export { nextZen } from './zen'
+export type { AutoSleepContext, AutoSleepReport, AutoSleepTab } from './auto-sleep'
 export type { RevealTabContext, RevealPlan } from './reveal-tab'
 export { planReveal } from './reveal-tab'
 export type { TabTopContext, TabGroupMember } from './tab-top'
 export { topIndexOf } from './tab-top'
+export type { TabFileContext, FilePlan } from './tab-file'
+export { planFileIntoFolder } from './tab-file'
 
 export type CommandRegistry = CommandRegistryOf<CommandContext>
 
@@ -260,6 +265,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...tabMenuCommands,
     ...tabTidyCommands,
     ...tabTopCommands,
+    ...tabFileCommands,
     ...tabsCommands,
     ...terminalCwdCommands,
     ...themeCommands,
@@ -271,7 +277,8 @@ export function createCommandRegistry(): CommandRegistry {
     ...waitCommands,
     ...windowStateCommands,
     ...zenCommands,
-    ...revealTabCommands
+    ...revealTabCommands,
+    ...autoSleepCommands
   }
   return buildRegistry(commands)
 }

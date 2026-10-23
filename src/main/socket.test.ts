@@ -83,35 +83,40 @@ function setup(): {
       llm: { provider: 'claude-cli' },
       sidebarWidth: 240,
       skillPaneWidth: 360,
-      magnifierEnabled: false
+      magnifierEnabled: false,
+      autoSleep: { enabled: true, idleHours: 12 }
     }),
     setLlmConfig: (llm) => ({
       homeUrl: 'home',
       llm,
       sidebarWidth: 240,
       skillPaneWidth: 360,
-      magnifierEnabled: false
+      magnifierEnabled: false,
+      autoSleep: { enabled: true, idleHours: 12 }
     }),
     setSidebarWidth: (width) => ({
       homeUrl: 'home',
       llm: { provider: 'claude-cli' },
       sidebarWidth: width,
       skillPaneWidth: 360,
-      magnifierEnabled: false
+      magnifierEnabled: false,
+      autoSleep: { enabled: true, idleHours: 12 }
     }),
     setSkillPaneWidth: (width) => ({
       homeUrl: 'home',
       llm: { provider: 'claude-cli' },
       sidebarWidth: 240,
       skillPaneWidth: width,
-      magnifierEnabled: false
+      magnifierEnabled: false,
+      autoSleep: { enabled: true, idleHours: 12 }
     }),
     setHomeUrl: (url: string) => ({
       homeUrl: url,
       llm: { provider: 'claude-cli' },
       sidebarWidth: 240,
       skillPaneWidth: 360,
-      magnifierEnabled: false
+      magnifierEnabled: false,
+      autoSleep: { enabled: true, idleHours: 12 }
     }),
     diskUsage: () =>
       Promise.resolve({ root: '/fake', total: 0, reclaimable: 0, entries: [], profiles: [] }),
@@ -186,6 +191,7 @@ function setup(): {
     moveTab: (id: string) => ({ id }),
     tidyTabs: () => ({ moved: 0 }),
     moveTabToTop: () => ({ id: 'tab-1', moved: false, toIndex: 0 }),
+    fileTabIntoFolder: () => ({ id: 'tab-1', filed: 'none', folderId: null }),
     detachTab: async () => ({ windowId: 'w', created: true }),
     moveTabToWindow: (_id: string, windowId: string) => ({ windowId }),
     activateTab: (id: string) => ({ windowId: 'w', id }),
@@ -383,7 +389,10 @@ function setup(): {
     writeClipboard: () => {},
     setTerminalRect: () => {},
     terminalFocused: () => false,
-    endTerminalSession: () => false
+    endTerminalSession: () => false,
+    autoSleepNow: async () => ({ slept: [], keptForText: [] }),
+    getAutoSleep: () => ({ enabled: true, idleHours: 12 }),
+    setAutoSleep: () => ({ enabled: true, idleHours: 12 })
   }
   return { registry: createCommandRegistry(), ctx, loaded }
 }

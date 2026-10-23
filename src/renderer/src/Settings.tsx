@@ -1203,6 +1203,65 @@ function hostOf(url: string): string {
  * Because Chromium reuses one renderer for several same-site pages, a process can
  * back more than one tab — those rows show a "shared" note and the total counts
  * each process once. */
+/** Auto-sleep setting, at the head of the Tabs section: one select for both the
+ * switch and the delay ("Never" turns it off). Reads and writes through
+ * get-auto-sleep / set-auto-sleep, like the socket would. */
+function AutoSleepSetting(): React.JSX.Element {
+  const [enabled, setEnabled] = useState(true)
+  const [idleHours, setIdleHours] = useState(12)
+  const [choices, setChoices] = useState<number[]>([])
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    void run('get-auto-sleep').then((res) => {
+      if (!res.ok) return setError(String(res.error))
+      setEnabled(res.enabled === true)
+      setIdleHours(Number(res.idleHours))
+      setChoices((res.choices as number[]) ?? [])
+    })
+  }, [])
+
+  const onChange = async (value: string): Promise<void> => {
+    const params =
+      value === 'off' ? { enabled: false } : { enabled: true, idleHours: Number(value) }
+    const res = await run('set-auto-sleep', params)
+    if (!res.ok) return setError(String(res.error))
+    setError(null)
+    setEnabled(res.enabled === true)
+    setIdleHours(Number(res.idleHours))
+  }
+
+  const label = (h: number): string => (h % 24 === 0 ? `${h / 24} d` : `${h} h`)
+
+  return (
+    <>
+      <label className="settings-field">
+        <span className="settings-field-label">Put unseen tabs to sleep</span>
+        <select
+          className="settings-input"
+          value={enabled ? String(idleHours) : 'off'}
+          onChange={(e) => void onChange(e.target.value)}
+          aria-label="Put unseen tabs to sleep"
+        >
+          <option value="off">Never</option>
+          {choices.map((h) => (
+            <option key={h} value={String(h)}>
+              After {label(h)}
+            </option>
+          ))}
+        </select>
+      </label>
+      <p className="settings-hint">
+        A tab that has not been on screen for that long is put to sleep: its page is unloaded to
+        free memory, the tab stays in the list and reloads when you select it. Never touched: the
+        tab on screen, pinned and keep-awake tabs, a tab playing sound, and a page holding text you
+        typed and have not sent.
+      </p>
+      {error && <p className="settings-error">{error}</p>}
+    </>
+  )
+}
+
 function TabsMemorySection(): React.JSX.Element {
   const [entries, setEntries] = useState<TabMemoryEntry[]>([])
   const [tabsBytes, setTabsBytes] = useState(0)
@@ -1249,6 +1308,7 @@ function TabsMemorySection(): React.JSX.Element {
 
   return (
     <div className="settings-section">
+      <AutoSleepSetting />
       <p className="settings-hint">
         Every loaded tab across all open profiles, ranked by total memory (heaviest first). A tab is
         not one process: under site-per-process its main frame plus every cross-origin subframe

@@ -68,6 +68,7 @@
 //                                   (no --tab: the pinned/active one; `mira discard-tab` puts it to sleep instead)
 // No command here ever brings Mira to the foreground; `mira focus` is the explicit way.
 //   mira focus [--window <id>]      bring one window to the front (default: Mira's last-focused one)
+//   mira focus --tab <id>           make that tab active and raise ITS window
 //   mira windows                    list open windows (id / profile / tabs), * = focused
 //   mira done                       close this Claude session's own window (see above)
 //   mira watch                      follow the focused tab live (profile / folder / title / url), until Ctrl-C
@@ -104,6 +105,7 @@ import {
   buildCall,
   buildNav,
   buildFocus,
+  buildActivateTab,
   buildConsole,
   buildScreenshot,
   formatScreenshot,
@@ -819,10 +821,21 @@ async function main() {
       )
     }
 
-    case 'focus':
+    case 'focus': {
       // Bring ONE window to the front: --window <id> (from `mira windows`), else
       // Mira's last-focused window. The only command that foregrounds the app.
+      // With --tab, that tab is made active first and ITS window is the one
+      // raised: raising a window while another tab keeps the screen reads as a
+      // no-op to whoever asked for that page.
+      if (flags.tab !== undefined) {
+        const plan = buildActivateTab(flags.tab)
+        if ('error' in plan) return die(plan.error, 2)
+        const res = await call(plan, socketPath).catch((e) => die(e.message, 2))
+        if (!res.ok) return die(JSON.stringify(res), 1)
+        return send(buildFocus(flags.window ?? res.windowId), { json })
+      }
       return send(buildFocus(flags.window), { json })
+    }
 
     case 'use': {
       // Prints `export MIRA_TAB=<id>` to stdout (for `eval "$(mira use ...)"`).

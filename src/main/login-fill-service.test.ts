@@ -35,14 +35,22 @@ function makeService(opts: {
   /** What the native picker answers (undefined = no picker wired at all, which
    * is what a profile with no window looks like). */
   pick?: string | null
+  /** The url of each fake frame, by index (default: the page url). */
+  frameUrls?: string[]
+  /** The page navigates there while the picker is open. */
+  navigateOnPick?: string
 }): {
   service: LoginFillService
   sent: FrameLog[]
+  /** The url of every frame that received a request, in send order. */
+  sentTo: string[]
   persisted: FillMemory[]
   asked: { host: string; ids: string[] }[]
   reads: number
 } {
   const sent: FrameLog[] = []
+  const sentTo: string[] = []
+  const pageUrl = { current: opts.url ?? 'https://eu.example.net/users/sign_in' }
   const persisted: FillMemory[] = []
   const asked: { host: string; ids: string[] }[] = []
   let reads = 0
@@ -53,13 +61,15 @@ function makeService(opts: {
   // built: the closure needs a reference before the constructor returns.
   const holder: { current?: LoginFillService } = {}
   const frames = answers.map(
-    (answer) =>
+    (answer, index) =>
       ({
+        url: opts.frameUrls?.[index] ?? pageUrl.current,
         send: (
           _channel: string,
           request: { token: string; username: string; password: string }
         ) => {
           sent.push({ username: request.username, password: request.password })
+          sentTo.push(opts.frameUrls?.[index] ?? pageUrl.current)
           holder.current?.handleFrameReport({
             token: request.token,
             url: opts.url ?? 'https://eu.example.net/users/sign_in',
@@ -75,13 +85,14 @@ function makeService(opts: {
       return opts.logins ?? []
     },
     framesOf: () => frames,
-    urlOf: () => opts.url ?? 'https://eu.example.net/users/sign_in',
+    urlOf: () => pageUrl.current,
     load: () => opts.memory ?? {},
     persist: (memory) => persisted.push(memory),
     ...('pick' in opts
       ? {
           pick: async (params: { host: string; candidates: { id: string }[] }) => {
             asked.push({ host: params.host, ids: params.candidates.map((c) => c.id) })
+            if (opts.navigateOnPick) pageUrl.current = opts.navigateOnPick
             return opts.pick ?? null
           }
         }
@@ -92,6 +103,7 @@ function makeService(opts: {
   return {
     service,
     sent,
+    sentTo,
     persisted,
     asked,
     get reads() {
@@ -342,5 +354,88 @@ describe('the account picker', () => {
     const { service, asked } = makeService({ logins: two, pick: 'b' })
     await service.fill({ profileId: 'perso', contents })
     expect(JSON.stringify(asked)).not.toContain('hunter22')
+  })
+})
+
+describe('which frames receive the credential', () => {
+  const victim = item({ id: 'v', hosts: ['victim.test'], password: 'dummy-pw' })
+  const two = { usernameFilled: true, passwordFilled: true, passwordFields: 1 }
+
+  it('never sends it to a cross-site iframe (an ad, a widget)', async () => {
+    const { service, sent, sentTo } = makeService({
+      logins: [victim],
+      url: 'https://victim.test/login',
+      frameUrls: ['https://victim.test/login', 'https://evil.test/ad'],
+      answers: [two, { usernameFilled: false, passwordFilled: false, passwordFields: 0 }]
+    })
+    const out = await service.fill({ profileId: 'perso', contents })
+    expect(sentTo).toEqual(['https://victim.test/login'])
+    expect(sent).toEqual([{ username: 'me@example.com', password: 'dummy-pw' }])
+    expect(out.filled).toMatchObject({ id: 'v', password_filled: true })
+  })
+
+  it('still fills an SSO iframe on a subdomain of a listed host', async () => {
+    const { service, sentTo } = makeService({
+      logins: [victim],
+      url: 'https://victim.test/login',
+      frameUrls: ['https://victim.test/login', 'https://accounts.victim.test/widget'],
+      answers: [two, two]
+    })
+    await service.fill({ profileId: 'perso', contents })
+    expect(sentTo).toEqual(['https://victim.test/login', 'https://accounts.victim.test/widget'])
+  })
+
+  it('fills an iframe on another site only when the picked item lists that host', async () => {
+    const sso = item({ id: 'v', hosts: ['victim.test', 'sso.idp.test'], password: 'dummy-pw' })
+    const { service, sentTo } = makeService({
+      logins: [sso],
+      url: 'https://victim.test/login',
+      frameUrls: ['https://sso.idp.test/frame', 'https://evil.test/ad', 'about:blank'],
+      answers: [two, two, two]
+    })
+    await service.fill({ profileId: 'perso', contents })
+    expect(sentTo).toEqual(['https://sso.idp.test/frame'])
+  })
+
+  it('never sends it to another tenant of a shared host (a.github.io vs evil.github.io)', async () => {
+    const tenant = item({ id: 't', hosts: ['a.github.io'], password: 'dummy-pw' })
+    const { service, sentTo } = makeService({
+      logins: [tenant],
+      url: 'https://a.github.io/login',
+      frameUrls: ['https://a.github.io/login', 'https://evil.github.io/ad'],
+      answers: [two, two]
+    })
+    await service.fill({ profileId: 'perso', contents })
+    expect(sentTo).toEqual(['https://a.github.io/login'])
+  })
+
+  it('offers nothing on another tenant of a shared host (the page itself)', async () => {
+    const tenant = item({ id: 't', hosts: ['a.github.io'], password: 'dummy-pw' })
+    const { service, sent } = makeService({
+      logins: [tenant],
+      url: 'https://evil.github.io/login',
+      frameUrls: ['https://evil.github.io/login']
+    })
+    await expect(service.fill({ profileId: 'perso', contents })).rejects.toMatchObject({
+      reason: 'no-match'
+    })
+    expect(sent).toEqual([])
+  })
+
+  it('fills nothing when the page navigated away while the picker was open', async () => {
+    const { service, sent } = makeService({
+      logins: [
+        item({ id: 'a', username: 'ana@x.com', hosts: ['victim.test'] }),
+        item({ id: 'b', username: 'bob@x.com', hosts: ['victim.test'] })
+      ],
+      url: 'https://victim.test/login',
+      pick: 'b',
+      navigateOnPick: 'https://evil.test/login',
+      frameUrls: ['https://victim.test/login']
+    })
+    await expect(service.fill({ profileId: 'perso', contents })).rejects.toMatchObject({
+      reason: 'no-page'
+    })
+    expect(sent).toEqual([])
   })
 })

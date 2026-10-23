@@ -124,8 +124,7 @@ const STATIC_COMMANDS: ReadonlyArray<Omit<PaletteEntry, 'group'>> = [
     id: 'cmd:forward',
     title: 'Forward',
     command: 'forward',
-    keywords: 'history next',
-    shortcut: shortcutLabel('forward')
+    keywords: 'history next'
   },
   {
     id: 'cmd:discard-tab',
@@ -140,6 +139,14 @@ const STATIC_COMMANDS: ReadonlyArray<Omit<PaletteEntry, 'group'>> = [
     command: 'move-tab-to-top',
     keywords: 'priority first head promote reorder up',
     shortcut: shortcutLabel('moveTabToTop')
+  },
+  {
+    id: 'cmd:file-tab-into-folder',
+    title: 'Move Tab into Folder',
+    command: 'file-tab-into-folder',
+    params: { edit: true },
+    keywords: 'folder group file indent organize',
+    shortcut: shortcutLabel('fileTabIntoFolder')
   },
   {
     id: 'cmd:reveal-tab',

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { dirname, join } from 'path'
 import {
   classifyMedia,
   extOf,
@@ -142,5 +143,34 @@ describe('fileNameFor + mimeToExt', () => {
     expect(mimeToExt('image/jpeg')).toBe('jpg')
     expect(mimeToExt('video/mp4')).toBe('mp4')
     expect(mimeToExt('application/unknown')).toBe('')
+  })
+  it('never yields a name that escapes the target directory', () => {
+    const dir = '/Users/me/Downloads'
+    const urls = [
+      'https://e.test/a/..%2F..%2FLibrary%2FLaunchAgents%2Fx.plist',
+      'https://e.test/a/..%5C..%5Cx.plist',
+      'https://e.test/a/%2E%2E',
+      'https://e.test/a/%2E',
+      'https://e.test/a/%2E%2E%2F',
+      'https://e.test/a/%2F',
+      'https://e.test/a/x%00.png',
+      '../../etc/passwd',
+      '..',
+      '.'
+    ]
+    for (const url of urls) {
+      const name = fileNameFor(url)
+      expect(name, url).not.toMatch(/[/\\\0]/)
+      expect(['', '.', '..'], url).not.toContain(name)
+      const full = join(dir, name)
+      expect(dirname(full), url).toBe(dir)
+    }
+  })
+  it('keeps the decoded basename of an encoded traversal path', () => {
+    expect(fileNameFor('https://e.test/a/..%2F..%2FLibrary%2FLaunchAgents%2Fx.plist')).toBe(
+      'x.plist'
+    )
+    expect(fileNameFor('https://e.test/a/%2E%2E', 'image/png')).toBe('download.png')
+    expect(fileNameFor('https://e.test/a/my%20cat.jpg')).toBe('my cat.jpg')
   })
 })

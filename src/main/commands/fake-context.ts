@@ -46,8 +46,14 @@ import { parseTraceParams, type TraceStart } from '../tracing'
 import { resolveScreenshotPath, type ScreenshotRequest, type ScreenshotResult } from '../screenshot'
 import type { LlmConfig, ChatMessage, PageContext } from '../llm'
 import { nextZen, type PanelSnapshot } from './zen'
+import {
+  defaultAutoSleep,
+  normalizeAutoSleep,
+  type AutoSleepSettings
+} from '../settings-store'
 import { planReveal } from './reveal-tab'
 import { topIndexOf } from './tab-top'
+import { planFileIntoFolder } from './tab-file'
 import { PageConsoleStore, type PageConsoleDraft } from '../page-console'
 import {
   emptyTabState,
@@ -180,6 +186,10 @@ export interface FakeContext {
   folderEdits: string[]
   /** Tab ids passed to reveal-tab (the real manager pushes mira:reveal-tab). */
   revealedTabs: string[]
+  /** The dryRun flag of each auto-sleep sweep asked for (auto-sleep spy). */
+  autoSleepCalls: boolean[]
+  /** Live view of the auto-sleep setting (set-auto-sleep spy). */
+  autoSleep: () => AutoSleepSettings
   /** Live view of the fake window's zen-mode flag (toggle-zen spy): true while the
    * toolbar, status bar, and both panels are hidden. */
   chromeHidden: () => boolean
@@ -371,6 +381,8 @@ export function makeContext(
   // Folders whose name field was requested (create-tab-folder with edit: true).
   const folderEdits: string[] = []
   const revealedTabs: string[] = []
+  const autoSleepCalls: boolean[] = []
+  let autoSleep = defaultAutoSleep()
   // The fake Spaces world: three user desktops on one display (stable fake ids).
   const fakeSpaceIds = [101, 103, 107]
   let windowSpace = 0
@@ -547,12 +559,14 @@ export function makeContext(
     sidebarWidth: number
     skillPaneWidth: number
     magnifierEnabled: boolean
+    autoSleep: AutoSleepSettings
   } => ({
     homeUrl: state.homeUrl,
     llm: state.llm,
     sidebarWidth: state.sidebarWidth,
     skillPaneWidth: state.skillPaneWidth,
-    magnifierEnabled: magnifierEnabled.value
+    magnifierEnabled: magnifierEnabled.value,
+    autoSleep
   })
   // Vault (encrypted-profile) state: which fake profiles are encrypted, and which
   // are unlocked this "session". The real ones shell out to hdiutil + fs.
@@ -1698,6 +1712,26 @@ export function makeContext(
       if (moved) state.tabs = moveTabPure(state.tabs, id, toIndex)
       return { id, moved, toIndex }
     },
+    fileTabIntoFolder: (tabId?: string, opts?: { title?: string; edit?: boolean }) => {
+      const id = tabId ?? state.tabs.activeId
+      const plan = id ? planFileIntoFolder(state.tabs.tabs, state.folders, id) : null
+      if (!id || !plan) return { id: null, filed: 'none' as const, folderId: null }
+      if (plan.kind === 'stay') {
+        const tab = state.tabs.tabs.find((t) => t.id === id)
+        return { id, filed: 'none' as const, folderId: tab?.folderId ?? null }
+      }
+      if (plan.kind === 'new') {
+        const folderId = `folder-${++state.folderSeq}`
+        const title = opts?.title ?? 'New folder'
+        state.folders = addFolderPure(state.folders, { id: folderId, title, collapsed: false })
+        state.tabs = setTabFolderPure(state.tabs, id, folderId)
+        if (opts?.edit) folderEdits.push(folderId)
+        return { id, filed: 'created' as const, folderId }
+      }
+      state.tabs = setTabFolderPure(moveTabPure(state.tabs, id, plan.toIndex), id, plan.folderId)
+      if (plan.expand) state.folders = setFolderCollapsedPure(state.folders, plan.folderId, false)
+      return { id, filed: 'joined' as const, folderId: plan.folderId }
+    },
     revealTab: (tabId?: string) => {
       const id = tabId ?? state.tabs.activeId
       const tab = id ? state.tabs.tabs.find((t) => t.id === id) : undefined
@@ -1709,6 +1743,15 @@ export function makeContext(
       }
       revealedTabs.push(tab.id)
       return { revealed: true, tabId: tab.id, ...plan }
+    },
+    autoSleepNow: async (dryRun: boolean) => {
+      autoSleepCalls.push(dryRun)
+      return { slept: [], keptForText: [] }
+    },
+    getAutoSleep: () => autoSleep,
+    setAutoSleep: (patch) => {
+      autoSleep = normalizeAutoSleep({ ...autoSleep, ...patch })
+      return autoSleep
     },
     toggleZen: (hidden?: boolean) => {
       const live = { tabsCollapsed: state.panelCollapsed, skillPaneOpen: state.skillPane.open }
@@ -2273,6 +2316,8 @@ export function makeContext(
     folders: () => state.folders,
     folderEdits,
     revealedTabs,
+    autoSleepCalls,
+    autoSleep: () => autoSleep,
     chromeHidden: () => state.chromeHidden,
     zoomLevel: () => state.zoomLevel,
     paletteOpen: () => state.paletteOpen,
