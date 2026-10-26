@@ -219,6 +219,11 @@ What snap does not see: elements inside iframes or shadow DOM, canvas apps, pass
 fields, and text below the fold (scroll, then snap again). For those, fall back to
 `mira click --selector/--text` and `mira exec`.
 
+**Never read an input's value to check that the text landed.** Returning `input.value`, or even
+its length, gets the call refused by a safety check, and the refusal looks like a Mira failure
+while the typing worked. Ask a boolean question instead (`!!input.value`), or read a control that
+changes once the field is filled (the submit button becoming enabled).
+
 **Reading a page whose content lives in a cross-origin iframe** (a hosted artifact or embed: the
 top document's `innerText` holds only the header): `mira exec` cannot reach into the frame, and
 opening the frame's `src` in its own tab usually redirects back to the parent page (the frame
