@@ -24,6 +24,8 @@ export const BOOLEAN_FLAGS = new Set([
   'json',
   'active',
   'help',
+  // version: --version prints the CLI's own version and stops (no socket).
+  'version',
   'new-tab',
   'full',
   'background',
@@ -46,7 +48,8 @@ export const BOOLEAN_FLAGS = new Set([
  * A bare `-` is NOT a short flag: it stays a positional (e.g. `mira exec -` = stdin). */
 export const SHORT_FLAGS = new Map([
   ['n', 'new-tab'],
-  ['b', 'background']
+  ['b', 'background'],
+  ['v', 'version']
 ])
 
 /** True when the caller asked for a hidden tab (`--background` / `-b`): the new
@@ -141,6 +144,42 @@ export function parseArgs(argv) {
   }
 
   return { command, positionals, flags }
+}
+
+/**
+ * The version `mira --version` prints, read from the CLI's own package.json.
+ * Returns null when the text is not JSON or carries no usable `version`, so the
+ * caller can say so instead of printing `undefined`.
+ *
+ * This is the CLI's version (the checkout the bin lives in), NOT the running
+ * app's: the app answers `mira version` over the socket, which needs Mira up.
+ *
+ * @param {string} text
+ * @returns {string|null}
+ */
+export function parseCliVersion(text) {
+  let pkg
+  try {
+    pkg = JSON.parse(text)
+  } catch {
+    return null
+  }
+  const v = pkg && pkg.version
+  return typeof v === 'string' && v.trim() !== '' ? v.trim() : null
+}
+
+/**
+ * True when the argv asks for the CLI's own version rather than for a command.
+ * `--version` / `-v` reach no socket. A named command wins over the flag, so
+ * `mira type 3 -v` still types "-v" instead of printing a version, and
+ * `mira version` keeps asking the RUNNING app over the socket.
+ *
+ * @param {string|null} command
+ * @param {Record<string, string|boolean>} flags
+ * @returns {boolean}
+ */
+export function wantsCliVersion(command, flags) {
+  return command === null && flags?.version === true
 }
 
 /**

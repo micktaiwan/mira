@@ -250,6 +250,7 @@ import {
 import { installHoverReporter, reduceHover, hoverText, EMPTY_HOVER, type HoverEvent } from './hover'
 import { evalInWebContents } from './cdp-eval'
 import { keyToDispatchEvents } from './input-keys'
+import { withMenuShortcutsIgnored } from './input-menu'
 import { clickTargetScript, interpretClickTarget, mouseDispatchEvents } from './input-mouse'
 import { refTargetScript } from './page-snapshot/page-snapshot'
 import { pollUntil, waitProbeScript, waitTimeoutMessage } from './wait'
@@ -6882,9 +6883,15 @@ export class ProfileManager {
         const wasAttached = dbg.isAttached()
         if (!wasAttached) dbg.attach('1.3')
         try {
-          await this.dispatchChecked(wc, 'key', undefined, async () => {
-            for (const ev of events) await dbg.sendCommand('Input.dispatchKeyEvent', ev)
-          })
+          // Not intercepting the menu — keeping the key from reaching it: an
+          // unconsumed key with a native key code is handed back to the native
+          // menu (input-menu.ts), and Cmd+<key> then lands on About. The page
+          // still gets the press.
+          await withMenuShortcutsIgnored(wc, () =>
+            this.dispatchChecked(wc, 'key', undefined, async () => {
+              for (const ev of events) await dbg.sendCommand('Input.dispatchKeyEvent', ev)
+            })
+          )
         } finally {
           // Only detach a debugger we attached; leave stealth's in place.
           if (!wasAttached) dbg.detach()

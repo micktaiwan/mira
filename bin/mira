@@ -80,6 +80,7 @@
 //   mira commands                   list every command the running build knows
 //   mira call <command> [--params '<json>']   generic passthrough to any command
 //   mira <command> [--params '<json>']        same, shorthand
+//   mira --version | -v             this CLI's version alone (no socket, no Mira needed)
 // Global flags: --tab <id>, --json (raw response), --socket <path>.
 
 import { createConnection } from 'node:net'
@@ -131,6 +132,8 @@ import {
   buildUploadScripts,
   timeoutMessage,
   socketPathError,
+  parseCliVersion,
+  wantsCliVersion,
   PROBE_TIMEOUT_MS
 } from '../src/cli/mira-core.mjs'
 
@@ -379,11 +382,31 @@ function report(res, { json, pretty } = {}) {
     stream = process.stderr
     text = JSON.stringify(res)
   }
+  if (!res.ok && /^unknown tab:/.test(String(res.error ?? ''))) {
+    // Stale id: the tab was closed (or lives in a profile/window not reachable). Say what to do.
+    process.stderr.write('hint: that tab no longer exists; run `mira tabs` (or `mira tabs --profile <p>`) to get the current id, then pass it with --tab.\n')
+  }
   stream.write(text + '\n', () => process.exit(res.ok ? 0 : 1))
 }
 
 async function main() {
   const { command, positionals, flags } = parseArgs(process.argv.slice(2))
+  // `--version` / `-v`: the version of THIS CLI, read from its own package.json.
+  // No socket, so it answers with Mira down or not even installed — and before the
+  // socket-path check, which cannot concern a flag that opens no connection. The
+  // RUNNING app's version is a different question: `mira version` asks it over the
+  // socket (an older build that does not know the command makes it fail).
+  if (wantsCliVersion(command, flags)) {
+    let text
+    try {
+      text = readFileSync(resolve(HERE, '..', 'package.json'), 'utf8')
+    } catch (e) {
+      return die(`cannot read the CLI's package.json: ${e.message}`, 2)
+    }
+    const version = parseCliVersion(text)
+    if (!version) return die("cannot read the CLI version from its package.json", 2)
+    return process.stdout.write(version + '\n', () => process.exit(0))
+  }
   const socketPath =
     (typeof flags.socket === 'string' && flags.socket) ||
     process.env.MIRA_SOCKET ||

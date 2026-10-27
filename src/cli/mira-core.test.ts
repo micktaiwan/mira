@@ -31,6 +31,8 @@ import {
   withClient,
   timeoutMessage,
   socketPathError,
+  parseCliVersion,
+  wantsCliVersion,
   profileWindow,
   userWindowForOpen,
   typePlan
@@ -88,6 +90,12 @@ describe('parseArgs', () => {
       positionals: ['-'],
       flags: {}
     })
+  })
+
+  it('reads --version and -v as the same boolean flag, with no command', () => {
+    const expected = { command: null, positionals: [], flags: { version: true } }
+    expect(parseArgs(['--version'])).toEqual(expected)
+    expect(parseArgs(['-v'])).toEqual(expected)
   })
 })
 
@@ -832,6 +840,31 @@ describe('socketPathError', () => {
     expect(socketPathError('/' + 'a'.repeat(103))).toMatch(
       /^socket path is 104 bytes, over the macOS limit of 103/
     )
+  })
+})
+
+describe('parseCliVersion', () => {
+  it("reads the version out of the CLI's package.json", () => {
+    expect(parseCliVersion('{"name":"mira","version":"1.3.2"}')).toBe('1.3.2')
+  })
+
+  it('returns null on text that is not JSON, or carries no usable version', () => {
+    expect(parseCliVersion('not json')).toBeNull()
+    expect(parseCliVersion('{}')).toBeNull()
+    expect(parseCliVersion('{"version":"  "}')).toBeNull()
+    expect(parseCliVersion('{"version":42}')).toBeNull()
+  })
+})
+
+describe('wantsCliVersion', () => {
+  it('answers the CLI version for --version / -v alone', () => {
+    expect(wantsCliVersion(null, { version: true })).toBe(true)
+  })
+
+  it('leaves a real command alone: `mira version` asks the running app, `mira type 3 -v` types -v', () => {
+    expect(wantsCliVersion('version', { version: true })).toBe(false)
+    expect(wantsCliVersion('type', { version: true })).toBe(false)
+    expect(wantsCliVersion(null, {})).toBe(false)
   })
 })
 

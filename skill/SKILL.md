@@ -69,6 +69,7 @@ mira watch                             # live stream of the watched tab (Ctrl-C 
 mira cookies [--url <url>] [--netscape] # cookie string of the tab's site, HttpOnly included; --tab reads THAT tab's profile
                                        # --netscape: a cookie jar for yt-dlp --cookies / curl -b (Instagram reels need the login)
 mira commands                          # list-commands of the running build
+mira --version                         # this CLI's version alone (also -v), no socket, exit 0
 mira call <command> --params '<json>'  # passthrough to any command
 ```
 
@@ -152,6 +153,9 @@ what they were typing.
 
 `mira press` is a keystroke dispatched through CDP with `isTrusted: true`, the only one that works
 on apps that ignore synthetic DOM events (archive with `e`, navigate with `j`/`k`, `Escape`).
+Mira's own menu is kept out of the way: for the dispatch its shortcuts are ignored, so a
+`Cmd`/`Ctrl` combination the page does not consume reaches the page instead of triggering About
+(pre-fix, it was the About panel), and `press` can never drive Mira's Cmd+T / Cmd+L.
 Chromium drops a key sent to a hidden page, so the tab is made visible in ITS window before sending
 (and the window put back on screen if it was minimised or covered) — always without activating the
 app. If the page stays invisible, the command fails instead of lying: tell the user and ask them to

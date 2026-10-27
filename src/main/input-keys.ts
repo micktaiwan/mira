@@ -128,13 +128,18 @@ const PUNCTUATION_ALIASES: Record<string, string> = {
 // Why this table exists: CDP's `nativeVirtualKeyCode` is, as its name says, the
 // NATIVE one — and we used to fill it with the Windows code (69 for E, 188 for
 // comma). On macOS those numbers name other physical keys, or none at all, so
-// Cocoa rebuilt the event with empty `charactersIgnoringModifiers`. Chromium
-// hands a key the page did not consume back to the native menu, and an empty
-// string is exactly what a menu item with NO key equivalent carries — the first
-// of them being `{ role: 'about' }` (menu.ts). That is the standing explanation
-// for the About panel popping during scripted Cmd+<key>: consistent with the
-// code on both sides, not reproduced under a debugger. See `unmodifiedText`
-// below — the two together are what Cocoa matches key equivalents on.
+// Cocoa rebuilt the event with wrong or empty `charactersIgnoringModifiers` and
+// a shortcut key could match nothing. The kVK codes stay: they are what makes
+// the page see the right `code`.
+//
+// They also open the menu leak. With a native key code present, Chromium does
+// NOT set skip_if_unhandled (devtools/protocol/input_handler.cc), so a key the
+// page did not consume is handed back to the native menu — where the rebuilt
+// NSEvent has empty `characters` under Cmd
+// (native_input_event_builder_mac.mm) and AppKit matches the first item with no
+// key equivalent: `{ role: 'about' }` (menu.ts). Measured 2026-10-27 on
+// Electron 44.4.1. `unmodifiedText` below does not fix it — that builder never
+// reads it. press-key keeps the key away from the menu instead (input-menu.ts).
 const MAC_VIRTUAL_KEYS: Record<string, number> = {
   KeyA: 0,
   KeyS: 1,
@@ -274,10 +279,11 @@ export function keyToDispatchEvents(
     modifiers: mask
   }
   const down: CdpKeyEvent = { type: 'keyDown', ...base }
-  // `text` is what gets INSERTED, so a shortcut must not carry it. But
-  // `unmodifiedText` is what the character would have been without ctrl/meta/alt,
-  // and macOS matches menu key equivalents on exactly that: leaving it out made a
-  // Cmd+<key> event look character-less to the menu (see MAC_VIRTUAL_KEYS).
+  // `text` is what gets INSERTED, so a shortcut must not carry it.
+  // `unmodifiedText` is what the character would have been without ctrl/meta/alt;
+  // it is a real field of the injected event (WebKeyboardEvent), so it travels —
+  // but it does NOT keep a Cmd+<key> off the native menu: CDP's macOS event
+  // builder never reads it (see MAC_VIRTUAL_KEYS, input-menu.ts).
   if (printable) down.unmodifiedText = char
   if (producesText) down.text = char
   return [down, { type: 'keyUp', ...base }]
