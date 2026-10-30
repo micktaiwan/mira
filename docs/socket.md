@@ -423,7 +423,7 @@ The active tab's own Back / Forward stack (not the profile history above):
 
 | Command                | Params          | Effect / result                                                                                                                                                                                                                                                                  |
 | ---------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list-profiles`        | —               | profiles + which are open + focused id + each profile's `origin` (`user` \| `automation`) and, when set, its `terminalCwd`                                                                                                                                                                                                                                           |
+| `list-profiles`        | —               | profiles + which are open + focused id + each profile's `origin` (`user` \| `automation`) and, when set, its `terminalCwd` and `proxy`, or `proxyInvalid` (the raw value of a stored proxy Mira cannot honor: that profile is blocked, see **Per-profile proxy**)                                                                                                                                                                                                                                           |
 | `open-profile`         | `id`            | open a profile window (creating it if closed, shown without activating the app), and make it the target of later commands. Over the socket it does not focus it — see **Foreground** above                                                                                       |
 | `close-profile`        | `id`            | close a profile's window(s). Never quits the app, even when it is the last open profile (a user close via Cmd+Shift+W does quit — to quit from a script use `quit`). `closed:false` if it was not open                                                                           |
 | `create-profile`       | `label?`        | new profile. Created over the socket/MCP it is tagged `origin: automation` — and that is the ONLY kind `delete-profile` may remove from here                                                                                                                                                                                                                                                                      |
@@ -431,11 +431,173 @@ The active tab's own Back / Forward stack (not the profile history above):
 | `delete-profile`       | `id`            | delete a profile FOR GOOD: its saved tabs, cookies/storage partition, history, favorites and (if encrypted) its vault. Irreversible. **Over the socket/MCP it only accepts a profile automation created** (`origin: automation`); a profile made by hand is deleted by the user, in Settings. Errors: `unknown profile: <id>`, `the default profile cannot be deleted`, `profile <id> was not created by automation: delete it from Settings`, `close the profile window before deleting it` |
 | `set-profile-theme`    | `id`, `themeId` | assign a chrome theme to a profile (see Themes below), or null/'' to clear (→ default theme)                                                                                                                                                                                     |
 | `set-profile-terminal-cwd` | `id`, `cwd` | the folder the profile's side terminal (the Kova pane running claude) starts in: absolute or `~/…`, must exist now; null/'' clears (→ home folder). Applies to the next pane opened; a folder deleted later falls back to home. Returns `{ok, id, terminalCwd}` (`null` once cleared); `cwd` is required. A running pane keeps its folder until claude exits or the window closes (hiding the pane does not end it). Errors: `missing "cwd"`, `unknown profile: <id>`, `not an absolute folder: <x>`, `no such folder: <path>` |
+| `set-profile-proxy`    | `id`, `proxy`   | send ONE profile's traffic through a proxy (see **Per-profile proxy** below): `socks5://`, `http://` or `https://` + `host:port`, nothing else (no socks4, no list, no `DIRECT`, no auth); null/'' clears it (the session is set to mode `direct`) and lifts a `proxyInvalid` block. With a live session it is applied FIRST and saved only once Chromium confirmed it (pooled connections closed); on failure nothing is saved and the previous setting is put back. Returns `{ok, id, proxy}` (`null` once cleared); `proxy` is required. Errors: `missing "id"`, `missing "proxy"`, `"proxy" must be a string or null`, `unknown profile: <id>`, `the default profile cannot use a proxy: create a separate profile for it`, `invalid proxy: <x> (expected socks5\|http\|https://host:port)`, `setProxy failed, nothing saved: <reason>` |
+| `get-profile-proxy`    | `id`, `url?`    | MEASURE a profile's live session: `{ok, id, proxy, proxyInvalid, applied, blocked, url, resolved, webrtcPolicies}`. `applied` is what Mira CONFIRMED on the session (setProxy resolved): the proxy rule, the black hole `socks5://127.0.0.1:1`, `direct`, or `none` (never configured, or unknown after a failure); `blocked` is the reason the load gate refuses `url` in that profile right now, or null. `resolved` is Chromium's own answer (`session.resolveProxy`) for `url` (default `https://www.linkedin.com`), e.g. `SOCKS5 127.0.0.1:1080` or `DIRECT`; `webrtcPolicies` holds the WebRTC IP policy of each live webContents of the profile (`disable_non_proxied_udp` when proxied, `[]` when no page is open). Errors: `missing "id"`, `"url" must be a string`, `"url" must be an http(s) or ws(s) URL: <x>`, `unknown profile: <id>`, `profile <id> is locked: unlock it to measure its session` |
 | `set-profile-color`    | `id`, `color`   | legacy tint: `#rrggbb` hex, or null/'' to clear. Superseded by themes; kept for back-compat                                                                                                                                                                                      |
 | `focus-app`            | `windowId?`     | bring Mira to the foreground. **The only command that does** — every other one leaves the user's foreground app alone (see **Foreground** above). `windowId` (from `list-windows`) picks WHICH window comes up; without it, the last-focused one. Errors: `unknown window: <id>` |
 | `quit`                 | —               | quit Mira entirely (graceful: flushes sessions, re-locks any unlocked vault). Skips the Cmd+Q confirmation dialog — no modal, it just quits. The only explicit programmatic exit — `close-profile` never quits, and a user closing the last window does                          |
 | `list-spaces`          | —               | macOS virtual desktops per display, in Mission Control order, plus where the target window sits (`window: {displayId, spaceIndex}`, null when unknown). `displays: []` = no Spaces support (non-mac / addon not built)                                                           |
 | `move-window-to-space` | `spaceIndex`, `windowId?` | move the window (`windowId`, else the target window) onto that desktop (0-based index on its display). `moved:false` = was already there. Persisted: the window reopens on that desktop next launch                                                                                                            |
+
+### Per-profile proxy
+
+One profile can exit the internet through a proxy (typically an SSH SOCKS tunnel to a VPS:
+`ssh -N -D 127.0.0.1:1080 vps`, then `socks5://127.0.0.1:1080`) while every other profile keeps
+its direct connection. Proxy settings are per Electron session and every profile owns its own
+session (`persist:mira-<id>`), so the setting reaches that profile only. The **default profile
+cannot be proxied**: it runs on Electron's default session, which Mira never reconfigures — put
+the account that needs the proxy in a separate profile.
+
+```
+mira proxy --profile <p> socks5://127.0.0.1:1080   # set (p = label piece or id prefix)
+mira proxy --profile <p>                           # read back: setting, resolveProxy, WebRTC policy
+mira proxy --profile <p> --url https://example.com # resolve another URL
+mira proxy --profile <p> --clear                   # back to direct
+```
+
+Also in Settings > Profiles (a "Proxy" field on every profile but the default one).
+
+What Mira does with it (`src/main/profile-proxy.ts`: the pure `ProxyController`, used by the
+ProfileManager in `profiles.ts`):
+
+- `session.setProxy({ proxyRules: <proxy>, proxyBypassRules: '<-loopback>' })` on the profile's
+  session, then `closeAllConnections()` so no socket opened under the previous setting is reused.
+  The proxy is the only rule: no `DIRECT` fallback. `<-loopback>` removes Chromium's implicit
+  loopback bypass, so even `localhost` / `127.0.0.1` requests of that profile go through the proxy.
+- When: at startup, BEFORE the command socket listens and before any window opens (`index.ts`
+  awaits `applyStartupProxies()`), so no `open-url` can race it; in the window-creation path; when
+  an encrypted profile is unlocked (fresh session); on every change. Clearing sets the session to
+  mode `direct`. A profile that never had a proxy is not touched at all (Electron's default).
+- **Fail closed, two layers.**
+  1. *Load gate* (`ProxyController.gate`): a profile with a stored proxy loads no web page until
+     THAT proxy is confirmed on its session (setProxy resolved). It is checked in `materializeTab`
+     — the one place every tab is born: restore, new tab, Cmd+T, `open-url`, bookmarks, extension
+     `createTab`, session windows, waking a tab — and in `navigate` / `reload` (which then fail with
+     the reason). A refused tab shows a local explanation page (a `data:` URL, no network). A window
+     whose profile is blocked loads no extension and restores no tab (its saved tabs stay saved).
+     Mira's own pages (`data:`, `about:`, `mira:`) are always allowed.
+  2. *Black hole*: if setProxy fails for a stored proxy, the session is set to
+     `socks5://127.0.0.1:1` (a loopback port nothing listens on), so Chromium itself refuses every
+     request of that session, whatever started it (history step, extension worker, popup).
+  3. *Hard block*: if even the black hole cannot be applied, the profile is hard-blocked: the gate
+     keeps refusing, every live page of that session is replaced by the explanation page (each tab
+     keeps its URL), and the main log says `[proxy] HARD BLOCK`.
+- **A stored value Mira cannot honor** (malformed in `profiles.json`, or any proxy on the default
+  profile) never degrades to direct: it becomes `proxyInvalid` (raw value kept) and the gate blocks
+  the profile. A non-default profile's session is also black-holed; the default profile has no
+  session of its own that Mira may reconfigure, so it is blocked by the gate only. `list-profiles`
+  and `get-profile-proxy` show it; `set-profile-proxy` with a valid value or null lifts it.
+- **A refused load keeps its URL**: the tab keeps the URL it was asked to load (the explanation page
+  names it and carries it, so a history step back to it keeps it too; it is what the session saves),
+  and Reload retries it through the gate. A refused `navigate` on an asleep tab leaves its stored URL
+  untouched.
+- **A change is truthful**: applied first, saved only on success (see `set-profile-proxy`).
+- WebRTC: every webContents of a proxied (or black-holed) session — tabs, popups, extension pages:
+  hooked on `web-contents-created`, re-applied to live ones on change — gets
+  `setWebRTCIPHandlingPolicy('disable_non_proxied_udp')`, so WebRTC cannot gather candidates that
+  expose the home IP. Read it back in `get-profile-proxy`'s `webrtcPolicies`.
+
+**What runs OUTSIDE the profile's session**, and how each is kept off the home IP:
+
+- *The chrome UI* (tab strip, Settings tab-memory and audio lists, media gallery) runs in Mira's own
+  session `persist:mira-chrome`, never proxied. A proxied profile never hands it a remote URL to
+  load: favicons are fetched through the profile's own session (its proxy, behind the gate) and
+  passed as `data:` URLs, or dropped (`chromeSafeImageUrl`); the media gallery shows an icon (or a
+  captured `data:` frame) instead of loading the media URL; the theme's wallpaper is not handed to
+  the chrome of a proxied profile (its colors are). Downloads keep the URL and use the tab's
+  session. The chrome's CSP (`src/renderer/index.html`) still allows `img-src https: http:`: the
+  unproxied profiles' remote favicons need it, so it is not the guard — the main process is.
+- *The Chrome Web Store* (electron-chrome-web-store) downloads CRXs, install icons and update
+  manifests with the main-process `fetch`, outside any session proxy. So, all decided at call time
+  (a profile proxied mid-session is covered from then on):
+  - **the install entry**: `index.ts` wraps `ipcMain.handle` before the library registers its
+    handlers (`proxy-wiring.ts` `guardWebStoreIpc`); its install channels (`beginInstall`,
+    `completeInstall`, `install`) answer `blocked_by_policy` for a sender whose profile is proxied,
+    without running the library handler, so no icon or CRX is fetched;
+  - **updates**: the library's own updater is off for every profile; Mira runs its own (same
+    cadence: app activation, every 5 h, at most every 3 h), which skips proxied profiles at every
+    tick; `install-extension` / `update-extensions` refuse a proxied profile;
+  - **the pages** (defense in depth, `chromewebstore.google.com` and the old
+    `chrome.google.com/webstore`): the load gate refuses them, every webContents refuses page-started
+    navigations to them (`will-navigate`, `will-redirect`, `will-frame-navigate`; a main-frame one
+    that started anyway is stopped and replaced), a tab's `window.open` to them is denied, and an
+    open one is replaced when a proxy is set.
+  The empty allowlist given at the library's setup to a profile already proxied then is kept, but it
+  is fixed for the session's life and is not what covers a profile proxied later.
+- *yt-dlp* (video downloads) is a separate process: for a proxied profile it gets
+  `--proxy <proxy>`, with `socks5://` rewritten to `socks5h://` because plain socks5 makes yt-dlp
+  resolve DNS locally (`yt_dlp/networking/_helper.py` `make_socks_proxy_opts`: `socks5` → `rdns =
+  False`, `socks5h` → `rdns = True`, read in yt-dlp 2026.01.29). yt-dlp hands HLS and live streams
+  to ffmpeg, which does not support SOCKS (yt-dlp only warns, `yt_dlp/downloader/external.py`
+  `FFmpegFD`) and would connect directly; so a proxied download also gets `--downloader native`
+  (HLS/DASH fetched by yt-dlp itself, through the proxy), `--match-filters !is_live` (a live stream
+  goes to ffmpeg even then: `yt_dlp/downloader/__init__.py` `_get_suitable_downloader`), a format
+  filter `[protocol!*=rtmp][protocol!*=rtsp][protocol!*=mms]` (protocols only ffmpeg/rtmpdump
+  fetch), and keeps its warnings (no `--no-warnings`). Checked offline with yt-dlp's own
+  `parse_options` and format selector: the filter picks an `m3u8_native` format over an
+  `rtmp_ffmpeg` one, and the match filter rejects `is_live`. Merging video and audio afterwards is
+  ffmpeg on local files. A blocked profile does not run yt-dlp.
+
+**When the proxy is down, pages fail; nothing falls back to the direct connection.** Replayable:
+
+```
+npm run probe:proxy     # electron scripts/proxy-probe/main.mjs: headless, localhost only, exits 0 when all checks pass
+```
+
+It runs in a throwaway userData dir (not Mira, not its profiles), hands `session.setProxy` exactly
+Mira's config (`mode: 'fixed_servers'`, the proxy, `<-loopback>`), and uses
+`--host-resolver-rules="MAP mira-probe.invalid 127.0.0.2, MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"`: every
+name fails locally except the probe name, which resolves LOCALLY to the marker IP 127.0.0.2 (an IP
+literal, no network), so a local lookup shows up both in the session's NetLog and in what a SOCKS
+server receives. Output on 2026-10-28 (ports vary):
+
+```
+electron 44.4.1 / chromium 152.0.7977.78
+PASS  dead proxy: resolveProxy: "SOCKS5 127.0.0.1:62131"
+PASS  dead proxy: local page: "ERR_PROXY_CONNECTION_FAILED"
+PASS  dead proxy: https://www.linkedin.com/: "ERR_PROXY_CONNECTION_FAILED"
+PASS  dead proxy: requests that reached the server directly: 0
+PASS  black hole: local page: "ERR_PROXY_CONNECTION_FAILED"
+PASS  black hole: requests that reached the server directly: 0
+PASS  no <-loopback>: resolveProxy(loopback): "DIRECT"
+PASS  no <-loopback>: local page loads: true
+PASS  no <-loopback>: requests that reached the server directly: 1
+PASS  other partition: "DIRECT"
+PASS  default session: "DIRECT"
+PASS  socks5: CONNECT seen by the proxy: [{"version":5,"atyp":3,"host":"mira-probe.invalid"}]
+PASS  socks5: local lookups of the name on the connection path (NetLog): []
+INFO  socks5: other lookups of the name: [{"by":"NETWORK_QUALITY_ESTIMATOR","tasks":[4,9]}]
+PASS  socks4: proxy received the LOCALLY resolved IP: [{"version":4,"dstIp":"127.0.0.2"}]
+PASS  socks4: local lookups of the name on the connection path (NetLog): true
+INFO  socks4: connection-path lookups: [{"by":"SOCKET","tasks":[4,9,0]}]
+PASS  after mode direct: resolveProxy: "DIRECT"
+PASS  webrtc policy: "disable_non_proxied_udp"
+ALL 17 CHECKS PASS
+```
+
+The "without `<-loopback>`" lines are why the bypass rule is there: without it Chromium sends
+loopback requests directly even with a proxy set.
+
+**DNS.** With `socks5://`, Chromium sends the **hostname** to the proxy, which resolves it: the fake
+SOCKS5 server received a CONNECT with address type 3 (domain name) `mira-probe.invalid`, and the
+session's NetLog shows **no** lookup of the name on the connection path. With `socks4://`, Chromium
+resolves the name **locally** (SOCKS4, not 4a): the fake SOCKS4 server received the locally resolved
+marker IP, and the NetLog shows the lookup (task sequence `[4,9,0]`). socks4 would leak every
+lookup to the home resolver, so **Mira refuses it**; use socks5 (`ssh -D` speaks it). `http://` /
+`https://` proxies get the hostname in the CONNECT request (not measured here).
+
+**Open point, measured but not settled:** with socks5 the NetLog also shows ONE lookup of the page
+host by Chromium's network quality estimator, after the request (`INFO` line above; seen on a
+successful proxied load too, once per host). Its task sequence is `[4,9]`, without the `0` task
+that the socks4 connection lookup has, which suggests a cache/hosts-only lookup; but the NetLog does
+not name the tasks, and counting real DNS packets would need a resolver Mira's probe cannot run on
+localhost without changing the system DNS configuration. Reading what tasks 4 and 9 are in
+Chromium 152's `HostResolverManager` would settle it, but no Chromium source is on this machine and
+the probe stays offline. So whether that lookup reaches the home resolver is not proven either way.
+
+Not covered: the WebRTC guard was checked by API round-trip only (`getWebRTCIPHandlingPolicy`
+returns the policy), not by gathering ICE candidates — that would have sent mDNS/STUN traffic
+beyond localhost.
 
 ### Themes (chrome appearance)
 

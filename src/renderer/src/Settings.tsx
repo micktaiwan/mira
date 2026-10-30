@@ -16,6 +16,10 @@ interface Profile {
   color?: string
   /** The folder the profile's embedded terminal starts in; absent = home. */
   terminalCwd?: string
+  /** The proxy the profile's session exits through; absent = direct. */
+  proxy?: string
+  /** A stored proxy Mira cannot honor (raw value): the profile is blocked. */
+  proxyInvalid?: string
   open: boolean
 }
 
@@ -247,6 +251,7 @@ function ProfileRow({
   onRename,
   onSetTheme,
   onSetTerminalCwd,
+  onSetProxy,
   onOpen,
   onEncrypt,
   onUnlock,
@@ -265,6 +270,8 @@ function ProfileRow({
   onSetTheme: (themeId: string) => void
   /** Commit the terminal folder ('' = back to the home folder). */
   onSetTerminalCwd: (cwd: string) => void
+  /** Commit the proxy ('' = back to a direct connection). */
+  onSetProxy: (proxy: string) => void
   onOpen: () => void
   onEncrypt: () => void
   onUnlock: () => void
@@ -278,6 +285,9 @@ function ProfileRow({
   // Escape reverts then blurs; the blur handler still sees the typed draft, so
   // this flag tells it not to commit.
   const cwdCancelled = useRef(false)
+  // An invalid stored value is shown as typed, so the user sees what to fix.
+  const [proxy, setProxy] = useState(profile.proxy ?? profile.proxyInvalid ?? '')
+  const proxyCancelled = useRef(false)
   const status = profile.open ? (focused ? 'focused' : 'open') : 'closed'
   // The theme this profile currently resolves to (its themeId, else the default),
   // for the picker's value and preview dot.
@@ -415,6 +425,39 @@ function ProfileRow({
           title="The folder the side terminal (claude) starts in. Applies to the next one opened."
         />
       </div>
+      {/* The default profile runs on Electron's default session, which Mira never
+          proxies: the field only exists on the other profiles. */}
+      {profile.id !== 'default' && (
+        <div className="profile-terminal-cwd">
+          <span className="profile-terminal-cwd-label">
+            {profile.proxyInvalid !== undefined ? 'Proxy (invalid, profile blocked)' : 'Proxy'}
+          </span>
+          <input
+            className="profile-label-input"
+            value={proxy}
+            placeholder="direct (e.g. socks5://127.0.0.1:1080)"
+            onChange={(e) => setProxy(e.target.value)}
+            onBlur={() => {
+              if (proxyCancelled.current) {
+                proxyCancelled.current = false
+                return
+              }
+              if (proxy.trim() !== (profile.proxy ?? profile.proxyInvalid ?? '')) onSetProxy(proxy)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+              if (e.key === 'Escape') {
+                proxyCancelled.current = true
+                setProxy(profile.proxy ?? profile.proxyInvalid ?? '')
+                e.currentTarget.blur()
+              }
+            }}
+            spellCheck={false}
+            aria-label="Proxy"
+            title="socks5://, http:// or https:// host:port. Only this profile goes through it; pages fail if it is down."
+          />
+        </div>
+      )}
     </li>
   )
 }
@@ -737,6 +780,13 @@ function ProfilesSection(): React.JSX.Element {
     setError(res.ok ? null : String(res.error))
   }
 
+  const setProxy = async (id: string, proxy: string): Promise<void> => {
+    // Main validates, applies it to this profile's session only, persists, and
+    // pushes profiles-changed.
+    const res = await run('set-profile-proxy', { id, proxy })
+    setError(res.ok ? null : String(res.error))
+  }
+
   const create = async (): Promise<void> => {
     const res = await run('create-profile')
     if (!res.ok) setError(String(res.error))
@@ -785,7 +835,7 @@ function ProfilesSection(): React.JSX.Element {
       <ul className="profile-list">
         {profiles.map((p) => (
           <ProfileRow
-            key={`${p.id}:${p.label}:${p.terminalCwd ?? ''}`}
+            key={`${p.id}:${p.label}:${p.terminalCwd ?? ''}:${p.proxy ?? ''}:${p.proxyInvalid ?? ''}`}
             profile={p}
             focused={p.id === focused}
             encrypted={encrypted.has(p.id)}
@@ -794,6 +844,7 @@ function ProfilesSection(): React.JSX.Element {
             onRename={(label) => rename(p.id, label)}
             onSetTheme={(themeId) => void setTheme(p.id, themeId)}
             onSetTerminalCwd={(cwd) => void setTerminalCwd(p.id, cwd)}
+            onSetProxy={(proxy) => void setProxy(p.id, proxy)}
             onOpen={() => open(p.id)}
             onEncrypt={() => setDialog({ mode: 'encrypt', profile: p })}
             onUnlock={() => setDialog({ mode: 'unlock', profile: p })}

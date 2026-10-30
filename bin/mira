@@ -31,7 +31,11 @@
 //   mira use --url <substr>         resolve a tab by url, print export MIRA_TAB=<id>
 //   mira use --active               pin the focused window's active tab
 //   mira use <id>                   pin an explicit id
-//   mira exec <code|-|@file>        run JS in the pinned/active tab; prints {"ok":…,"result":…}
+//   mira exec <code|-|@file> [--out <file>]   run JS in the pinned/active tab; prints {"ok":…,"result":…}
+//                                   (--out: write the result alone to that file, so the next tool parses
+//                                    the page's value, never the envelope; prints the path + size + kind.
+//                                    A string result lands VERBATIM (text, not JSON) — wrap the code in
+//                                    JSON.stringify(…) when the file is meant for a JSON parser)
 //                                   (--bare: the result alone, exit 1 on failure — for shell tests)
 //   mira upload <file>... [--selector <css>] [--nth <n>]   put local files into the page's <input type=file>
 //                                   (no native picker; chunked so big files pass the exec timeout;
@@ -70,6 +74,7 @@
 //   mira focus [--window <id>]      bring one window to the front (default: Mira's last-focused one)
 //   mira focus --tab <id>           make that tab active and raise ITS window
 //   mira windows                    list open windows (id / profile / tabs), * = focused
+//   mira profiles                   every profile (id prefix / label / open), the target of --profile
 //   mira done                       close this Claude session's own window (see above)
 //   mira watch                      follow the focused tab live (profile / folder / title / url), until Ctrl-C
 //                                   (--json: one raw event per line, for a program)
@@ -77,6 +82,10 @@
 //   mira cookies [--url <url>]      print the active site's cookie string (HttpOnly incl.); for export KONDO_COOKIE="$(mira cookies)"
 //                 [--netscape]      print a Netscape cookie jar instead, for yt-dlp --cookies / curl -b
 //   mira forget <domain> [--profile <id>]  wipe a domain's cookies + storage + history (all subdomains); no tab needed
+//   mira proxy --profile <p>        read a profile's live proxy: setting, what Chromium resolves, WebRTC policy
+//                                   (--url <u>: resolve that URL instead of https://www.linkedin.com)
+//   mira proxy --profile <p> <socks5|http|https://host:port>   send that profile (only) through a proxy
+//   mira proxy --profile <p> --clear   back to a direct connection
 //   mira commands                   list every command the running build knows
 //   mira call <command> [--params '<json>']   generic passthrough to any command
 //   mira <command> [--params '<json>']        same, shorthand
@@ -85,7 +94,7 @@
 
 import { createConnection } from 'node:net'
 import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
@@ -101,6 +110,8 @@ import {
   userWindowForOpen,
   pickTabByUrl,
   buildExec,
+  execOutBody,
+  isJsonText,
   buildReload,
   buildPress,
   buildCall,
@@ -113,6 +124,7 @@ import {
   formatTabs,
   formatConsole,
   formatWindows,
+  formatProfiles,
   formatFocus,
   resolveCode,
   resolveTimeoutMs,
@@ -134,6 +146,8 @@ import {
   socketPathError,
   parseCliVersion,
   wantsCliVersion,
+  buildProxyCall,
+  formatProxy,
   PROBE_TIMEOUT_MS
 } from '../src/cli/mira-core.mjs'
 
@@ -484,6 +498,23 @@ async function main() {
       .then((res) => report(res, opts))
       .catch((e) => die(e.message, 2))
 
+  // Passthrough calls: on `Unknown command`, point at the closest real command names
+  // (a guessed name like `reload-tab` should lead to `reload`, not to a dead end).
+  const sendCall = async (req, name, json) => {
+    const res = await call(req, socketPath, timeoutMs).catch((e) => die(e.message, 2))
+    if (!res.ok && /^Unknown command:/.test(String(res.error ?? ''))) {
+      const list = await call({ command: 'list-commands' }, socketPath, timeoutMs).catch(() => null)
+      const stem = String(name).split('-')[0]
+      const near = (list?.commands ?? []).filter((c) => c.includes(stem) || String(name).includes(c))
+      process.stderr.write(
+        `hint: no command "${name}"` +
+          (near.length ? `; close names: ${near.join(', ')}` : '') +
+          '. `mira commands` lists all; page verbs (reload, nav, exec...) are `mira <verb> --tab <id>`, not `mira call`.\n'
+      )
+    }
+    return report(res, { json })
+  }
+
   // `nav` / `open` must never fall back to "whatever window is first". A CLI
   // call focuses no window, so that fallback silently crosses profiles — a
   // personal page landing in the work profile. With several profiles open and
@@ -620,6 +651,38 @@ async function main() {
         readFile: (p) => readFileSync(p, 'utf8')
       })
       if ('error' in cr) return die(cr.error, 2)
+      // --out <file>: hand the result to the NEXT tool, bare. Without it the file a
+      // redirect captures is the {"ok","result"} envelope, whose `result` is one
+      // JSON string inside another — and a python script that iterates it throws
+      // "TypeError: 'bool' object is not subscriptable" on `ok` (2026-10-29).
+      // A string result is written verbatim, anything else as JSON: the report
+      // names the kind, because `json.load` on a text body fails with the very
+      // error an empty file gives ("Expecting value: line 1 column 1 (char 0)"),
+      // which read as "mira wrote nothing" (2026-10-30).
+      if (typeof flags.out === 'string') {
+        const outPath = resolve(flags.out)
+        return call(buildExec(cr.code, tabId), socketPath, timeoutMs)
+          .then((res) => {
+            if (!res.ok) return report(res, { json })
+            const body = execOutBody(res.result)
+            try {
+              writeFileSync(outPath, body.text)
+            } catch (e) {
+              return die(`cannot write ${outPath}: ${e instanceof Error ? e.message : String(e)}`, 2)
+            }
+            if (body.kind === 'text' && /\.jsonl?$/i.test(outPath) && !isJsonText(body.text)) {
+              console.error(
+                `mira: ${outPath} holds plain text, not JSON — the JS returned a string. ` +
+                  'Wrap the code in JSON.stringify(…) for a JSON file.'
+              )
+            }
+            return report({ ok: true, path: outPath, bytes: body.bytes, kind: body.kind }, {
+              json,
+              pretty: (r) => `${r.path}  ${r.bytes} bytes  (${r.kind})`
+            })
+          })
+          .catch((e) => die(e.message, 2))
+      }
       // Default stays the {"ok","result"} envelope (scripts parse it). --bare
       // prints the result alone, so a shell test on `true` cannot match `"ok":true`.
       if (flags.bare !== true) return send(buildExec(cr.code, tabId), { json })
@@ -797,6 +860,12 @@ async function main() {
     case 'windows':
       return send({ command: 'list-windows' }, { json, pretty: (r) => formatWindows(r.windows) })
 
+    case 'profiles':
+      // The identities Mira holds, one line each. Without this verb the only
+      // way in was `mira call list-profiles`, whose reply is ONE json line too
+      // long to read whole — a `python3 -c` on it just to see the labels.
+      return send({ command: 'list-profiles' }, { json, pretty: (r) => formatProfiles(r.profiles) })
+
     case 'done': {
       // Close this Claude session's own window. Nothing to do outside a session.
       const sessionId = (process.env.CLAUDE_CODE_SESSION_ID ?? '').trim()
@@ -908,6 +977,21 @@ async function main() {
       return send({ command: 'dump-cookies', params }, { json, pretty: flags.netscape ? netscape : (r) => r.cookie })
     }
 
+    case 'proxy': {
+      // Per-profile proxy: mira proxy --profile <p> [socks5://127.0.0.1:1080 | --clear]
+      // --profile is a label piece or an id prefix, resolved like `tabs --profile`.
+      if (typeof flags.profile !== 'string') return die('proxy needs --profile <label or id prefix>', 2)
+      const profs = await call({ command: 'list-profiles' }, socketPath, timeoutMs).catch((e) =>
+        die(e.message, 2)
+      )
+      if (!profs.ok) return die(JSON.stringify(profs), 1)
+      const match = matchProfileId(profs.profiles, flags.profile)
+      if ('error' in match) return die(match.error, 2)
+      const built = buildProxyCall(positionals, flags, match.id)
+      if ('error' in built) return die(built.error, 2)
+      return send(built.request, { json, pretty: formatProxy })
+    }
+
     case 'forget': {
       // Wipe a domain's cookies + storage + history (all subdomains) in a
       // profile, no tab required: mira forget linkedin.com [--profile <id>]
@@ -930,14 +1014,14 @@ async function main() {
       if (!name) return die('call needs a command name', 2)
       const built = buildCall(name, flags.params, tabId)
       if ('error' in built) return die(built.error, 2)
-      return send(built.request, { json })
+      return sendCall(built.request, name, json)
     }
 
     default: {
       // Shorthand: `mira <any-command> [--params '<json>']` == `mira call ...`.
       const built = buildCall(command, flags.params, tabId)
       if ('error' in built) return die(built.error, 2)
-      return send(built.request, { json })
+      return sendCall(built.request, command, json)
     }
   }
 }

@@ -41,16 +41,47 @@ export function augmentedPath(inherited: string | undefined, home: string | unde
  * mirror swiss's proven set: a clean title-based filename, print the final path
  * so we can report it, ASCII-restricted names, newline progress. `--no-playlist`
  * keeps a single video (a tweet/channel URL can otherwise expand to many). */
-export function ytdlpArgs(url: string, outputDir: string): string[] {
+/** Format filter for a proxied download: drops the protocols only ffmpeg or
+ * rtmpdump can fetch (rtmp*, rtsp, mms), which would connect without the proxy. */
+const NO_FFMPEG_NETWORK = '[protocol!*=rtmp][protocol!*=rtsp][protocol!*=mms]'
+
+/** The extra flags of a proxied download (proxy = yt-dlp's --proxy URL, from
+ * profile-proxy.ts ytdlpProxyFor). yt-dlp hands HLS (m3u8) and live streams to
+ * ffmpeg, which does not support a SOCKS proxy: yt-dlp only warns
+ * (yt_dlp/downloader/external.py FFmpegFD) and ffmpeg connects directly, from the
+ * home IP. So: `--downloader native` (HLS/DASH by yt-dlp itself, through the
+ * proxy), `--match-filters !is_live` (a live stream goes to ffmpeg even with the
+ * native downloader: yt_dlp/downloader/__init__.py _get_suitable_downloader),
+ * a format filter without ffmpeg-only protocols, and warnings kept visible. Merging
+ * video + audio afterwards is ffmpeg on local files, no network. */
+function proxiedArgs(proxy: string): string[] {
+  const f = NO_FFMPEG_NETWORK
+  return [
+    '--proxy',
+    proxy,
+    '--downloader',
+    'native',
+    '--match-filters',
+    '!is_live',
+    '-f',
+    `bv*${f}+ba${f}/b${f}`
+  ]
+}
+
+export function ytdlpArgs(url: string, outputDir: string, proxy?: string | null): string[] {
   return [
     '-o',
     `${outputDir}/%(title).100s.%(ext)s`,
     '--restrict-filenames',
     '--no-playlist',
-    '--no-warnings',
+    // A proxied download keeps its warnings (an ffmpeg SOCKS warning must show).
+    ...(proxy ? [] : ['--no-warnings']),
     '--newline',
     '--print',
     'after_move:filepath',
+    // A proxied profile's download leaves through the same proxy, never from the
+    // home IP, and never through ffmpeg's own network access.
+    ...(proxy ? proxiedArgs(proxy) : []),
     url
   ]
 }
@@ -90,7 +121,8 @@ export async function ytdlpDownload(
   url: string,
   outputDir: string,
   env: NodeJS.ProcessEnv,
-  onProgress?: (pct: number) => void
+  onProgress?: (pct: number) => void,
+  proxy?: string | null
 ): Promise<YtdlpResult> {
   return new Promise((resolve) => {
     let settled = false
@@ -99,7 +131,7 @@ export async function ytdlpDownload(
       settled = true
       resolve(r)
     }
-    const child = spawn('yt-dlp', ytdlpArgs(url, outputDir), {
+    const child = spawn('yt-dlp', ytdlpArgs(url, outputDir, proxy), {
       env: { ...env, PATH: augmentedPath(env.PATH, env.HOME) }
     })
     let stdout = ''

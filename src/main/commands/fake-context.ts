@@ -127,11 +127,13 @@ import {
   type Theme
 } from '../theme-store'
 import {
+  setProfileProxy as setProfileProxyPure,
   setProfileTerminalCwd as setProfileTerminalCwdPure,
   setProfileTheme as setProfileThemePure
 } from '../profile-store'
 import type { TerminalRect } from '../kova-pane'
 import { parseTerminalCwdInput } from '../terminal-cwd'
+import { parseProxyInput } from '../profile-proxy'
 
 export interface FakeContext {
   ctx: CommandContext
@@ -851,6 +853,41 @@ export function makeContext(
       if (written.terminalCwd) profile.terminalCwd = written.terminalCwd
       else delete profile.terminalCwd
       return { id, label: profile.label, ...(next ? { terminalCwd: next } : {}) }
+    },
+    setProfileProxy: async (id, proxy) => {
+      const profile = state.profiles.find((p) => p.id === id)
+      if (!profile) throw new Error(`unknown profile: ${id}`)
+      const next = parseProxyInput(proxy)
+      // Reuse the pure model so the fake matches the manager's write.
+      const [written] = setProfileProxyPure([{ id: profile.id, label: profile.label }], id, next)
+      if (written.proxy) profile.proxy = written.proxy
+      else delete profile.proxy
+      delete profile.proxyInvalid
+      return { id, label: profile.label, ...(profile.proxy ? { proxy: profile.proxy } : {}) }
+    },
+    getProfileProxy: async (id, url) => {
+      const profile = state.profiles.find((p) => p.id === id)
+      if (!profile) throw new Error(`unknown profile: ${id}`)
+      const proxy = profile.proxy ?? null
+      // Mimic session.resolveProxy's PAC-style answer for the fake session.
+      const [scheme, hostPort] = proxy ? proxy.split('://') : ['', '']
+      const keywords: Record<string, string> = { socks5: 'SOCKS5', https: 'HTTPS' }
+      const keyword = keywords[scheme] ?? 'PROXY'
+      // The fake session confirms every proxy at once; an invalid one is black-holed.
+      const invalid = profile.proxyInvalid ?? null
+      return {
+        id,
+        proxy,
+        proxyInvalid: invalid,
+        applied: invalid !== null ? 'socks5://127.0.0.1:1' : (proxy ?? 'none'),
+        blocked:
+          invalid !== null
+            ? `profile ${id} has an invalid proxy setting (${invalid}): refusing to load ${url}; set a valid proxy or clear it`
+            : null,
+        url,
+        resolved: invalid !== null ? 'SOCKS5 127.0.0.1:1' : proxy ? `${keyword} ${hostPort}` : 'DIRECT',
+        webrtcPolicies: profile.open ? [proxy ? 'disable_non_proxied_udp' : 'default'] : []
+      }
     },
     openSettings: (section?: string) => {
       settingsOpened.push(section ?? null)

@@ -12,6 +12,7 @@
 import {
   app,
   dialog,
+  powerMonitor,
   session,
   BrowserWindow,
   type BaseWindow,
@@ -37,6 +38,8 @@ import {
   updateExtensions
 } from 'electron-chrome-web-store'
 import { DEFAULT_SESSION_ALIAS } from './chrome-session'
+import { webStoreOptionsFor } from './profile-proxy'
+import { storeUpdateTick } from './proxy-wiring'
 import {
   containsPermissions,
   type GrantedPermissions,
@@ -148,6 +151,8 @@ export class ExtensionsService {
   /** Sessions where Web Store support is already installed (same idempotence
    * story as loadedSessions — installChromeWebStore must run once per session). */
   private readonly webStoreSessions = new Set<Session>()
+  /** The profile behind each Web Store session, for Mira's own updater. */
+  private readonly webStoreProfiles = new Map<Session, string>()
   /** Extension ids approved through the in-page Chrome Web Store flow. The
    * dependency downloads and immediately loads those extensions, so this lets
    * the extension-loaded hook distinguish that path from our programmatic
@@ -967,10 +972,21 @@ export class ExtensionsService {
    * into a real install (the paquet downloads/unpacks the .crx itself — no
    * dependence on Google's browser gate). Also loads, at this call, every
    * extension already installed under the profile's store directory, and keeps
-   * them auto-updated. Once per session per run. */
-  async installWebStore(ses: Session, profileId: string): Promise<void> {
+   * them auto-updated. Once per session per run.
+   *
+   * The library downloads CRXs, install icons and update manifests with the
+   * MAIN-process fetch, outside any session proxy. So its own updater is always
+   * off (startStoreUpdater runs Mira's, which skips proxied profiles at every
+   * check), and a profile `proxied` at this call gets an empty allowlist
+   * (profile-proxy.ts webStoreOptionsFor). The allowlist is fixed for the
+   * session's lifetime, so it does NOT cover a profile proxied later: that is the
+   * job of the install IPC guard (proxy-wiring.ts guardWebStoreIpc, installed in
+   * index.ts before this library registers its handlers), which refuses every
+   * install of a proxied profile at call time, before any download. */
+  async installWebStore(ses: Session, profileId: string, proxied = false): Promise<void> {
     if (this.webStoreSessions.has(ses)) return
     this.webStoreSessions.add(ses)
+    this.webStoreProfiles.set(ses, profileId)
     try {
       // The paquet's loader loads every extension in the store dir at this call —
       // strip fatal permissions from their manifests first.
@@ -982,7 +998,7 @@ export class ExtensionsService {
         // Also load unpacked dirs living in the store directory (e.g. Dark Reader
         // copied there by hand before E5 existed).
         allowUnpackedExtensions: true,
-        autoUpdate: true,
+        ...webStoreOptionsFor(proxied),
         // Native confirm before an install, Chrome-style (extensions-plan.md §4.5).
         beforeInstall: async (details) => {
           const result = await dialog.showMessageBox({
@@ -1007,8 +1023,34 @@ export class ExtensionsService {
     } catch (error) {
       // A failed first setup must be retryable when the profile window reopens.
       this.webStoreSessions.delete(ses)
+      this.webStoreProfiles.delete(ses)
       throw error
     }
+  }
+
+  /** Mira's Web Store auto-updater, replacing the library's (same cadence: on app
+   * activation and every 5 h, at most every 3 h, skipped while the system is idle).
+   * `allowed(profileId)` is asked at EVERY check, so a profile that becomes
+   * proxied stops being updated at once: its extension list would otherwise go to
+   * Google from the home IP (the library's update fetch is the main-process one). */
+  startStoreUpdater(allowed: (profileId: string) => boolean): void {
+    const state = { last: 0 }
+    const check = (): void => {
+      const tick = storeUpdateTick(
+        state,
+        Date.now(),
+        powerMonitor.getSystemIdleState(60 * 60),
+        this.webStoreProfiles,
+        allowed,
+        (ses) => updateExtensions(ses)
+      )
+      if (tick?.skipped.length) {
+        console.log(`[mira-ext] store update skipped for proxied: ${tick.skipped.join(', ')}`)
+      }
+    }
+    app.on('did-become-active', check)
+    const timer = setInterval(check, 5 * 60 * 60 * 1000)
+    app.on('before-quit', () => clearInterval(timer))
   }
 
   /** The Web Store package has no pre-load/after-download hook: after the user

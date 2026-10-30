@@ -41,7 +41,9 @@ export const BOOLEAN_FLAGS = new Set([
   'focused',
   // exec: --bare prints the result alone instead of the {ok,result} envelope
   // (not --value: select already takes --value <v>).
-  'bare'
+  'bare',
+  // proxy: --clear puts the profile back on a direct connection.
+  'clear'
 ])
 
 /** Single-letter short flags, mapped to their long boolean name. `-n` == `--new-tab`.
@@ -494,6 +496,11 @@ export function buildPress(key, tabId, modifiers) {
  * count; both arrive as strings from the CLI and are passed through as-is (a bad
  * value is rejected server-side with a clear error).
  *
+ * The param is `level`, the name `get-console` reads (`docs/socket.md`). Sent as
+ * `minLevel` — the shape of the STORE's query, not the command's — it was
+ * silently ignored as an unknown param, so `--level error` returned every INFO
+ * and WARNING line too and the caller filtered by hand (2026-10-30).
+ *
  * @param {string|null} tabId
  * @param {{ level?: unknown, limit?: unknown, since?: unknown }} [opts]
  * @returns {{ command: string, params: object }}
@@ -501,7 +508,7 @@ export function buildPress(key, tabId, modifiers) {
 export function buildConsole(tabId, opts = {}) {
   const params = {}
   if (tabId) params.tabId = tabId
-  if (typeof opts.level === 'string' && opts.level !== '') params.minLevel = opts.level
+  if (typeof opts.level === 'string' && opts.level !== '') params.level = opts.level
   if (opts.limit !== undefined && opts.limit !== '') params.limit = Number(opts.limit)
   if (opts.since !== undefined && opts.since !== '') params.sinceSeq = Number(opts.since)
   return { command: 'get-console', params }
@@ -527,6 +534,68 @@ export function formatConsole(messages) {
       const where = m.url ? `  (${m.url}${m.lineNumber ? ':' + m.lineNumber : ''})` : ''
       const msg = String(m.message ?? '').replace(/\s+$/, '')
       return `${String(m.seq).padStart(4)}  ${level}${src}${msg}${where}`
+    })
+    .join('\n')
+}
+
+/**
+ * The bytes `mira exec --out <file>` writes for a result, and whether they hold
+ * a JSON document. A string result lands verbatim: it is already the page's
+ * value, and JSON-encoding it would put quotes and `\n` escapes in what the next
+ * tool means to read as text. Anything else is serialized as JSON.
+ *
+ * `kind` is decided by the CONTENT, not by the result's type: `JSON.stringify(x)`
+ * is a string, and its file is still valid JSON that `json.load` reads. The kind
+ * comes back so the CLI can SAY which it wrote — a caller that pipes a text body
+ * into `json.load` gets `Expecting value: line 1 column 1 (char 0)`, the same
+ * error an EMPTY file raises, so "empty" and "plain text" were indistinguishable
+ * (2026-10-30).
+ *
+ * @param {unknown} result
+ * @returns {{ text: string, bytes: number, kind: 'text'|'json' }}
+ */
+export function execOutBody(result) {
+  const body = typeof result === 'string' ? result : JSON.stringify(result ?? null)
+  const text = body.endsWith('\n') ? body : `${body}\n`
+  return { text, bytes: Buffer.byteLength(text), kind: isJsonText(text) ? 'json' : 'text' }
+}
+
+/**
+ * True when `text` parses as a JSON document. `--out` uses it to warn when a
+ * `.json` target ends up holding plain text instead.
+ *
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function isJsonText(text) {
+  try {
+    JSON.parse(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Human-readable rendering of a list-profiles result: one line per profile with
+ * the id prefix `--profile` accepts, its label, and whether a window of it is
+ * OPEN — the only fact that decides whether a page can be driven in it at all.
+ *
+ * It exists because the raw `list-profiles` reply is ONE json line: several
+ * profiles make it long enough that a caller reading stdout cannot see the end
+ * of it, so the answer to "which identities do I have, and which are open?" was
+ * a `python3 -c` on the JSON (2026-10-30).
+ *
+ * @param {Array<{id:string,label?:string,open?:boolean}>} profiles
+ * @returns {string}
+ */
+export function formatProfiles(profiles) {
+  return (profiles ?? [])
+    .map((p) => {
+      const mark = p.open === true ? '*' : ' '
+      const id = (p.id ?? '').slice(0, 8).padEnd(8)
+      const label = (p.label ?? '').slice(0, 30).padEnd(30)
+      return `${mark} ${id}  ${label}  ${p.open === true ? 'open' : 'closed'}`
     })
     .join('\n')
 }
@@ -1440,4 +1509,45 @@ export function buildUploadScripts(files, opts = {}) {
   return { files: sent, selector: ${JSON.stringify(selector)} };
 })()`)
   return { scripts }
+}
+
+/**
+ * The socket request behind `mira proxy --profile <p> [<proxy> | --clear] [--url <u>]`,
+ * once --profile is resolved to `profileId` (matchProfileId). No proxy and no
+ * --clear reads the profile's live session back (get-profile-proxy); a proxy sets
+ * it; --clear sets it to null (direct). Pure.
+ *
+ * @param {string[]} positionals
+ * @param {Record<string, string|boolean>} flags
+ * @param {string} profileId
+ * @returns {{ request: { command: string, params: Record<string, unknown> } } | { error: string }}
+ */
+export function buildProxyCall(positionals, flags, profileId) {
+  if (positionals.length > 1) return { error: 'proxy takes at most one proxy (e.g. socks5://127.0.0.1:1080)' }
+  const value = positionals[0]
+  if (value !== undefined && flags.clear === true) return { error: 'proxy: pass a proxy or --clear, not both' }
+  if (value === undefined && flags.clear !== true) {
+    const params = { id: profileId }
+    if (typeof flags.url === 'string') params.url = flags.url
+    return { request: { command: 'get-profile-proxy', params } }
+  }
+  if (flags.url !== undefined) return { error: 'proxy: --url only goes with a read (no proxy, no --clear)' }
+  return { request: { command: 'set-profile-proxy', params: { id: profileId, proxy: value ?? null } } }
+}
+
+/**
+ * One line for a `mira proxy` reply. A read prints the stored setting, what
+ * Chromium resolves for the URL, and the WebRTC policy of each live page; a write
+ * prints the stored setting. Pure.
+ *
+ * @param {{ id: string, proxy: string|null, proxyInvalid?: string|null, applied?: string, blocked?: string|null, url?: string, resolved?: string, webrtcPolicies?: string[] }} r
+ * @returns {string}
+ */
+export function formatProxy(r) {
+  const setting = r.proxyInvalid ? `INVALID (${r.proxyInvalid})` : (r.proxy ?? 'direct')
+  if (r.resolved === undefined) return `${r.id}: proxy ${setting}`
+  const policies = r.webrtcPolicies ?? []
+  const webrtc = policies.length === 0 ? 'no live page' : [...new Set(policies)].join(', ')
+  const line = `${r.id}: proxy ${setting} | applied ${r.applied ?? '?'} | ${r.url} -> ${r.resolved} | webrtc ${webrtc}`
+  return r.blocked ? `${line}\nBLOCKED: ${r.blocked}` : line
 }

@@ -11,6 +11,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { createCommandRegistry, type CommandContext } from './commands'
 import { startCommandSocket, cleanupSocket, type CommandSocketHandle } from './socket'
+import { guardWebStoreIpc } from './proxy-wiring'
 import { FocusFeed } from './focus-feed'
 import { formatCommandEntry, lastCommand } from './command-log'
 import { forwardToRunningInstance } from './single-instance'
@@ -518,6 +519,9 @@ app.whenReady().then(async () => {
   // blur. Route those into a Mira tab instead. The handler no-ops (returns null)
   // for any non-extension wc, and tab views install their own handler right after
   // creation which overrides this one — so nothing else changes.
+  // A webContents born in a proxied profile's session (tab, popup, extension page)
+  // gets the WebRTC leak guard before it loads anything (profile-proxy.ts).
+  app.on('web-contents-created', (_event, wc) => profiles.applyProxyGuards(wc))
   app.on('web-contents-created', (_event, wc) => {
     wc.setWindowOpenHandler((details) => {
       const decision = profiles.handleExtensionWindowOpen(wc, details)
@@ -680,6 +684,21 @@ app.whenReady().then(async () => {
   })
   // One line per socket request: who (the mandatory `client`), what, ok or not.
   const commandLogPath = join(app.getPath('userData'), 'command.log')
+  // The Web Store library downloads (icon, CRX) with the main-process fetch, from
+  // the home IP: its install IPC asks, at every call, whether the sender's profile
+  // is proxied, and refuses it (proxy-wiring.ts). Must wrap ipcMain.handle BEFORE
+  // the library registers its handlers (on the first profile window).
+  guardWebStoreIpc(ipcMain, (event: Electron.IpcMainInvokeEvent) =>
+    profiles.webStoreIpcRefusal(event.sender.session)
+  )
+  // Mira runs the Web Store auto-updater itself, so a proxied profile is never
+  // updated from the home IP (extensions.ts startStoreUpdater).
+  extensionsService.startStoreUpdater((profileId) => !profiles.isProxied(profileId))
+  // Per-profile proxies go on their sessions BEFORE the command socket listens
+  // and before any window, tab or extension exists, so no request (an open-url
+  // over the socket included) can race setProxy (profile-proxy.ts). A failure is
+  // fail-closed there: black hole + load gate.
+  await profiles.applyStartupProxies()
   commandSocket = startCommandSocket(
     SOCKET_PATH,
     registry,

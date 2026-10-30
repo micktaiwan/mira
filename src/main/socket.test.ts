@@ -77,6 +77,21 @@ function setup(): {
       label: id,
       ...(cwd ? { terminalCwd: cwd } : {})
     }),
+    setProfileProxy: async (id: string, proxy: string | null) => ({
+      id,
+      label: id,
+      ...(proxy ? { proxy } : {})
+    }),
+    getProfileProxy: async (id: string, url: string) => ({
+      id,
+      proxy: null,
+      proxyInvalid: null,
+      applied: 'none',
+      blocked: null,
+      url,
+      resolved: 'DIRECT',
+      webrtcPolicies: []
+    }),
     openSettings: () => {},
     getSettings: () => ({
       homeUrl: 'home',

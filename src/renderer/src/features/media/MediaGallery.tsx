@@ -29,6 +29,9 @@ interface MediaItem {
   poster?: string
   /** For a streamed video: the precise permalink handed to yt-dlp to download it. */
   pageUrl?: string
+  /** A proxied profile: never load `url` here (the chrome is not proxied), only a
+   * data: poster. */
+  noPreview?: boolean
 }
 
 type Kind = MediaItem['kind']
@@ -99,6 +102,17 @@ function keyOf(item: MediaItem): string {
 function Thumb({ item }: { item: MediaItem }): React.JSX.Element {
   if (item.tainted || !item.url) {
     return <div className="media-thumb media-thumb-icon">🔒</div>
+  }
+  if (item.noPreview) {
+    if (item.poster?.startsWith('data:')) {
+      return <img className="media-thumb" src={item.poster} alt="video frame" loading="lazy" />
+    }
+    const kindIcon = KIND_META.find((k) => k.kind === item.kind)?.icon ?? '📄'
+    return (
+      <div className="media-thumb media-thumb-icon" title="No preview: this profile goes through a proxy">
+        {kindIcon}
+      </div>
+    )
   }
   if (item.kind === 'image' || item.kind === 'svg' || item.kind === 'canvas') {
     return <img className="media-thumb" src={item.url} alt={item.alt ?? ''} loading="lazy" />

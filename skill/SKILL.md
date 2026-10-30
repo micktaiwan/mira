@@ -44,11 +44,24 @@ mira tabs --window <id>                # ANOTHER window's strip (ids from `mira 
 mira tabs --profile personal           # the user's window of that profile (label or id prefix)
 mira tabs --session                    # YOUR session window's strip (never opens one; --profile if several)
 mira windows                           # open windows (id / profile / tabs), * = focused
+mira profiles                          # every profile (id prefix / label / open) — the target of --profile
+                                       # (`mira call list-profiles` prints it as ONE long json line, unreadable
+                                       #  whole: use the verb)
 mira close-window --params '{"windowId":"<id>"}'  # close ONE window (no id: the focused one)
 eval "$(mira use --url <substr>)"      # pin a tab → export MIRA_TAB=<uuid> (also: use <id>, use --active)
 mira exec "document.title"             # exec-js in the pinned tab (or the active one if nothing is pinned)
                                        # prints {"ok":true,"result":…}: a shell `case *true*` matches "ok":true
 mira exec --bare "!!document.querySelector('x')"   # the result alone (exit 1 on failure): use it in shell tests
+mira exec --out /tmp/x.json "JSON.stringify(rows)"  # write the result alone to a file; prints the path + size.
+                                       # A plain `> file` captures the ENVELOPE, whose `result` is a second
+                                       # layer of JSON — a script reading it then fails on `ok` ("'bool'
+                                       # object is not subscriptable") or silently sees nothing.
+                                       # The file holds the result VERBATIM when it is a string (page
+                                       # text, a url): `json.load` on it fails with "Expecting value:
+                                       # line 1 column 1 (char 0)" — the same error an empty file gives,
+                                       # so `--out` prints the kind it wrote and warns on a `.json` path.
+                                       # Wrap the code in JSON.stringify(...) when the file is for a
+                                       # JSON parser.
 mira press e --mod meta,shift          # a REAL keystroke (CDP, isTrusted) — for keyboard-driven web apps
 mira click --text 'Settings'           # a REAL mouse click (CDP) — also --selector <css>, --at x,y, --nth n, --scroll
 mira snap                              # the page as a numbered list of what you can act on + its visible text
@@ -116,7 +129,9 @@ mira done                                        # close the session's windows
 **Opening a page never adds a window when its profile is already open** (CLI, 2026-10-13).
 `mira open` (and `nav -n`) puts the new tab in the user's existing window of that profile, says so
 on stderr, and returns the tab id: act on it with `--tab <id>` from then on, or the next tab verb
-creates the session window anyway. A session window is only created when the profile has no window
+creates the session window anyway. **stdout is a JSON line, not a bare id**
+(`{"ok":true,"url":...,"id":...}`): take `id` from it, e.g.
+`TAB=$(mira open <url> -b | python3 -c 'import json,sys; print(json.loads(sys.stdin.read().strip().splitlines()[-1])["id"])')`. A session window is only created when the profile has no window
 open. In-place `nav` still goes to the session window, so it never overwrites the user's active tab.
 The reason: one more window per session multiplies windows for nothing.
 
@@ -307,6 +322,20 @@ setting: `mira call set-profile-terminal-cwd --params '{"id":"<profile>","cwd":"
 (must exist; `""` or `null` = back to home), read back as `terminalCwd` in `list-profiles`. It
 applies to the next pane created: a running pane keeps its folder until claude exits or the window closes. The user also sets it in Settings > Profiles.
 
+A profile can exit through its own proxy (an SSH SOCKS tunnel, say) while the others stay direct:
+`mira proxy --profile <p> socks5://127.0.0.1:1080`, `--clear` to go back to direct, and
+`mira proxy --profile <p>` alone to MEASURE it (Chromium's `resolveProxy` answer for
+https://www.linkedin.com, `--url` for another, plus each page's WebRTC policy). Socket:
+`set-profile-proxy {id, proxy}` / `get-profile-proxy {id, url?}`. Only `socks5|http|https://host:port`
+(socks4 is refused: it resolves DNS locally); the default profile cannot be proxied. Fail closed: a
+profile whose proxy is not confirmed on its session, or whose stored value is invalid
+(`proxyInvalid` in `list-profiles`), loads no page (`get-profile-proxy` says why in `blocked`), and a
+dead proxy fails pages (`ERR_PROXY_CONNECTION_FAILED`), never falls back to direct. In a proxied
+profile the Chrome Web Store is refused (pages, `install-extension`, `update-extensions`, and its
+auto-update skips that profile), yt-dlp downloads go through the proxy (`socks5h`), and the chrome
+UI gets no remote favicon or media preview. Replay the
+measurement with `npm run probe:proxy` (localhost only). Details: docs/socket.md § Per-profile proxy.
+
 **The CLI also checks that the running Mira honours the target.** Before sending the real URL, it
 opens an `about:blank` at the target and looks where it lands; if the build ignores the `tabId`, it
 refuses and says so, rather than load the page under another profile. Such a refusal means the fix
@@ -419,10 +448,14 @@ before concluding.
 - Every request without a `tabId` binds to the focused window **at call time**: flaky with several
   windows, prefer an explicit `tabId`. Also true of `nav`/`open`: with no pinned tab (and no session
   window), they target the focused window.
+- On a Chromium error page `location.href` is the whole `data:text/html,…` URL, encoded and very long: read `document.location.protocol` or `mira tabs` (url column) instead, and `mira reload --tab <id>` retries the failed url.
 - An asleep tab (lazy-load, discard, auto-sleep; `z` in `mira tabs`) makes page-bound commands fail
   (`tab is asleep`). `mira reload --tab <id>` wakes it without switching the window to it, then
   `mira wait --tab <id> --host <site>` before the next `exec`; `select-tab` wakes it too, but makes
-  it the visible tab. Auto-sleep puts a loaded tab to sleep once it has gone 12 h (setting:
+  it the visible tab. A tab can also be asleep right after a redirect (seen once, after an OAuth
+  consent page; cause not established): when an `exec` chained after a click that navigates answers
+  `tab is asleep`, the click itself went through, so wake the tab and read the result instead of
+  redoing the click. `exec` never wakes a tab on its own (waking races the page load). Auto-sleep puts a loaded tab to sleep once it has gone 12 h (setting:
   `get-auto-sleep` / `set-auto-sleep`, Settings > Tabs) without being on screen (counted from its
   opening if it never was), except the active, pinned, keep-awake and
   audible tabs and a page holding typed, unsent text; `mira call auto-sleep --params

@@ -51,6 +51,7 @@ import type { TabMemoryContext } from './tab-memory'
 import type { TabMenuContext } from './tab-menu'
 import type { TabTidyContext } from './tab-tidy'
 import type { TabsContext } from './tabs'
+import type { ProxyContext } from './proxy'
 import type { TerminalCwdContext } from './terminal-cwd'
 import type { ThemeContext } from './themes'
 import type { ToastContext } from './toast'
@@ -107,6 +108,7 @@ export type CommandContext = AppContext &
   TabFileContext &
   TabsContext &
   TerminalCwdContext &
+  ProxyContext &
   ThemeContext &
   ToastContext &
   TooltipContext &

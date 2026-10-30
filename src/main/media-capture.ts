@@ -43,6 +43,9 @@ export interface MediaItem {
    * chrome (a blob:/MediaSource src is page-scoped): a data: URL of a frame
    * grabbed in the page, or the <video poster> URL. Absent for still media. */
   poster?: string
+  /** Set for a proxied profile: the chrome (never proxied) must not load `url` /
+   * a remote poster as a preview — it would be fetched from the home IP. */
+  noPreview?: boolean
   /** For a streamed video: the precise permalink URL to hand to yt-dlp for a real
    * file download (a blob:/MSE src is not downloadable). Absent for still media. */
   pageUrl?: string

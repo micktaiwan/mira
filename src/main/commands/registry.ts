@@ -41,6 +41,12 @@ export interface ProfileInfo {
   /** The absolute folder the profile's embedded terminal starts in; absent = the
    * home folder (see terminal-cwd.ts). */
   terminalCwd?: string
+  /** The proxy the profile's session exits through; absent = direct (see
+   * profile-proxy.ts). */
+  proxy?: string
+  /** Set when the stored proxy is invalid: the raw value; the profile is blocked
+   * (fail closed) until a valid proxy is set or it is cleared. */
+  proxyInvalid?: string
 }
 
 export type CommandResult = { ok: true; [key: string]: unknown } | { ok: false; error: string }

@@ -60,6 +60,7 @@ import { tabTopCommands } from './tab-top'
 import { tabFileCommands } from './tab-file'
 import { tabsCommands } from './tabs'
 import { terminalCwdCommands } from './terminal-cwd'
+import { proxyCommands } from './proxy'
 import { themeCommands } from './themes'
 import { toastCommands } from './toast'
 import { tooltipCommands } from './tooltip'
@@ -176,6 +177,7 @@ export type { TabDetachContext, WindowInfo } from './tab-detach'
 export type { TabMenuContext } from './tab-menu'
 export type { TabsContext, TabInfo, TabKind } from './tabs'
 export type { TerminalCwdContext } from './terminal-cwd'
+export type { ProxyContext, ProfileProxyReport } from './proxy'
 export type { ThemeContext } from './themes'
 export type { Theme, ThemeInput } from '../theme-store'
 export type { ToastContext } from './toast'
@@ -268,6 +270,7 @@ export function createCommandRegistry(): CommandRegistry {
     ...tabFileCommands,
     ...tabsCommands,
     ...terminalCwdCommands,
+    ...proxyCommands,
     ...themeCommands,
     ...toastCommands,
     ...tooltipCommands,

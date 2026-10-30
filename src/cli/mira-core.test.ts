@@ -22,6 +22,7 @@ import {
   formatAge,
   formatConsole,
   formatWindows,
+  formatProfiles,
   resolveCode,
   TAB_BOUND,
   resolveTimeoutMs,
@@ -33,6 +34,8 @@ import {
   socketPathError,
   parseCliVersion,
   wantsCliVersion,
+  execOutBody,
+  isJsonText,
   profileWindow,
   userWindowForOpen,
   typePlan
@@ -233,14 +236,42 @@ describe('buildConsole', () => {
   it('targets a pinned tab and maps level/limit/since to server params', () => {
     expect(buildConsole('t1', { level: 'error', limit: '20', since: '5' })).toEqual({
       command: 'get-console',
-      params: { tabId: 't1', minLevel: 'error', limit: 20, sinceSeq: 5 }
+      params: { tabId: 't1', level: 'error', limit: 20, sinceSeq: 5 }
     })
+  })
+  it('sends `level`, the param get-console reads, not the store field `minLevel`', () => {
+    // `minLevel` is the PageConsoleQuery field the COMMAND translates into, not
+    // the socket param: sent as-is it was dropped and `--level error` returned
+    // INFO/WARNING lines too (2026-10-30).
+    const { params } = buildConsole('t1', { level: 'error' })
+    expect(params).not.toHaveProperty('minLevel')
   })
   it('ignores empty-string flags', () => {
     expect(buildConsole('t1', { level: '', limit: '' })).toEqual({
       command: 'get-console',
       params: { tabId: 't1' }
     })
+  })
+})
+
+describe('execOutBody', () => {
+  it('writes a string result verbatim and reports it as text, not JSON', () => {
+    const body = execOutBody('https://x.test/a\n----\nSearch')
+    expect(body.kind).toBe('text')
+    expect(body.text).toBe('https://x.test/a\n----\nSearch\n')
+    // The trap this guards: json.load on that file raises exactly what an EMPTY
+    // file raises, so the CLI must say which kind it wrote (2026-10-30).
+    expect(isJsonText(body.text)).toBe(false)
+  })
+  it('serializes a non-string result as JSON and terminates it', () => {
+    expect(execOutBody([1, 2])).toEqual({ text: '[1,2]\n', bytes: 6, kind: 'json' })
+    expect(execOutBody(undefined)).toEqual({ text: 'null\n', bytes: 5, kind: 'json' })
+  })
+  it('calls a string result that IS JSON `json`: the file is loadable, whatever its type', () => {
+    expect(execOutBody('["a","b"]')).toMatchObject({ text: '["a","b"]\n', kind: 'json' })
+  })
+  it('reports the byte count it wrote', () => {
+    expect(execOutBody('abc').bytes).toBe(4)
   })
 })
 
@@ -435,6 +466,20 @@ describe('formatWindows', () => {
     expect(lines[0]).toContain('tabs=3')
     expect(lines[1].startsWith('*')).toBe(true)
     expect(lines[1]).toContain('w2')
+  })
+})
+
+describe('formatProfiles', () => {
+  it('marks an open profile with * and shows the id prefix --profile takes', () => {
+    const out = formatProfiles([
+      { id: 'abcdef12-0000-0000-0000-000000000000', label: 'perso', open: true },
+      { id: '12345678-0000-0000-0000-000000000000', label: 'work', open: false }
+    ])
+    const lines = out.split('\n')
+    expect(lines[0].startsWith('*')).toBe(true)
+    expect(lines[0]).toContain('abcdef12')
+    expect(lines[1].startsWith(' ')).toBe(true)
+    expect(lines[1]).toContain('closed')
   })
 })
 

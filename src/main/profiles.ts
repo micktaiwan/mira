@@ -32,6 +32,7 @@ import {
   screen,
   session,
   shell,
+  webContents as allWebContents,
   type DownloadItem,
   type MenuItemConstructorOptions,
   type Session,
@@ -139,10 +140,33 @@ import {
   setProfileColor as setProfileColorPure,
   setProfileTheme as setProfileThemePure,
   setProfileTerminalCwd as setProfileTerminalCwdPure,
+  setProfileProxy as setProfileProxyPure,
   findById,
   nextProfileLabel
 } from './profile-store'
 import { parseTerminalCwdInput, resolveTerminalCwd } from './terminal-cwd'
+import {
+  DEFAULT_WEBRTC_POLICY,
+  PROXIED_WEBRTC_POLICY,
+  ProxyController,
+  blockedPageUrl,
+  chromeSafeImageUrl,
+  isBlockedPageUrl,
+  parseProxyInput,
+  profileWantsProxy,
+  isWebStoreUrl,
+  blockedPageIntendedUrl,
+  sessionTargetFor,
+  ytdlpProxyFor
+} from './profile-proxy'
+import {
+  blockedPageMirror,
+  faviconForChrome as faviconForChromeWired,
+  replaceSessionPages,
+  wireWebStoreGuard,
+  type GuardedContents
+} from './proxy-wiring'
+import type { ProfileProxyReport } from './commands'
 import {
   type Theme,
   type ThemeInput,
@@ -740,6 +764,64 @@ export class ProfileManager {
    * a second unlock — the cookie-loss bug). Absent = locked (falls back to the
    * canonical partition). Set on unlock, cleared on lock. See noncePartitionDir. */
   private readonly unlockedPartition = new Map<string, string>()
+  /** Per-profile proxy (profile-proxy.ts): the single record of what each
+   * profile session is CONFIRMED set to, and the gate every load goes through.
+   * Keyed by partition string (an unlocked encrypted profile gets a fresh one, so
+   * it is configured afresh); the default profile's session is never applied.
+   * The applier is the only place Mira calls session.setProxy. */
+  private readonly proxy = new ProxyController(
+    async (partition, config) => {
+      const ses = session.fromPartition(partition)
+      await ses.setProxy(config)
+      // No socket opened under the previous setting may be reused.
+      await ses.closeAllConnections()
+    },
+    (partition, applied) => {
+      const ses = session.fromPartition(partition)
+      if (applied === null) this.proxiedSessions.delete(ses)
+      else this.proxiedSessions.add(ses)
+      // Live webContents of this session follow the new setting right away.
+      const policy = applied === null ? DEFAULT_WEBRTC_POLICY : PROXIED_WEBRTC_POLICY
+      for (const wc of allWebContents.getAllWebContents()) {
+        if (wc.session === ses && !wc.isDestroyed()) wc.setWebRTCIPHandlingPolicy(policy)
+      }
+      console.log(`[proxy] ${partition}: ${applied ?? 'direct'}`)
+    },
+    (partition, error) => {
+      // Neither the proxy nor the black hole could be applied: the session state
+      // is unknown. The gate already refuses every new load; also take every live
+      // page of that session off the network (an explanation page is a data: URL).
+      console.error(
+        `[proxy] HARD BLOCK ${partition}: setProxy and the black hole both failed; ` +
+          'every page of this profile is replaced and no load is allowed',
+        error
+      )
+      const ses = session.fromPartition(partition)
+      // Each live page of the session, with the Mira tab it belongs to (if any), so
+      // the replacement keeps every tab's URL (proxy-wiring.ts replaceSessionPages).
+      const tabOf = new Map<WebContents, string>()
+      for (const pw of this.openById.values()) {
+        for (const [tabId, view] of pw.views) tabOf.set(view.webContents, tabId)
+      }
+      replaceSessionPages(
+        allWebContents
+          .getAllWebContents()
+          .filter((wc) => wc.session === ses && !wc.isDestroyed())
+          .map((wc) => ({ tabId: tabOf.get(wc) ?? null, wc })),
+        'Neither the proxy nor the fail-closed black hole could be applied to this profile.',
+        (tabId, url) => this.proxyBlockedUrl.set(tabId, url)
+      )
+    }
+  )
+  /** The URL each refused tab was asked to load, while it shows the explanation
+   * page: the tab keeps it as its URL (and the session saves it), and a reload
+   * retries it through the gate. */
+  private readonly proxyBlockedUrl = new Map<string, string>()
+  /** Sessions that are, or are about to be, proxied (or black-holed), so
+   * web-contents-created puts the WebRTC leak guard on each of their webContents
+   * (applyProxyGuards). Added BEFORE setProxy is called, removed only once a
+   * direct setting is confirmed. */
+  private readonly proxiedSessions = new Set<Session>()
   /** Every currently open window, keyed by its unique windowId. A profile may have
    * several entries here (a torn-off tab lives in its own window of the same
    * profile), so this is NOT keyed by profile id — use windowsForProfile /
@@ -1018,6 +1100,11 @@ export class ProfileManager {
     await vaultService.unlock(plan, password)
     this.unlockedVaults.set(id, password)
     this.unlockedPartition.set(id, `persist:${partitionDir}`)
+    // A fresh session: give it the profile's proxy before anything loads in it. A
+    // failure is fail-closed (black hole + gate), so the unlock itself succeeds.
+    await this.applyProfileProxy(id).catch((error) =>
+      console.error(`[proxy] profile ${id}: setProxy failed after unlock, profile blocked`, error)
+    )
     // Drop any cached history/bookmarks readers so they re-read the restored files.
     this.evictProfileDataCaches(id)
     this.deps.onChange?.()
@@ -1564,13 +1651,23 @@ export class ProfileManager {
     return resolveProfileTheme(profile.themeId, profile.color, this.themes)
   }
 
+  /** The theme handed to the CHROME UI (never proxied): for a proxied profile
+   * without its wallpaper, a remote image the chrome session would fetch from the
+   * home IP. Tab pages (home, error) render in the profile's own session. */
+  private chromeTheme(profile: Profile): Theme {
+    const theme = this.resolveTheme(profile)
+    if (!theme.wallpaper || !profileWantsProxy(profile)) return theme
+    const { wallpaper: _w, ...rest } = theme
+    return rest
+  }
+
   /** Live-push a profile's resolved theme to every open window of it: the chrome
    * reads the theme once from the URL at load, so a change needs a push to
    * repaint. */
   private pushProfileTheme(id: string): void {
     const profile = findById(this.profiles, id)
     if (!profile) return
-    this.broadcastToProfile(id, 'mira:profile-theme', this.resolveTheme(profile))
+    this.broadcastToProfile(id, 'mira:profile-theme', this.chromeTheme(profile))
   }
 
   /** A ProfileInfo view of a profile (id + label + themeId/legacy color). */
@@ -1581,7 +1678,9 @@ export class ProfileManager {
       origin: profileOrigin(profile),
       ...(profile.themeId ? { themeId: profile.themeId } : {}),
       ...(profile.color ? { color: profile.color } : {}),
-      ...(profile.terminalCwd ? { terminalCwd: profile.terminalCwd } : {})
+      ...(profile.terminalCwd ? { terminalCwd: profile.terminalCwd } : {}),
+      ...(profile.proxy ? { proxy: profile.proxy } : {}),
+      ...(profile.proxyInvalid !== undefined ? { proxyInvalid: profile.proxyInvalid } : {})
     }
   }
 
@@ -1621,6 +1720,210 @@ export class ProfileManager {
     this.deps.persist(this.profiles)
     this.broadcastProfilesChanged()
     return this.toProfileInfo(findById(this.profiles, id)!)
+  }
+
+  /** Why `url` must not load in profile `id` right now (profile-proxy.ts gate),
+   * or null when it may. The ONE check every page load of a profile goes through:
+   * materializeTab (every tab, restored, opened, woken), loadUrlInTab, reloadTab,
+   * and the extension load of create(). */
+  private proxyBlock(id: string, url: string): string | null {
+    const profile = findById(this.profiles, id)
+    if (!profile) return null
+    return this.proxy.gate(profile, this.effectivePartition(id), url)
+  }
+
+  /** Refuse a Web Store install / update for a proxied profile: the library
+   * downloads with the main-process fetch, from the home IP (extensions.ts). */
+  private assertNoStoreTraffic(id: string): void {
+    if (this.wantsProxy(id)) {
+      throw new Error(
+        `profile ${id} is proxied: Chrome Web Store installs and updates are refused (they would leave from the home IP)`
+      )
+    }
+  }
+
+  /** Public view of wantsProxy, for the Web Store updater (index.ts). */
+  isProxied(id: string): boolean {
+    return this.wantsProxy(id)
+  }
+
+  /** True when profile `id` is meant to leave through a proxy (valid or invalid). */
+  private wantsProxy(id: string): boolean {
+    const profile = findById(this.profiles, id)
+    return profile ? profileWantsProxy(profile) : false
+  }
+
+  /** A favicon the CHROME UI may show for a tab of profile `id`. The chrome runs
+   * in its own, never-proxied session, so for a proxied profile a remote icon URL
+   * is fetched through the PROFILE's session (its proxy, behind the gate) and
+   * handed over as a data: URL; anything else becomes no favicon. */
+  private async faviconForChrome(
+    id: string,
+    ses: Session,
+    url: string | null
+  ): Promise<string | null> {
+    return faviconForChromeWired(
+      {
+        wantsProxy: (pid) => this.wantsProxy(pid),
+        gate: (pid, u) => this.proxyBlock(pid, u),
+        fetch: (u) => ses.fetch(u, { signal: AbortSignal.timeout(10_000) })
+      },
+      id,
+      url
+    )
+  }
+
+  /** The profile whose LIVE session is `ses`, among the profiles meant to be
+   * proxied (the only ones the Web Store guards care about), or null. */
+  private proxiedProfileForSession(ses: Session): string | null {
+    const unlocked = new Set(this.unlockedVaults.keys())
+    for (const p of this.profiles) {
+      if (!profileWantsProxy(p) || needsUnlock(p, unlocked)) continue
+      if (this.sessionFor(p.id) === ses) return p.id
+    }
+    return null
+  }
+
+  /** Why the Web Store IPC must refuse a sender of session `ses` (index.ts
+   * guardWebStoreIpc): its profile is proxied, decided at call time. */
+  webStoreIpcRefusal(ses: Session): string | null {
+    const id = this.proxiedProfileForSession(ses)
+    return id
+      ? `profile ${id} is proxied: the Web Store library would download from the home IP`
+      : null
+  }
+
+  /** Why a page-started navigation to `url` in session `ses` must be refused
+   * (proxy-wiring.ts wireWebStoreGuard), or null. */
+  private webStoreNavRefusal(ses: Session, url: string): string | null {
+    if (!isWebStoreUrl(url)) return null
+    const id = this.proxiedProfileForSession(ses)
+    return id
+      ? `the Chrome Web Store is refused in proxied profile ${id}: its installs and updates are downloaded by Mira's main process, outside the proxy`
+      : null
+  }
+
+  /** Throw the gate's reason when `url` may not load in profile `id` (for the
+   * command paths, which must fail loudly rather than load). History steps and
+   * reloads pass a generic web URL: any block refuses them. */
+  private assertProxyAllows(id: string, url = 'https://'): void {
+    const blocked = this.proxyBlock(id, url)
+    if (blocked) throw new Error(blocked)
+  }
+
+  /** Bring profile `id`'s live session to its stored proxy (sessionTargetFor:
+   * the proxy, the black hole if the stored value is invalid, direct if none),
+   * failing CLOSED: on a setProxy failure the session is black-holed and the gate
+   * keeps refusing its loads. A profile that never had a proxy is left on
+   * Electron's default (no call). Never touches the default session. */
+  private applyProfileProxy(id: string): Promise<void> {
+    const partition = this.effectivePartition(id)
+    const profile = findById(this.profiles, id)
+    if (!partition || !profile) return Promise.resolve()
+    const target = sessionTargetFor(profile)
+    if (target !== null) this.proxiedSessions.add(session.fromPartition(partition))
+    return this.proxy.ensure(partition, target)
+  }
+
+  /** Startup: configure every proxied (or invalid-proxy) profile's session.
+   * index.ts awaits this BEFORE the command socket listens and before any window
+   * opens, so no request can race it; a failure here is fail-closed anyway (black
+   * hole + gate). A locked encrypted profile is skipped: its session only exists
+   * once unlocked, and unlockProfileVault applies the proxy then. */
+  async applyStartupProxies(): Promise<void> {
+    const unlocked = new Set(this.unlockedVaults.keys())
+    await Promise.all(
+      this.profiles
+        .filter((p) => sessionTargetFor(p) !== null && !needsUnlock(p, unlocked))
+        .map((p) =>
+          this.applyProfileProxy(p.id).catch((error) =>
+            console.error(`[proxy] profile ${p.id}: setProxy failed, profile blocked`, error)
+          )
+        )
+    )
+  }
+
+  /** web-contents-created hook (index.ts): a webContents born in a proxied
+   * session gets the WebRTC leak guard before it loads anything, popups and
+   * extension pages included. */
+  applyProxyGuards(wc: WebContents): void {
+    if (this.proxiedSessions.has(wc.session)) wc.setWebRTCIPHandlingPolicy(PROXIED_WEBRTC_POLICY)
+    // Registered on EVERY webContents and decided at each navigation, so a
+    // profile proxied mid-session is covered from its next navigation on.
+    wireWebStoreGuard(wc as unknown as GuardedContents, (url) =>
+      this.webStoreNavRefusal(wc.session, url)
+    )
+  }
+
+  /** Set (validated strictly) or clear (null / '') a profile's proxy. With a live
+   * session it is APPLIED first and persisted only once Chromium confirmed it; on
+   * failure nothing is persisted, the previous setting is put back (fail closed)
+   * and the error is returned. Resolves after Chromium took it, so the caller can
+   * measure it right away with getProfileProxy. */
+  async setProfileProxy(id: string, raw: string | null): Promise<ProfileInfo> {
+    const before = findById(this.profiles, id)
+    if (!before) throw new Error(`unknown profile: ${id}`)
+    const next = parseProxyInput(raw)
+    // Validates up front (default profile, malformed) without changing anything.
+    setProfileProxyPure(this.profiles, id, next)
+    const partition = this.effectivePartition(id)
+    // A locked encrypted profile has no live session: its unlock applies it.
+    const live = partition !== undefined && !needsUnlock(before, new Set(this.unlockedVaults.keys()))
+    const previous = sessionTargetFor(before)
+    if (live && next !== null) this.proxiedSessions.add(session.fromPartition(partition))
+    try {
+      await this.proxy.change(partition, live, previous, next, () => {
+        this.profiles = setProfileProxyPure(this.profiles, id, next)
+        this.deps.persist(this.profiles)
+      })
+    } catch (error) {
+      if (live && previous === null && this.proxy.applied(partition) === undefined) {
+        this.proxiedSessions.delete(session.fromPartition(partition))
+      }
+      throw new Error(`setProxy failed, nothing saved: ${(error as Error).message}`)
+    }
+    for (const pw of this.windowsForProfile(id)) {
+      // Favicons are filtered per profile at push time (tabInfos).
+      this.pushTabs(pw)
+      // Web Store pages are refused in a proxied profile (gate): take any open one down.
+      for (const [tabId, view] of pw.views) {
+        const url = view.webContents.getURL()
+        const blocked = next !== null ? this.proxyBlock(id, url) : null
+        if (blocked) {
+          this.proxyBlockedUrl.set(tabId, url)
+          view.webContents.loadURL(blockedPageUrl(blocked, url)).catch(() => {})
+        }
+      }
+    }
+    this.broadcastProfilesChanged()
+    return this.toProfileInfo(findById(this.profiles, id)!)
+  }
+
+  /** Measure profile `id`'s live session: what Mira confirmed on it, whether its
+   * loads are blocked and why, what Chromium resolves for `url`, and the WebRTC
+   * policy of each of its webContents. */
+  async getProfileProxy(id: string, url: string): Promise<ProfileProxyReport> {
+    const profile = findById(this.profiles, id)
+    if (!profile) throw new Error(`unknown profile: ${id}`)
+    if (needsUnlock(profile, new Set(this.unlockedVaults.keys()))) {
+      throw new Error(`profile ${id} is locked: unlock it to measure its session`)
+    }
+    const partition = this.effectivePartition(id)
+    const applied = this.proxy.applied(partition)
+    const ses = this.sessionFor(id)
+    return {
+      id,
+      proxy: profile.proxy ?? null,
+      proxyInvalid: profile.proxyInvalid ?? null,
+      applied: applied === undefined ? 'none' : (applied ?? 'direct'),
+      blocked: this.proxyBlock(id, url),
+      url,
+      resolved: await ses.resolveProxy(url),
+      webrtcPolicies: allWebContents
+        .getAllWebContents()
+        .filter((wc) => wc.session === ses && !wc.isDestroyed())
+        .map((wc) => wc.getWebRTCIPHandlingPolicy())
+    }
   }
 
   listThemes(): Theme[] {
@@ -2027,7 +2330,7 @@ export class ProfileManager {
       window,
       profile,
       this.effectivePartition(profile.id),
-      this.resolveTheme(profile)
+      this.chromeTheme(profile)
     )
 
     // Extensions: register this profile's session with the extension system NOW
@@ -2036,10 +2339,27 @@ export class ProfileManager {
     // restoring tabs: a tab persisted on a chrome-extension:// page must find
     // its extension registered, else it restores to ERR_FAILED
     // (extensions-plan.md §4.5). The restore itself waits on that load.
-    this.initExtensions(profileWindow)
+    // Proxy first (profile-proxy.ts): the session must exit through its proxy
+    // before an extension worker or a tab of it makes a single request. Applied at
+    // startup already (applyStartupProxies), so this is normally a resolved promise.
+    // Then the gate decides: a profile whose proxy is not confirmed (or invalid)
+    // loads no extension and restores no tab (its saved tabs stay saved: `restored`
+    // is never set, so saveSession does not overwrite them). Every later tab goes
+    // through the same gate in materializeTab.
+    let proxyBlocked: string | null = null
+    this.applyProfileProxy(profile.id)
+      .catch((error) => console.error(`[proxy] profile ${profile.id}: setProxy failed`, error))
+      .then(() => {
+        proxyBlocked = this.proxyBlock(profile.id, 'https://')
+        if (proxyBlocked) {
+          console.error(`[proxy] window of ${profile.id} left empty: ${proxyBlocked}`)
+          return undefined
+        }
+        return this.initExtensions(profileWindow)
+      })
       .catch((error) => console.error('[mira] failed to load extensions', error))
       .then(() => {
-        if (profileWindow.window.isDestroyed()) return
+        if (profileWindow.window.isDestroyed() || proxyBlocked) return
         // Fill the strip per `content`: restore the specific saved window's tabs,
         // open a fresh home tab, or leave it empty (the detach path attaches the
         // torn-off tab itself once this resolves — see detachTabTo). An 'empty'
@@ -2120,7 +2440,7 @@ export class ProfileManager {
     // Web Store support first — it also loads the profile's store-installed
     // extensions — then the sideloads recorded outside the store dir.
     return this.deps.extensions
-      .installWebStore(ses, profileId)
+      .installWebStore(ses, profileId, this.wantsProxy(profileId))
       .then(() => this.deps.extensions.loadInstalled(ses, profileId))
   }
 
@@ -2257,6 +2577,11 @@ export class ProfileManager {
     // _blank, Cmd+click), which we open as a Mira tab instead of an OS window.
     // Reuses `partition` (the profile's session) computed above.
     view.webContents.setWindowOpenHandler((details) => {
+      const storeRefused = this.webStoreNavRefusal(view.webContents.session, details.url)
+      if (storeRefused) {
+        console.warn(`[proxy] window.open refused: ${storeRefused}`)
+        return { action: 'deny' }
+      }
       const decision = decideWindowOpen(details)
       // The tab may have been torn off into another window — target its CURRENT one.
       const host = this.ownerOf(tab.id) ?? pw
@@ -2308,7 +2633,18 @@ export class ProfileManager {
     // `post` is the form-POST replay (a target=_blank form open): without it the
     // action url would be re-fetched as a GET and the page that opens is not the
     // one the form asked for — see postLoad in window-open.ts.
-    if (tab.url && (httpReferrer || post)) {
+    // Proxy gate (profile-proxy.ts): a proxied profile whose proxy is not confirmed
+    // on its session, or whose stored proxy is invalid, loads an explanation page
+    // (a data: URL, no network) instead of the URL. Covers every tab birth: restore,
+    // new tab, Cmd+T, open-url, bookmarks, extension createTab, session windows,
+    // waking an asleep tab.
+    const blocked = this.proxyBlock(pw.id, tab.url || this.blankPageUrl(pw))
+    if (blocked) {
+      console.error(`[proxy] tab ${tab.id} not loaded: ${blocked}`)
+      // The tab keeps the URL it was asked for (mirrorUrl), so nothing is lost on save.
+      this.proxyBlockedUrl.set(tab.id, tab.url)
+      view.webContents.loadURL(blockedPageUrl(blocked, tab.url))
+    } else if (tab.url && (httpReferrer || post)) {
       view.webContents.loadURL(tab.url, {
         ...(httpReferrer ? { httpReferrer } : {}),
         ...(post
@@ -2997,7 +3333,9 @@ export class ProfileManager {
     // set by trackDownload when it takes a blank tab over).
     let failedUrl = ''
     const mirrorUrl = (navUrl: string): string =>
-      isMiraHomeUrl(navUrl)
+      isBlockedPageUrl(navUrl)
+        ? (blockedPageMirror(navUrl, this.proxyBlockedUrl.get(tabId)) ?? '')
+        : isMiraHomeUrl(navUrl)
         ? ''
         : isMiraErrorUrl(navUrl)
           ? failedUrl
@@ -3014,7 +3352,12 @@ export class ProfileManager {
       if (isRetryUrl(navUrl)) {
         e.preventDefault()
         const retry = this.errorRetryUrl.get(tabId)
-        if (retry !== undefined) {
+        const retryBlocked = retry !== undefined ? this.proxyBlock(owner().id, retry) : null
+        if (retryBlocked && retry !== undefined) {
+          console.error(`[proxy] retry refused: ${retryBlocked}`)
+          this.proxyBlockedUrl.set(tabId, retry)
+          wc.loadURL(blockedPageUrl(retryBlocked, retry)).catch(() => {})
+        } else if (retry !== undefined) {
           wc.loadURL(retry).catch((error) => {
             console.error('[mira] error page: retry failed', error)
           })
@@ -3045,7 +3388,10 @@ export class ProfileManager {
       // behind (the retry worked, or the user went elsewhere): forget it, so a
       // later reload reloads the page that is actually on screen.
       if (!isMiraErrorUrl(navUrl)) this.errorRetryUrl.delete(tabId)
-      patch({ url: mirrorUrl(navUrl) })
+      const mirrored = mirrorUrl(navUrl)
+      // Left the explanation page: the intended URL is no longer pending.
+      if (!isBlockedPageUrl(navUrl)) this.proxyBlockedUrl.delete(tabId)
+      patch({ url: mirrored })
     })
     // A failed main-frame load (DNS failure, refused connection, timeout…) would
     // leave a blank void: show Mira's error page instead. ERR_ABORTED (-3) is not
@@ -3113,7 +3459,19 @@ export class ProfileManager {
     // the commit — so the freshest 500 ms window must start here. did-navigate is
     // always a cross-document main-frame commit.
     wc.on('did-navigate', () => armIfNeeded({ isMainFrame: true, isSameDocument: false }))
-    wc.on('page-favicon-updated', (_e, favicons) => patch({ favicon: favicons?.[0] ?? null }))
+    wc.on('page-favicon-updated', (_e, favicons) => {
+      const icon = favicons?.[0] ?? null
+      const id = owner().id
+      // A proxied profile's icon never reaches the chrome as a remote URL (the
+      // chrome session would fetch it from the home IP): see faviconForChrome.
+      if (!icon || !this.wantsProxy(id)) {
+        patch({ favicon: icon })
+        return
+      }
+      void this.faviconForChrome(id, wc.session, icon).then((safe) => {
+        if (!wc.isDestroyed()) patch({ favicon: safe })
+      })
+    })
     // A tab starting or stopping sound: refresh the strip so the sidebar speaker
     // icon and the toolbar audio button track it. audible is not stored on the tab
     // (it is read live from the view in tabInfos), so this only needs to push —
@@ -3531,8 +3889,12 @@ export class ProfileManager {
   }
 
   private tabInfos(pw: ProfileWindow): TabInfo[] {
+    const wantsProxy = this.wantsProxy(pw.id)
     return pw.state.tabs.map((t) => ({
       ...t,
+      // Rendered by the chrome (never proxied): a proxied profile only gets data:
+      // icons (a restored tab may still carry a remote one from before).
+      favicon: chromeSafeImageUrl(wantsProxy, t.favicon),
       loaded: pw.views.has(t.id),
       kind: t.id === pw.settingsTabId ? 'settings' : 'web',
       pinned: t.pinned === true,
@@ -4560,6 +4922,8 @@ export class ProfileManager {
       if (pw.window.isDestroyed()) continue
       const view = pw.views.get(tabId)
       if (view) {
+        const blocked = this.proxyBlock(pw.id, url)
+        if (blocked) throw new Error(blocked)
         // A load that aborts (a redirect, a cancelled navigation) rejects; log it
         // rather than leaving an unhandled rejection behind.
         view.webContents.loadURL(url).catch((error) => {
@@ -4569,6 +4933,8 @@ export class ProfileManager {
       }
       if (tabId === pw.settingsTabId) throw new Error('not a web page (Settings tab)')
       if (!pw.state.tabs.some((t) => t.id === tabId)) continue
+      // Gate first: a refused load must not overwrite the asleep tab's URL.
+      this.assertProxyAllows(pw.id, url)
       // Asleep: point it at the destination first, so its one load is ours. The
       // old title/favicon belong to the page we are leaving — clear them so the
       // strip does not label the tab with a page it no longer holds.
@@ -4593,6 +4959,19 @@ export class ProfileManager {
       if (pw.window.isDestroyed()) continue
       const view = pw.views.get(tabId)
       if (view) {
+        const shown = view.webContents.getURL()
+        const intended = isBlockedPageUrl(shown)
+          ? (this.proxyBlockedUrl.get(tabId) ?? blockedPageIntendedUrl(shown) ?? undefined)
+          : undefined
+        if (intended) {
+          this.assertProxyAllows(pw.id, intended)
+          view.webContents.loadURL(intended).catch((error) => {
+            console.error('[mira] reload: loadURL failed', error)
+          })
+          return
+        }
+        const blocked = this.proxyBlock(pw.id, view.webContents.getURL())
+        if (blocked) throw new Error(blocked)
         if (ignoreCache) view.webContents.reloadIgnoringCache()
         else view.webContents.reload()
         return
@@ -4679,12 +5058,26 @@ export class ProfileManager {
    * tab to the playing page. Registered in activeDownloads so the status bar shows
    * a download is in flight. Resolves with the saved basename or a clean error. */
   private async downloadVideoUrl(
-    pageUrl: string
+    pageUrl: string,
+    profileId?: string
   ): Promise<{ saved: boolean; file?: string; error?: string }> {
+    // A proxied profile's download goes through its proxy (socks5h: remote DNS);
+    // a blocked one does not run at all (profile-proxy.ts ytdlpProxyFor).
+    const profile = profileId ? findById(this.profiles, profileId) : undefined
+    const route = profile
+      ? ytdlpProxyFor(this.proxy, profile, this.effectivePartition(profile.id), pageUrl)
+      : { proxy: null }
+    if ('error' in route) return { saved: false, error: route.error }
     const id = ++this.downloadSeq
     this.activeDownloads.set(id, { startedAt: Date.now() })
     try {
-      return await ytdlpDownload(pageUrl, app.getPath('downloads'), process.env)
+      return await ytdlpDownload(
+        pageUrl,
+        app.getPath('downloads'),
+        process.env,
+        undefined,
+        route.proxy
+      )
     } finally {
       this.activeDownloads.delete(id)
     }
@@ -5724,7 +6117,7 @@ export class ProfileManager {
           profileLabel: label,
           title: tab.title || tab.url || 'Untitled',
           url: tab.url,
-          favicon: tab.favicon,
+          favicon: chromeSafeImageUrl(this.wantsProxy(pw.id), tab.favicon),
           lastAudibleAt: tab.lastAudibleAt,
           audible: this.liveContents(pw, tab.id)?.isCurrentlyAudible() === true
         })
@@ -5792,7 +6185,7 @@ export class ProfileManager {
           profileLabel: label,
           title: tab.title || tab.url || 'Untitled',
           url: tab.url,
-          favicon: tab.favicon,
+          favicon: chromeSafeImageUrl(this.wantsProxy(pw.id), tab.favicon),
           active: pw.state.activeId === tab.id,
           keepAwake: tab.keepAwake === true,
           frames
@@ -6337,16 +6730,29 @@ export class ProfileManager {
         // forward go through navigationHistory (the modern, non-deprecated API);
         // both no-op safely at the ends of the history.
         const wc = view.webContents
+        // Every load of this adapter goes through the proxy gate (profile-proxy.ts).
+        const gateId = target.id
         return {
-          loadURL: (url) => wc.loadURL(url),
+          loadURL: (url) => {
+            this.assertProxyAllows(gateId, url)
+            return wc.loadURL(url)
+          },
           goBack: () => {
+            this.assertProxyAllows(gateId)
             if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
           },
           goForward: () => {
+            this.assertProxyAllows(gateId)
             if (wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward()
           },
-          reload: () => wc.reload(),
-          reloadIgnoringCache: () => wc.reloadIgnoringCache(),
+          reload: () => {
+            this.assertProxyAllows(gateId)
+            wc.reload()
+          },
+          reloadIgnoringCache: () => {
+            this.assertProxyAllows(gateId)
+            wc.reloadIgnoringCache()
+          },
           getZoomLevel: () => wc.getZoomLevel(),
           setZoomLevel: (level) => wc.setZoomLevel(level)
         }
@@ -6455,6 +6861,8 @@ export class ProfileManager {
       deleteTheme: (id) => this.deleteTheme(id),
       setProfileTheme: (id, themeId) => this.setProfileTheme(id, themeId),
       setProfileTerminalCwd: (id, cwd) => this.setProfileTerminalCwd(id, cwd),
+      setProfileProxy: (id, proxy) => this.setProfileProxy(id, proxy),
+      getProfileProxy: (id, url) => this.getProfileProxy(id, url),
       openSettings: (section?: string) => {
         if (!target || target.window.isDestroyed()) throw new Error('no target window')
         this.openSettingsTabIn(target, section)
@@ -6732,7 +7140,16 @@ export class ProfileManager {
         const raw = await evalInWebContents(wc, MEDIA_COLLECT_SOURCE)
         const dom = parseDomMedia(raw)
         const network = buffer ? buffer.list() : []
-        return mergeMedia([...dom, ...network])
+        const merged = mergeMedia([...dom, ...network])
+        // The gallery renders in the chrome (never proxied): for a proxied profile
+        // it gets no remote URL to preview (it shows an icon, or a captured data:
+        // frame). The url itself stays, for downloads, which use the tab's session.
+        if (!target || !this.wantsProxy(target.id)) return merged
+        return merged.map((item) => ({
+          ...item,
+          noPreview: true,
+          poster: chromeSafeImageUrl(true, item.poster) ?? undefined
+        }))
       },
       downloadMedia: async (urls, tabId) => {
         const { wc } = this.resolveMediaTab(target, tabId)
@@ -6754,7 +7171,8 @@ export class ProfileManager {
       downloadVideoUrl: async (url) => {
         // yt-dlp runs as its own process on the permalink — no tab needed. (The
         // permalink was resolved from the tab's DOM by the gallery / context menu.)
-        return this.downloadVideoUrl(url)
+        // It leaves through the target profile's proxy, or does not run.
+        return this.downloadVideoUrl(url, target?.id)
       },
       getMediaStats: () => {
         const base = target ? captureStats(target.media.values()) : { count: 0, bytes: 0 }
@@ -7292,6 +7710,7 @@ export class ProfileManager {
         if (!target) throw new Error('no target window')
         const wc = this.activeLiveContents(target)
         if (!wc) throw new Error('no active tab')
+        this.assertProxyAllows(target.id)
         wc.navigationHistory.goToIndex(index)
       },
       showNavHistoryMenu: (direction) => {
@@ -7454,10 +7873,12 @@ export class ProfileManager {
       },
       installExtension: (extensionId, profileId) => {
         const id = this.extensionProfileId(target, profileId)
+        this.assertNoStoreTraffic(id)
         return this.deps.extensions.installFromStore(this.sessionFor(id), id, extensionId)
       },
       updateExtensions: (profileId) => {
         const id = this.extensionProfileId(target, profileId)
+        this.assertNoStoreTraffic(id)
         return this.deps.extensions.update(this.sessionFor(id), id)
       },
       disableExtension: (extensionId, profileId) => {

@@ -15,6 +15,8 @@ import {
   assertProfileDeletable,
   profileOrigin,
   setProfileTerminalCwd,
+  setProfileProxy,
+  isProfileProxy,
   type Profile
 } from './profile-store'
 
@@ -387,5 +389,150 @@ describe('terminalCwd', () => {
     expect(findById(read, 'pro')?.terminalCwd).toBe('/Users/me/projects/notes')
     expect(findById(read, 'bad')).toEqual({ id: 'bad', label: 'Bad' })
     expect(findById(read, 'num')).toEqual({ id: 'num', label: 'Num' })
+  })
+})
+
+describe('isProfileProxy', () => {
+  it('accepts one socks5/http/https host:port, names and IP literals', () => {
+    for (const ok of [
+      'socks5://127.0.0.1:1080',
+      'http://proxy.example.com:3128',
+      'https://proxy.example.com:443',
+      'socks5://localhost:1',
+      'socks5://[::1]:1080',
+      'socks5://my-vps:65535'
+    ]) {
+      expect(isProfileProxy(ok), ok).toBe(true)
+    }
+  })
+
+  it('refuses anything that could change the down-proxy behavior or is malformed', () => {
+    for (const bad of [
+      '',
+      'socks5://127.0.0.1', // no port
+      '127.0.0.1:1080', // no scheme
+      'socks://127.0.0.1:1080', // ambiguous scheme
+      'socks4://127.0.0.1:1080', // resolves DNS locally: leaks lookups to the home resolver
+      'SOCKS5://127.0.0.1:1080', // uppercase
+      'direct://',
+      'quic://proxy:443',
+      'socks5://127.0.0.1:1080,direct://', // fallback list
+      'socks5://127.0.0.1:1080;DIRECT',
+      'https=socks5://127.0.0.1:1080', // per-scheme rule
+      'socks5://user:pw@127.0.0.1:1080', // userinfo
+      'socks5://127.0.0.1:1080/', // path
+      'socks5://127.0.0.1:0',
+      'socks5://127.0.0.1:01080',
+      'socks5://127.0.0.1:65536',
+      ' socks5://127.0.0.1:1080',
+      'socks5://-bad:1080',
+      42,
+      null,
+      undefined
+    ]) {
+      expect(isProfileProxy(bad), String(bad)).toBe(false)
+    }
+  })
+})
+
+describe('proxy', () => {
+  const base: Profile[] = [
+    { id: 'default', label: 'Default' },
+    { id: 'test', label: 'Test' },
+    { id: 'real', label: 'Real' }
+  ]
+
+  it('sets and clears one profile proxy, leaving the others untouched', () => {
+    const set = setProfileProxy(base, 'test', 'socks5://127.0.0.1:1080')
+    expect(findById(set, 'test')).toEqual({
+      id: 'test',
+      label: 'Test',
+      proxy: 'socks5://127.0.0.1:1080'
+    })
+    expect(findById(set, 'real')).toEqual({ id: 'real', label: 'Real' })
+    expect(findById(set, 'default')).toEqual({ id: 'default', label: 'Default' })
+    expect(findById(setProfileProxy(set, 'test', null), 'test')).toEqual({
+      id: 'test',
+      label: 'Test'
+    })
+  })
+
+  it('throws on an unknown profile, the default profile, or a malformed proxy', () => {
+    expect(() => setProfileProxy(base, 'nope', 'socks5://127.0.0.1:1080')).toThrow(
+      'unknown profile: nope'
+    )
+    expect(() => setProfileProxy(base, 'default', 'socks5://127.0.0.1:1080')).toThrow(
+      'the default profile cannot use a proxy'
+    )
+    expect(() => setProfileProxy(base, 'test', 'socks5://127.0.0.1:1080,direct://')).toThrow(
+      'invalid proxy: socks5://127.0.0.1:1080,direct://'
+    )
+    // Clearing the default profile is a harmless no-op, not an error.
+    expect(findById(setProfileProxy(base, 'default', null), 'default')).toEqual({
+      id: 'default',
+      label: 'Default'
+    })
+  })
+
+  it('survives a round trip through profiles.json', () => {
+    const read = normalizeProfiles([
+      { id: 'default', label: 'Default' },
+      { id: 'test', label: 'Test', proxy: 'socks5://127.0.0.1:1080' },
+      { id: 'plain', label: 'Plain' },
+      { id: 'nul', label: 'Nul', proxy: null }
+    ])
+    expect(findById(read, 'test')).toEqual({
+      id: 'test',
+      label: 'Test',
+      proxy: 'socks5://127.0.0.1:1080'
+    })
+    expect(findById(read, 'plain')).toEqual({ id: 'plain', label: 'Plain' })
+    // An explicit null is "no proxy", not a malformed one.
+    expect(findById(read, 'nul')).toEqual({ id: 'nul', label: 'Nul' })
+  })
+
+  it('fails CLOSED on a malformed or misplaced proxy: a marker, never a silent direct', () => {
+    const read = normalizeProfiles([
+      { id: 'default', label: 'Default', proxy: 'socks5://127.0.0.1:1080' },
+      { id: 'list', label: 'List', proxy: 'socks5://127.0.0.1:1080;DIRECT' },
+      { id: 'num', label: 'Num', proxy: 1080 },
+      { id: 's4', label: 'S4', proxy: 'socks4://127.0.0.1:1080' }
+    ])
+    expect(findById(read, 'default')).toEqual({
+      id: 'default',
+      label: 'Default',
+      proxyInvalid: 'socks5://127.0.0.1:1080'
+    })
+    expect(findById(read, 'list')).toEqual({
+      id: 'list',
+      label: 'List',
+      proxyInvalid: 'socks5://127.0.0.1:1080;DIRECT'
+    })
+    expect(findById(read, 'num')).toEqual({ id: 'num', label: 'Num', proxyInvalid: '1080' })
+    expect(findById(read, 's4')?.proxyInvalid).toBe('socks4://127.0.0.1:1080')
+    // The marker itself survives the next write/read cycle.
+    const again = normalizeProfiles(JSON.parse(JSON.stringify(read)))
+    expect(findById(again, 'list')?.proxyInvalid).toBe('socks5://127.0.0.1:1080;DIRECT')
+    expect(findById(again, 'list')?.proxy).toBeUndefined()
+  })
+
+  it('setting or clearing the proxy removes the invalid marker', () => {
+    const broken: Profile[] = [
+      { id: 'default', label: 'Default', proxyInvalid: 'x' },
+      { id: 'test', label: 'Test', proxyInvalid: 'socks5://bad' }
+    ]
+    expect(findById(setProfileProxy(broken, 'test', 'socks5://127.0.0.1:1080'), 'test')).toEqual({
+      id: 'test',
+      label: 'Test',
+      proxy: 'socks5://127.0.0.1:1080'
+    })
+    expect(findById(setProfileProxy(broken, 'test', null), 'test')).toEqual({
+      id: 'test',
+      label: 'Test'
+    })
+    expect(findById(setProfileProxy(broken, 'default', null), 'default')).toEqual({
+      id: 'default',
+      label: 'Default'
+    })
   })
 })

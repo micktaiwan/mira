@@ -37,6 +37,20 @@ export interface Profile {
   /** The absolute folder the profile's embedded terminal (the right-side pane
    * running claude) starts in. Absent = the home folder. See terminal-cwd.ts. */
   terminalCwd?: string
+  /** The proxy this profile's session exits the internet through, as Electron
+   * proxy rules limited to ONE `<scheme>://host:port` (socks5, http, https; see
+   * isProfileProxy). Absent = direct, like every other profile. Never set on the
+   * default profile (it runs on Electron's default session). Applied by
+   * profile-proxy.ts / the ProfileManager. */
+  proxy?: string
+  /** Fail-closed marker: profiles.json asked for a proxy Mira cannot honor (a
+   * malformed value, or any proxy on the default profile). Holds the raw value
+   * as text. While set, the profile loads NO web page (profile-proxy.ts gate),
+   * and a non-default profile's session is also black-holed (the default
+   * profile's session is Electron's default one, never reconfigured: the gate
+   * alone blocks it), until set-profile-proxy sets a valid proxy or clears it.
+   * Never both `proxy` and `proxyInvalid`. */
+  proxyInvalid?: string
 }
 
 /** The preset theme colors offered in Settings. Any valid hex is accepted by
@@ -57,6 +71,30 @@ export const PROFILE_COLORS = [
  * picker offers presets, but the command accepts any hex (socket / MCP). */
 export function isProfileColor(value: unknown): value is string {
   return typeof value === 'string' && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(value)
+}
+
+/** The proxy schemes a profile may use. Chromium also knows `direct://` and
+ * `quic://`, and accepts lists with a DIRECT fallback: none of that is allowed
+ * here, so a dead proxy can never silently fall back to the home connection.
+ * socks4 is refused too: Chromium resolves the hostname LOCALLY for it (SOCKS4,
+ * not 4a), so every DNS lookup would leak to the home resolver (measured:
+ * scripts/proxy-probe). */
+export const PROFILE_PROXY_SCHEMES = ['socks5', 'http', 'https'] as const
+
+// A DNS name (RFC 1123 labels), an IPv4 literal (matched by the same pattern), or
+// a bracketed IPv6 literal. No userinfo, no path, no query: one host and a port.
+const PROXY_RE =
+  /^(socks5|http|https):\/\/(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*):([1-9][0-9]{0,4})$/
+
+/** Valid profile proxy: exactly `<socks5|http|https>://<host>:<port>`,
+ * lowercase scheme, explicit port 1-65535. Strict on purpose: the value goes
+ * straight into Chromium's proxyRules, where a list, a `DIRECT` entry or a
+ * per-scheme rule would change what happens when the proxy is down. */
+export function isProfileProxy(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const m = PROXY_RE.exec(value)
+  if (!m) return false
+  return Number(m[3]) <= 65535
 }
 
 export const DEFAULT_PROFILE_ID = 'default'
@@ -83,7 +121,8 @@ export function normalizeProfiles(raw: unknown): Profile[] {
   const list = Array.isArray(raw) ? raw : []
   for (const item of list) {
     if (!item || typeof item !== 'object') continue
-    const { id, label, themeId, color, encrypted, origin, terminalCwd } = item as {
+    const { id, label, themeId, color, encrypted, origin, terminalCwd, proxy, proxyInvalid } =
+      item as {
       id?: unknown
       label?: unknown
       themeId?: unknown
@@ -91,6 +130,8 @@ export function normalizeProfiles(raw: unknown): Profile[] {
       encrypted?: unknown
       origin?: unknown
       terminalCwd?: unknown
+      proxy?: unknown
+      proxyInvalid?: unknown
     }
     if (typeof id !== 'string' || id.trim() === '') continue
     if (typeof label !== 'string' || label.trim() === '') continue
@@ -104,7 +145,8 @@ export function normalizeProfiles(raw: unknown): Profile[] {
       ...(isProfileColor(color) ? { color } : {}),
       ...(encrypted === true ? { encrypted: true } : {}),
       ...(origin === 'automation' ? { origin: 'automation' as const } : {}),
-      ...(typeof terminalCwd === 'string' && terminalCwd.startsWith('/') ? { terminalCwd } : {})
+      ...(typeof terminalCwd === 'string' && terminalCwd.startsWith('/') ? { terminalCwd } : {}),
+      ...readProxyFields(id, proxy, proxyInvalid)
     })
   }
   const def = out.find((p) => p.id === DEFAULT_PROFILE_ID) ?? {
@@ -112,6 +154,26 @@ export function normalizeProfiles(raw: unknown): Profile[] {
     label: DEFAULT_PROFILE_LABEL
   }
   return [def, ...out.filter((p) => p.id !== DEFAULT_PROFILE_ID)]
+}
+
+/** The proxy fields of one persisted profile, failing CLOSED: a proxy Mira cannot
+ * honor (malformed, or on the default profile) becomes the proxyInvalid marker,
+ * never a silent "no proxy" — the profile was meant to leave through a proxy, so
+ * it must not quietly go out direct. Absent / null / '' = no proxy. */
+function readProxyFields(
+  id: string,
+  proxy: unknown,
+  proxyInvalid: unknown
+): { proxy?: string; proxyInvalid?: string } {
+  if (proxy !== undefined && proxy !== null && proxy !== '') {
+    if (id !== DEFAULT_PROFILE_ID && isProfileProxy(proxy)) return { proxy }
+    const raw = typeof proxy === 'string' ? proxy : JSON.stringify(proxy)
+    return { proxyInvalid: raw.slice(0, 200) }
+  }
+  if (typeof proxyInvalid === 'string' && proxyInvalid !== '') {
+    return { proxyInvalid: proxyInvalid.slice(0, 200) }
+  }
+  return {}
 }
 
 export function findById(profiles: Profile[], id: string): Profile | undefined {
@@ -228,6 +290,24 @@ export function setProfileTerminalCwd(
     if (p.id !== id) return p
     const { terminalCwd: _c, ...rest } = p
     return cwd === null ? rest : { ...rest, terminalCwd: cwd }
+  })
+}
+
+/** Return a new list with profile `id`'s proxy set (a value isProfileProxy
+ * accepts) or cleared with null (back to a direct connection). Throws on unknown
+ * id, on the default profile (its session is Electron's default one, which Mira
+ * never reconfigures), or on a malformed proxy. */
+export function setProfileProxy(profiles: Profile[], id: string, proxy: string | null): Profile[] {
+  if (!findById(profiles, id)) throw new Error(`unknown profile: ${id}`)
+  if (id === DEFAULT_PROFILE_ID && proxy !== null) {
+    throw new Error('the default profile cannot use a proxy: create a separate profile for it')
+  }
+  if (proxy !== null && !isProfileProxy(proxy)) throw new Error(`invalid proxy: ${proxy}`)
+  return profiles.map((p) => {
+    if (p.id !== id) return p
+    // A valid value or a clear also lifts the fail-closed marker.
+    const { proxy: _p, proxyInvalid: _i, ...rest } = p
+    return proxy === null ? rest : { ...rest, proxy }
   })
 }
 
