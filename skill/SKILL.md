@@ -276,7 +276,11 @@ the tab's, which still reaches a frame by pixel). The click refuses a target cov
 frame, but not one whose iframe is itself covered in the parent. `type --focused` takes no
 `--frame` (it goes wherever focus is). Opening the frame's `src` in its own tab is useless: it
 renders empty or redirects to the parent (the frame token is bound to its embedder). Indexes stay
-valid while the page does not add or remove frames; re-run `mira frames` after a navigation.
+valid while the page does not add or remove frames; re-run `mira frames` after a navigation. A
+cross-origin frame shows up a moment after the page reports loaded (its process attaches late): if
+`mira frames` lists only `#0` while the DOM has an `<iframe>`, run it again a few seconds later.
+On a Google Apps Script web app the url piece `userCodeAppPanel` matches two frames (the sandbox
+and the UI inside it); the UI is the inner one, `--frame userHtmlFrame`.
 Needs a Mira build of 2026-11-05 or later (`mira commands | grep list-frames`); a tab opened
 before Mira was relaunched on that build must be reloaded once, or `--frame` answers `frames are
 not tracked on this tab`. Without such a build, read pixels: `mira shot`, `mira click --at`.
