@@ -6,6 +6,8 @@
 /** Electron accelerator strings, keyed by the action they trigger. */
 export const SHORTCUTS = {
   settings: 'CmdOrCtrl+,',
+  // Bound by the menu only: no palette row, a quit is not a command to search for.
+  quit: 'CmdOrCtrl+Q',
   commandPalette: 'CmdOrCtrl+K',
   commandPaletteShift: 'CmdOrCtrl+Shift+K',
   openLocation: 'CmdOrCtrl+L',

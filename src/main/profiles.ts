@@ -341,7 +341,7 @@ import { SessionWindowRegistry, firstUserWindow, sessionWindowProfile } from './
 import { inputReadiness, underlaysSurvive, viewShown } from './input-underlay'
 import { locationAuthStatus, requestLocationAuthorization } from './mac-location'
 import { extractionScript, type SkillSource } from './skills'
-import { allowQuitNow, suppressQuitPrompt } from './quit'
+import { allowQuitNow, noteQuitOrigin, suppressQuitPrompt } from './quit'
 import {
   type AppSettings,
   withHomeUrl,
@@ -2254,6 +2254,7 @@ export class ProfileManager {
       })
       // Not consumed above: a prevented close must leave the script-close flag in
       // place for the close that actually goes through.
+      if (closeQuitsApp) noteQuitOrigin('last-window-close')
       if (closeQuitsApp && !allowQuitNow()) {
         event.preventDefault()
         return
@@ -6864,7 +6865,7 @@ export class ProfileManager {
       // It skips the quit confirmation (see quit.ts): a modal here would hang the
       // app with the socket client already answered "ok".
       quitApp: () => {
-        suppressQuitPrompt()
+        suppressQuitPrompt('socket')
         app.quit()
       },
       appVersion: () => app.getVersion(),

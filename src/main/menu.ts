@@ -17,6 +17,8 @@ export interface AppMenuHandlers {
   /** Run an update check on demand (the App menu item). Unlike the daily check,
    * it answers even when Mira is up to date. */
   checkForUpdates: () => void
+  /** Quit Mira from the app menu (Cmd+Q or a click), through the confirmation. */
+  quit: (origin: 'cmd-q' | 'menu') => void
   /** Toggle the Cmd+K command palette in the focused window. A menu accelerator
    * (not a renderer keydown) so it fires whatever holds focus — chrome or page. */
   togglePalette: () => void
@@ -209,7 +211,16 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
       { role: 'hideOthers' },
       { role: 'unhide' },
       { type: 'separator' },
-      { role: 'quit' }
+      // Not `role: 'quit'`: a role item has no click, so the quit could not say
+      // whether Cmd+Q or a click asked for it — and a quit nobody remembers is
+      // traced from that line (quit.ts, QuitOrigin). app.quit() behind it goes
+      // through the same before-quit confirmation as the role did.
+      {
+        label: 'Quit Mira',
+        accelerator: SHORTCUTS.quit,
+        click: (_item, _window, event) =>
+          handlers.quit(event?.triggeredByAccelerator ? 'cmd-q' : 'menu')
+      }
     ]
   }
 

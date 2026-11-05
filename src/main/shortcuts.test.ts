@@ -65,10 +65,11 @@ describe('formatAccelerator', () => {
 })
 
 describe('the palette lists every menu shortcut', () => {
-  it('has a row for each shortcut the menu shows (bar Cmd+K, which opens it)', () => {
+  it('has a row for each shortcut the menu shows (bar Cmd+K, which opens it, and Cmd+Q)', () => {
     const shown = new Set(paletteShortcuts())
     const missing = menuShortcuts()
       .filter((s) => s.key !== formatAccelerator(SHORTCUTS.commandPalette))
+      .filter((s) => s.key !== formatAccelerator(SHORTCUTS.quit))
       .filter((s) => !shown.has(s.key))
     expect(missing).toEqual([])
   })

@@ -46,6 +46,8 @@ import {
   allowQuitNow,
   suppressQuitPrompt,
   quitConfirmedByUser,
+  currentQuitOrigin,
+  noteQuitOrigin,
   quitVaultStep,
   QUIT_CONFIRM
 } from './quit'
@@ -115,7 +117,10 @@ installQuitGate(
         return false
       }
     },
-    quit: () => app.quit()
+    quit: () => app.quit(),
+    // Who asked and what the dialog answered: a quit nobody remembers is traced
+    // from these two lines (QuitOrigin).
+    log: (line) => console.log(line)
   })
 )
 
@@ -218,7 +223,7 @@ app.whenReady().then(async () => {
     if (forwarded) {
       pendingUrls.length = 0
       // A boot that exists only to hand its urls over: no window, nobody to ask.
-      suppressQuitPrompt()
+      suppressQuitPrompt('url-handoff')
       app.quit()
       return
     }
@@ -566,6 +571,11 @@ app.whenReady().then(async () => {
       // result comes back in a dialog on their window, not a notification
       // (update-dialog.ts).
       checkForUpdates: () => runDetached('check-for-updates', {}, profiles.contextForMenu()),
+      // Cmd+Q / Quit Mira: name the origin, then the usual before-quit gate asks.
+      quit: (origin) => {
+        noteQuitOrigin(origin)
+        app.quit()
+      },
       // Cmd+K: toggle the command palette in the focused window, through the same
       // bus as everything else (no `open` arg → flip the current state).
       togglePalette: () => runDetached('toggle-palette', {}, profiles.contextForFocused()),
@@ -791,7 +801,7 @@ app.whenReady().then(async () => {
       return
     }
     if (resumingAfterLock) quitTimeline.mark('vaults done, quitting')
-    else quitTimeline.begin('quit confirmed')
+    else quitTimeline.begin(`quit confirmed (origin=${currentQuitOrigin()})`)
     profiles.beginQuit()
     if (step === 'proceed') return
     quitLockRunning = true
@@ -877,7 +887,7 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     // The windows are already gone: the confirmation would have nothing to save.
-    suppressQuitPrompt()
+    suppressQuitPrompt('all-windows-closed')
     app.quit()
   }
 })
@@ -900,7 +910,7 @@ const quitOnSignal = (signal: NodeJS.Signals): void => {
   console.log(`[mira] received ${signal}, quitting`)
   // A Ctrl-C in the dev terminal must kill Mira, not raise a dialog nobody asked
   // for in a window the user is not even looking at.
-  suppressQuitPrompt()
+  suppressQuitPrompt('signal')
   app.quit()
 }
 process.on('SIGINT', quitOnSignal)

@@ -593,6 +593,13 @@ before concluding.
   replaces the content of whatever field has focus, iframe included, in one call. (Mira builds
   before 2026-10-20 lack `--focused`: one `mira press <char>` per character there.) ⚠️ `mira exec` times out at 5 seconds, so a huge text is still pushed in
   chunks (see the upload recipe above).
+- **Never guess an `aria-label` or placeholder in a `querySelector`.** A guessed label (`[aria-label="Email addresses"]`)
+  returns `null` and the script dies on the next line. Read the real attribute first: one read-only
+  `exec` that returns `[...document.querySelectorAll('[contenteditable],input,textarea,[role=combobox]')].map(e => e.tagName + ' ' + (e.getAttribute('aria-label') || e.placeholder || ''))`
+  (scoped to the open `[role=dialog]`), or `mira snap`.
+- **`mira type <ref>` can refuse a `contenteditable` combobox** (a chip/tag input such as a Slack invite
+  field). Do not fall back to `execCommand`: `mira click --selector '<css of the field>'` to focus it for
+  real, then `mira type --focused <text>`, then `mira press Enter` or `,` if the field turns text into tags.
 - **A tab that is not the active one in its window has no layout at all.** `innerWidth` and
   `innerHeight` read `0x0`, so `snap` returns an empty list, `click --selector` finds nothing, and
   `shot` writes a blank or absurdly narrow PNG (measured: `413×2541` and a 12 KB solid image). This is not the "covered window" case above — the window can be perfectly visible, the

@@ -5,6 +5,8 @@ import {
   allowQuitNow,
   suppressQuitPrompt,
   resetQuitGate,
+  noteQuitOrigin,
+  currentQuitOrigin,
   quitVaultStep,
   QUIT_CONFIRM
 } from './quit'
@@ -91,7 +93,7 @@ describe('createQuitGate', () => {
   it('lets a suppressed quit through without asking (scripts, signals)', () => {
     const p = deferredPrompt()
     const gate = createQuitGate({ prompt: p.prompt, quit: () => {} })
-    gate.suppress()
+    gate.suppress('socket')
     expect(gate.allowQuit()).toBe(true)
     expect(p.calls).toBe(0)
   })
@@ -137,13 +139,13 @@ describe('the installed gate', () => {
   it('suppressQuitPrompt lets the next quit through', () => {
     const p = deferredPrompt()
     installQuitGate(createQuitGate({ prompt: p.prompt, quit: () => {} }))
-    suppressQuitPrompt()
+    suppressQuitPrompt('signal')
     expect(allowQuitNow()).toBe(true)
     expect(p.calls).toBe(0)
   })
 
   it('suppressQuitPrompt is a no-op with no gate installed', () => {
-    expect(() => suppressQuitPrompt()).not.toThrow()
+    expect(() => suppressQuitPrompt('signal')).not.toThrow()
   })
 })
 
@@ -164,7 +166,7 @@ describe('confirmedByUser', () => {
     expect(gate.confirmedByUser()).toBe(true)
 
     const scripted = createQuitGate({ prompt: p.prompt, quit: () => {} })
-    scripted.suppress()
+    scripted.suppress('socket')
     expect(scripted.confirmedByUser()).toBe(false)
   })
 })
@@ -188,5 +190,88 @@ describe('quitVaultStep', () => {
     expect(quitVaultStep({ lockRunning: false, unlocked: ['a'], failed })).toBe('proceed')
     // A vault unlocked again after a cancelled quit is still locked.
     expect(quitVaultStep({ lockRunning: false, unlocked: ['a', 'b'], failed })).toBe('lock')
+  })
+})
+
+describe('quit origin log', () => {
+  afterEach(() => resetQuitGate())
+
+  function loggedGate(): {
+    gate: ReturnType<typeof createQuitGate>
+    p: ReturnType<typeof deferredPrompt>
+    lines: string[]
+    tick: (ms: number) => void
+  } {
+    const p = deferredPrompt()
+    const lines: string[] = []
+    let t = 1000
+    const gate = createQuitGate({
+      prompt: p.prompt,
+      quit: () => {},
+      log: (l) => lines.push(l),
+      now: () => t
+    })
+    return { gate, p, lines, tick: (ms) => (t += ms) }
+  }
+
+  it('logs the noted origin when it asks, then the answer and how long it took', async () => {
+    const { gate, p, lines, tick } = loggedGate()
+    gate.noteOrigin('cmd-q')
+    gate.allowQuit()
+    tick(1400)
+    await p.answer(true)
+    expect(lines).toEqual([
+      '[mira-quit] asking (origin=cmd-q)',
+      '[mira-quit] answered quit after 1400ms'
+    ])
+    expect(gate.origin()).toBe('cmd-q')
+  })
+
+  it('calls a quit that went through none of our paths "system" (Dock, AppleScript, logout)', () => {
+    const { gate, lines } = loggedGate()
+    gate.allowQuit()
+    expect(lines[0]).toBe('[mira-quit] asking (origin=system)')
+  })
+
+  it('logs a cancel', async () => {
+    const { gate, p, lines } = loggedGate()
+    gate.noteOrigin('last-window-close')
+    gate.allowQuit()
+    await p.answer(false)
+    expect(lines[1]).toBe('[mira-quit] answered cancel after 0ms')
+  })
+
+  it('never credits a stale note to a later quit', async () => {
+    const { gate, p, lines } = loggedGate()
+    gate.noteOrigin('menu')
+    gate.allowQuit()
+    await p.answer(false)
+    gate.allowQuit()
+    expect(lines[2]).toBe('[mira-quit] asking (origin=system)')
+  })
+
+  it('logs a second request made while the dialog is up', () => {
+    const { gate, lines } = loggedGate()
+    gate.allowQuit()
+    gate.noteOrigin('cmd-q')
+    gate.allowQuit()
+    expect(lines[1]).toBe('[mira-quit] asked again while the dialog is up (origin=cmd-q)')
+  })
+
+  it('keeps the origin of a scripted quit', () => {
+    const { gate, lines } = loggedGate()
+    gate.suppress('socket')
+    expect(gate.allowQuit()).toBe(true)
+    expect(gate.origin()).toBe('socket')
+    expect(lines).toEqual([])
+  })
+
+  it('routes noteQuitOrigin / currentQuitOrigin through the installed gate', () => {
+    expect(currentQuitOrigin()).toBe('system')
+    const { gate } = loggedGate()
+    installQuitGate(gate)
+    noteQuitOrigin('menu')
+    allowQuitNow()
+    expect(currentQuitOrigin()).toBe('menu')
   })
 })

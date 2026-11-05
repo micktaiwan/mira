@@ -129,4 +129,19 @@ describe('the menu template', () => {
     }
     expect(clashes).toEqual([])
   })
+
+  it('tells Cmd+Q from a click on Quit Mira', () => {
+    const handlers = makeHandlers()
+    const item = find(appMenuTemplate(handlers), 'Quit Mira')
+    expect(item?.accelerator).toBe('CmdOrCtrl+Q')
+    const click = (triggeredByAccelerator: boolean): void =>
+      item?.click?.(
+        {} as Parameters<NonNullable<MenuItemConstructorOptions['click']>>[0],
+        undefined,
+        { triggeredByAccelerator } as unknown as KeyboardEvent
+      )
+    click(true)
+    click(false)
+    expect(vi.mocked(handlers.quit).mock.calls).toEqual([['cmd-q'], ['menu']])
+  })
 })
