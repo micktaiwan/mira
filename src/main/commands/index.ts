@@ -65,6 +65,8 @@ import { themeCommands } from './themes'
 import { toastCommands } from './toast'
 import { tooltipCommands } from './tooltip'
 import { tracingCommands } from './tracing'
+import { freezeCommands } from './freeze'
+import { framesCommands } from './frames'
 import { updateCommands } from './update'
 import { vaultCommands } from './vault'
 import { waitCommands } from './wait'
@@ -183,6 +185,8 @@ export type { Theme, ThemeInput } from '../theme-store'
 export type { ToastContext } from './toast'
 export type { TooltipContext } from './tooltip'
 export type { TracingContext } from './tracing'
+export type { FreezeContext } from './freeze'
+export type { FramesContext, UploadRequest, UploadResult } from './frames'
 export type {
   TraceStart,
   TraceConfigLike,
@@ -275,6 +279,8 @@ export function createCommandRegistry(): CommandRegistry {
     ...toastCommands,
     ...tooltipCommands,
     ...tracingCommands,
+    ...freezeCommands,
+    ...framesCommands,
     ...updateCommands,
     ...vaultCommands,
     ...waitCommands,

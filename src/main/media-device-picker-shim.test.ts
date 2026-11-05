@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   applyChosenDevices,
+  GUM_SHIM_PRELOAD_SOURCE,
   pageChoseDevices,
-  parseMediaWants
+  parseMediaWants,
+  skipsDevicePicker
 } from './media-device-picker-shim'
 
 describe('pageChoseDevices', () => {
@@ -80,5 +82,37 @@ describe('applyChosenDevices', () => {
     const orig = { video: true, audio: true }
     applyChosenDevices(orig, { video: 'cam1', audio: 'mic1' })
     expect(orig).toEqual({ video: true, audio: true })
+  })
+})
+
+describe('skipsDevicePicker', () => {
+  it('matches a listed host and its subdomains, nothing else', () => {
+    const list = ['site.test']
+    expect(skipsDevicePicker('site.test', list)).toBe(true)
+    expect(skipsDevicePicker('a.site.test', list)).toBe(true)
+    expect(skipsDevicePicker('notsite.test', list)).toBe(false)
+    expect(skipsDevicePicker('site.test', [])).toBe(false)
+  })
+})
+
+describe('GUM_SHIM_PRELOAD_SOURCE', () => {
+  function run(skip: unknown): { patched: boolean } {
+    const native = (): string => 'stream'
+    const md = { getUserMedia: native, enumerateDevices: async () => [] }
+    const electron = { ipcRenderer: { sendSync: () => skip, invoke: async () => null } }
+    new Function('require', 'navigator', 'location', GUM_SHIM_PRELOAD_SOURCE)(
+      () => electron,
+      { mediaDevices: md },
+      { hostname: 'site.test', origin: 'https://site.test' }
+    )
+    return { patched: md.getUserMedia !== native }
+  }
+
+  it('leaves getUserMedia alone when main says to skip this host', () => {
+    expect(run(true).patched).toBe(false)
+  })
+
+  it('patches getUserMedia otherwise', () => {
+    expect(run(false).patched).toBe(true)
   })
 })

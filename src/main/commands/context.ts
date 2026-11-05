@@ -57,6 +57,8 @@ import type { ThemeContext } from './themes'
 import type { ToastContext } from './toast'
 import type { TooltipContext } from './tooltip'
 import type { TracingContext } from './tracing'
+import type { FreezeContext } from './freeze'
+import type { FramesContext } from './frames'
 import type { VaultContext } from './vault'
 import type { WaitContext } from './wait'
 import type { WindowStateContext } from './window-state'
@@ -113,6 +115,8 @@ export type CommandContext = AppContext &
   ToastContext &
   TooltipContext &
   TracingContext &
+  FreezeContext &
+  FramesContext &
   UpdateContext &
   VaultContext &
   WaitContext &

@@ -13,6 +13,7 @@
 
 import type { CdpModifier } from './input-keys'
 import { parseRef, refTargetScript } from './page-snapshot/page-snapshot'
+import { parseFrameParam, type FrameSpec } from './frame-target'
 
 /** One `Input.dispatchMouseEvent` payload. Loosely mirrors the CDP shape. */
 export interface CdpMouseEvent {
@@ -44,6 +45,9 @@ export interface ParsedClick {
   scroll: boolean
   modifiers: CdpModifier[]
   tabId?: string
+  /** Frame the target lives in (list-frames); absent = top document. A point
+   * is then in that frame's own viewport coordinates. */
+  frame?: FrameSpec
 }
 
 const VALID_MODIFIERS = new Set<CdpModifier>(['alt', 'ctrl', 'meta', 'shift'])
@@ -99,8 +103,12 @@ export function parseClickParams(params: unknown): ParsedClick | { error: string
     return { error: 'invalid "modifiers" (alt|ctrl|meta|shift)' }
   }
 
+  const frame = parseFrameParam(p.frame)
+  if (frame && 'error' in frame) return frame
+
   const out: ParsedClick = { target, nth, scroll: p.scroll === true, modifiers }
   if (typeof p.tabId === 'string') out.tabId = p.tabId
+  if (frame) out.frame = frame
   return out
 }
 

@@ -74,6 +74,7 @@ import {
   type DnrModification,
   type DnrRule
 } from './extension-capabilities'
+import { patchExtensionFiles } from './extension-file-patches'
 import { ExtensionCaptureService } from './extension-capture'
 import { ExternalMessagingService } from './external-messaging-service'
 import { ExtensionCommandsService } from './extension-commands'
@@ -689,19 +690,21 @@ export class ExtensionsService {
    * (an already-stripped manifest reports no change); returns whether the
    * on-disk manifest changed. Best-effort: an unreadable dir is left alone. */
   private sanitizeExtensionDir(extPath: string): boolean {
+    let filesPatched = false
     try {
+      filesPatched = patchExtensionFiles(extPath)
       const manifestPath = join(extPath, 'manifest.json')
       const raw = readFileSync(manifestPath, 'utf8')
       const parsed = JSON.parse(raw) as Record<string, unknown>
       const { changed, manifest } = stripUnsupportedPermissions(parsed)
-      if (!changed) return false
+      if (!changed) return filesPatched
       const backupPath = join(extPath, ORIGINAL_MANIFEST_FILE)
       if (!existsSync(backupPath)) writeFileSync(backupPath, raw, 'utf8')
       writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8')
       console.log(`[mira] stripped unsupported permissions from ${extPath}`)
       return true
     } catch {
-      return false
+      return filesPatched
     }
   }
 

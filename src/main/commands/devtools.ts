@@ -11,6 +11,7 @@
 
 import { type CommandMap, fail } from './registry'
 import type { CommandContext } from './context'
+import { parseFrameParam, type FrameSpec } from '../frame-target'
 
 /** Devtools capability slice. */
 export interface DevtoolsContext {
@@ -19,8 +20,9 @@ export interface DevtoolsContext {
    * globally unique) — a socket/MCP caller can target any tab regardless of which
    * window is focused. Without one, falls back to the target window's active tab.
    * Throws on an unknown/asleep tab, or (active-tab path) when there is no active
-   * web page (empty window / Settings tab). */
-  execJsInTab: (code: string, tabId?: string) => Promise<unknown>
+   * web page (empty window / Settings tab). With a `frame`, runs in that frame
+   * of the tab (list-frames), cross-origin iframes included. */
+  execJsInTab: (code: string, tabId?: string, frame?: FrameSpec) => Promise<unknown>
   /** Toggle the DevTools inspector on the active tab's OWN webContents, opened in
    * a detached window. Returns whether DevTools are open afterwards. Throws when
    * there is no active web page (empty window / Settings tab).
@@ -43,19 +45,23 @@ export interface ExecJsParams {
   code: string
   /** Optional target tab (from list-tabs); defaults to the active tab. */
   tabId?: string
+  /** Optional frame (index or url substring from list-frames); defaults to the top document. */
+  frame?: number | string
 }
 
 export const devtoolsCommands: CommandMap<CommandContext> = {
   'exec-js': async (ctx, params) => {
-    const { code, tabId } = (params ?? {}) as Partial<ExecJsParams>
+    const { code, tabId, frame: rawFrame } = (params ?? {}) as Partial<ExecJsParams>
     if (typeof code !== 'string' || code.trim() === '') {
       return { ok: false, error: 'missing "code"' }
     }
     if (tabId !== undefined && (typeof tabId !== 'string' || tabId.trim() === '')) {
       return { ok: false, error: 'invalid "tabId"' }
     }
+    const frame = parseFrameParam(rawFrame)
+    if (frame && 'error' in frame) return { ok: false, error: frame.error }
     try {
-      const result = await ctx.execJsInTab(code, tabId)
+      const result = frame ? await ctx.execJsInTab(code, tabId, frame) : await ctx.execJsInTab(code, tabId)
       return { ok: true, result }
     } catch (error) {
       return fail(error)

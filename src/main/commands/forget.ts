@@ -32,6 +32,9 @@ export interface ForgetSiteResult {
   /** Resolves when the background wipe finishes (immediately, to zeros, when
    * there was nothing to forget). */
   done: Promise<ForgetCounts>
+  /** False when the camera picker skip list could not be wiped: known at once, and
+   * reported in the reply because a toast is dropped when the window has no focus. */
+  skipsWiped?: boolean
 }
 
 /** Forget capability slice. */
@@ -73,6 +76,9 @@ export const forgetCommands: CommandMap<CommandContext> = {
           )
         )
         .catch(() => ctx.showToast(`Failed to fully clear ${domain} — see logs.`))
+      if (result.skipsWiped === false) {
+        return { ok: false, error: `could not fully clear ${domain}: see logs` }
+      }
       return { ok: true, domain, closed: result.closed, tabId: result.tabId }
     } catch (error) {
       return fail(error)

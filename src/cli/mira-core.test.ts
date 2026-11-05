@@ -8,6 +8,8 @@ import {
   matchProfileId,
   pickTabByUrl,
   buildExec,
+  buildFreeze,
+  formatFreeze,
   buildReload,
   buildPress,
   buildCall,
@@ -977,5 +979,118 @@ describe('typePlan — by ref, or into the focused element', () => {
 
   it('--focused without text is an error', () => {
     expect(typePlan(null, [], { focused: true })).toEqual({ error: 'type --focused needs <text>' })
+  })
+})
+
+describe('mira freeze', () => {
+  it('plans a probe, an arm, and passes its options', () => {
+    expect(buildFreeze('t', { samples: '3', terminate: true })).toEqual({
+      command: 'freeze-probe',
+      params: { tabId: 't', samples: 3, terminate: true }
+    })
+    expect(buildFreeze('t', { arm: true })).toEqual({
+      command: 'arm-freeze-probe',
+      params: { tabId: 't' }
+    })
+  })
+
+  it('renders the stack, the note and the load timeline', () => {
+    const text = formatFreeze({
+      probe: {
+        responsive: false,
+        samplesTaken: 2,
+        stacks: [{ count: 2, frames: [{ functionName: 'spin', url: 'u', line: 0, column: 4 }] }],
+        snippet: 'a⟦HERE⟧b',
+        timeline: [{ atMs: 12, kind: 'script', url: 'u' }]
+      }
+    })
+    expect(text).toContain('FROZEN')
+    expect(text).toContain('stack seen 2x:')
+    expect(text).toContain('spin  u:1:5')
+    expect(text).toContain('a⟦HERE⟧b')
+    expect(text).toContain('script   u')
+  })
+
+  it('tells what to do after arming', () => {
+    expect(formatFreeze({ armed: true, alreadyArmed: false })).toContain('reload')
+  })
+})
+
+describe('frames: --frame, mira frames, upload --click', () => {
+  it('applyFrame adds the frame to page requests, as an index or a url piece', async () => {
+    const { applyFrame, buildExec, buildSnapshot } = await import('./mira-core.mjs')
+    expect(applyFrame(buildExec('1', 't'), '2')).toEqual({
+      command: 'exec-js',
+      params: { code: '1', tabId: 't', frame: 2 }
+    })
+    expect(applyFrame({ request: buildSnapshot(null) }, 'userCodeAppPanel')).toEqual({
+      request: { command: 'snapshot', params: { frame: 'userCodeAppPanel' } }
+    })
+    expect(applyFrame(buildExec('1', null), undefined)).toEqual(buildExec('1', null))
+    expect(applyFrame(buildExec('1', null), true)).toHaveProperty('error')
+    expect(applyFrame({ request: { command: 'reload', params: {} } }, '1')).toEqual({
+      error: '--frame does not apply to reload'
+    })
+    expect(applyFrame({ error: 'x' }, '1')).toEqual({ error: 'x' })
+  })
+
+  it('formatFrames indents by depth and flags cross-origin frames', async () => {
+    const { formatFrames } = await import('./mira-core.mjs')
+    expect(
+      formatFrames([
+        { index: 0, depth: 0, url: 'https://a/', ownTarget: false },
+        { index: 1, depth: 1, url: 'https://b/panel', name: 'sandboxFrame', ownTarget: true }
+      ])
+    ).toBe('#0 https://a/\n  #1 https://b/panel  name=sandboxFrame cross-origin')
+  })
+
+  it('uploadClickTarget reads a point, a ref, css or text', async () => {
+    const { uploadClickTarget } = await import('./mira-core.mjs')
+    expect(uploadClickTarget({})).toBeNull()
+    expect(uploadClickTarget({ click: '910,228' })).toEqual({ x: 910, y: 228 })
+    expect(uploadClickTarget({ click: '4' })).toEqual({ ref: 4 })
+    expect(uploadClickTarget({ click: '#add' })).toEqual({ selector: '#add' })
+    expect(uploadClickTarget({ click: 'button[aria-label=x]' })).toEqual({ selector: 'button[aria-label=x]' })
+    expect(uploadClickTarget({ click: 'Add receipt' })).toEqual({ text: 'Add receipt' })
+    expect(uploadClickTarget({ 'click-text': '#1 item' })).toEqual({ text: '#1 item' })
+    expect(uploadClickTarget({ 'click-selector': 'button' })).toEqual({ selector: 'button' })
+    expect(uploadClickTarget({ click: 'a', 'click-text': 'b' })).toHaveProperty('error')
+  })
+
+  it('buildUploadFiles builds upload-files with a click or an input, in a frame', async () => {
+    const { buildUploadFiles } = await import('./mira-core.mjs')
+    expect(
+      buildUploadFiles(['/d/r.pdf'], { click: 'Add receipt', nth: '2', frame: 'userCodeAppPanel' }, 't')
+    ).toEqual({
+      request: {
+        command: 'upload-files',
+        params: {
+          files: ['/d/r.pdf'],
+          click: { text: 'Add receipt', nth: 2 },
+          tabId: 't',
+          frame: 'userCodeAppPanel'
+        }
+      }
+    })
+    expect(buildUploadFiles(['/d/r.pdf'], { frame: '1', selector: 'input.x' }, null)).toEqual({
+      request: { command: 'upload-files', params: { files: ['/d/r.pdf'], selector: 'input.x', frame: 1 } }
+    })
+    expect(buildUploadFiles([], { click: 'x' }, null)).toHaveProperty('error')
+    expect(buildUploadFiles(['/a'], { click: 'x', selector: 'y' }, null)).toHaveProperty('error')
+  })
+
+  it('a batch line takes --frame, frames and upload --click', async () => {
+    const { buildLineRequest } = await import('./mira-core.mjs')
+    const env = { tabId: 't', cwd: '/w', home: '/h' }
+    expect(buildLineRequest(['click', '--text', 'Add receipt', '--frame', '1'], env)).toMatchObject({
+      request: { command: 'click', params: { text: 'Add receipt', frame: 1, tabId: 't' } }
+    })
+    expect(buildLineRequest(['frames'], env)).toEqual({
+      request: { command: 'list-frames', params: { tabId: 't' } }
+    })
+    expect(buildLineRequest(['upload', 'r.pdf', '--click', '#add'], env)).toMatchObject({
+      request: { command: 'upload-files', params: { files: ['/w/r.pdf'], click: { selector: '#add' } } }
+    })
+    expect(buildLineRequest(['reload', '--frame', '1'], env)).toHaveProperty('error')
   })
 })

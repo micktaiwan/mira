@@ -271,8 +271,18 @@ import {
   type WindowOpenDetails,
   type PostLoad
 } from './window-open'
+import { armFreezeProbe, runFreezeProbe, type ProbeDebugger } from './freeze-probe'
+import { wireFreezeWatchdog } from './freeze-watchdog'
 import { installHoverReporter, reduceHover, hoverText, EMPTY_HOVER, type HoverEvent } from './hover'
 import { evalInWebContents } from './cdp-eval'
+import {
+  answerFileChooser,
+  frameScope,
+  listFrames,
+  setFilesOnInput,
+  trackFrames
+} from './frame-cdp'
+import { fileInputExpression } from './frame-target'
 import { keyToDispatchEvents } from './input-keys'
 import { withMenuShortcutsIgnored } from './input-menu'
 import { clickTargetScript, interpretClickTarget, mouseDispatchEvents } from './input-mouse'
@@ -298,7 +308,11 @@ import {
   type FullScreenEpisode
 } from './html-fullscreen'
 import { decideLocationAction, locationSettingsUrl } from './geolocation'
-import { MediaDevicePickerService } from './media-device-picker-service'
+import {
+  MediaDevicePickerService,
+  pickerSkipsFor,
+  type PickerSkipStore
+} from './media-device-picker-service'
 import {
   windowSpaceLocation,
   resolveTargetSpaceId,
@@ -2946,7 +2960,7 @@ export class ProfileManager {
     // (Electron has no per-device hook, so the choice is made in-page — see
     // media-device-picker-service.ts). Once per session (guarded inside).
     this.mediaPicker ??= new MediaDevicePickerService(app.getPath('userData'))
-    this.mediaPicker.attach(ses)
+    this.mediaPicker.attach(ses, profileId)
     ses.setPermissionCheckHandler((_wc, permission, requestingOrigin) => {
       const granted = shouldGrantPermission(permission)
       if (granted) this.dataFor(profileId).recordGrant(requestingOrigin, permission)
@@ -3247,6 +3261,18 @@ export class ProfileManager {
     setActivationSuppressed(false)
   }
 
+  /** Wipe a profile's camera picker skip list. Returns false on failure: the caller
+   * finishes the rest of its wipe, then reports it. */
+  private wipePickerSkips(profileId: string, wipe: (skips: PickerSkipStore) => void): boolean {
+    try {
+      wipe(pickerSkipsFor(app.getPath('userData'), profileId))
+      return true
+    } catch (error) {
+      console.warn('[mira] camera picker skip list: wipe failed', (error as Error).name)
+      return false
+    }
+  }
+
   /** Mirror a tab's live page state (title / url / favicon) into its metadata and
    * push the refreshed strip to the chrome. */
   /** Tail a tab's web-page console into the per-tab ring buffer. Two CDP sources
@@ -3299,7 +3325,11 @@ export class ProfileManager {
 
   private wireView(initialPw: ProfileWindow, tabId: string, wc: WebContents): void {
     // Tail this tab's page console into the ring buffer (read by get-console).
+    // Frame tracking first: the console wiring's Runtime.enable / auto-attach
+    // replies are what announce the frames that already exist (frame-cdp.ts).
+    trackFrames(wc)
     this.wirePageConsole(tabId, wc)
+    wireFreezeWatchdog(wc, () => this.mediaPicker?.skipsForSession(wc.session) ?? null)
     // Resolve the window that OWNS this tab at event time, not the one it was born
     // in: a torn-off tab keeps these handlers but now lives in another window (see
     // detach-tab / ownerOf). Falls back to the birth window while the strip is
@@ -7036,8 +7066,12 @@ export class ProfileManager {
         const origin = new URL(url).origin
         // Close now for instant feedback; wipe detached (never awaited by the UI).
         this.closeTabIn(target, activeId, 'neighbor', 'forget-domain')
-        const done = this.forgetDomainData(sess, pdata, domain, origin)
-        return { domain, closed: true, tabId: activeId, done }
+        const skipsWiped = this.wipePickerSkips(target.id, (s) => s.forgetDomain(domain))
+        const done = this.forgetDomainData(sess, pdata, domain, origin).then((counts) => {
+          if (!skipsWiped) throw new Error('camera picker skip list not wiped')
+          return counts
+        })
+        return { domain, closed: true, tabId: activeId, done, skipsWiped }
       },
       forgetDomain: async (domainInput, profileId) => {
         // Tab-independent, UI-independent: wipe a registrable domain in a profile.
@@ -7055,9 +7089,17 @@ export class ProfileManager {
         if (domain === '') return { domain: null, cookiesRemoved: 0, historyRemoved: 0 }
         const id =
           profileId ?? (target && !target.window.isDestroyed() ? target.id : DEFAULT_PROFILE_ID)
+        // Checked first: the id ends up in a path, and a locked profile's data is in its
+        // vault, out of reach, so an ok here would be a lie.
+        const profile = findById(this.profiles, id)
+        if (!profile && id !== DEFAULT_PROFILE_ID) throw new Error(`unknown profile: ${id}`)
+        if (profile?.encrypted && (!this.unlockedVaults.has(id) || this.vaultLocksInFlight.has(id)))
+          throw new Error(`profile is locked: unlock it first (unlock-profile)`)
         const sess = this.sessionFor(id)
         const pdata = this.dataFor(id)
+        const skipsWiped = this.wipePickerSkips(id, (s) => s.forgetDomain(domain))
         const { cookiesRemoved, historyRemoved } = await this.forgetDomainData(sess, pdata, domain)
+        if (!skipsWiped) throw new Error('camera picker skip list not wiped')
         return { domain, cookiesRemoved, historyRemoved }
       },
       getSpacesState: () => {
@@ -7248,7 +7290,13 @@ export class ProfileManager {
         // background; the command returns once queued (toastSeq guards a stale one).
         void showToast(target, message)
       },
-      execJsInTab: async (code, tabId) => {
+      execJsInTab: async (code, tabId, frame) => {
+        // A named frame (cross-origin iframes included) goes through CDP
+        // sessions/contexts; the top document keeps the path below.
+        if (frame) {
+          const scope = await frameScope(this.webContentsForTab(target, tabId), frame)
+          return scope.evaluate(code)
+        }
         // Reach the tab's OWN webContents and run in the page's world, so it sees
         // the site exactly as the site does (same session, same DOM).
         if (tabId) {
@@ -7329,12 +7377,14 @@ export class ProfileManager {
         }
         // A named target is resolved INSIDE the page, so the coordinates are the
         // page's own truth about where the element sits at this instant.
+        // A named frame: resolve (and measure) inside it, then shift the point
+        // by where that frame sits in the top viewport (frame-cdp.ts).
+        const scope = await frameScope(wc, click.frame)
         let point = { x: 0, y: 0, label: 'point' }
         if (click.target.kind === 'point') {
           point = { x: click.target.x, y: click.target.y, label: 'point' }
         } else {
-          const raw = await evalInWebContents(
-            wc,
+          const raw = await scope.evaluate(
             clickTargetScript(click.target, { nth: click.nth, scroll: click.scroll })
           )
           const resolved = interpretClickTarget(raw)
@@ -7346,15 +7396,13 @@ export class ProfileManager {
           if (click.scroll) {
             await new Promise((r) => setTimeout(r, 250))
             const again = interpretClickTarget(
-              await evalInWebContents(
-                wc,
-                clickTargetScript(click.target, { nth: click.nth, scroll: false })
-              )
+              await scope.evaluate(clickTargetScript(click.target, { nth: click.nth, scroll: false }))
             )
             if ('error' in again) throw new Error(again.error)
             point = again
           }
         }
+        if (scope.frame) point = { ...(await scope.toTop(point)), label: point.label + scope.label }
         const events = mouseDispatchEvents(point.x, point.y, { modifiers: click.modifiers })
         const dbg = wc.debugger
         const wasAttached = dbg.isAttached()
@@ -7369,7 +7417,7 @@ export class ProfileManager {
         }
         return { x: Math.round(point.x), y: Math.round(point.y), target: point.label }
       },
-      typeInTab: async (ref, text, tabId) => {
+      typeInTab: async (ref, text, tabId, frame) => {
         // Jev's typing, on clickInTab's mechanics: click the field for real (so
         // focus handlers and comboboxes wake up), select what is there, then
         // insert the text through CDP, which fires the input events frameworks
@@ -7384,11 +7432,14 @@ export class ProfileManager {
         }
         // A null ref types into the element that already has focus (no click):
         // the way into a cross-origin iframe, which the snapshot cannot see.
+        const scope = await frameScope(wc, frame)
+        const found =
+          ref === null ? null : interpretClickTarget(await scope.evaluate(refTargetScript(ref, 'type')))
+        if (found && 'error' in found) throw new Error(found.error)
         const point =
-          ref === null
-            ? null
-            : interpretClickTarget(await evalInWebContents(wc, refTargetScript(ref, 'type')))
-        if (point && 'error' in point) throw new Error(point.error)
+          found && scope.frame
+            ? { ...(await scope.toTop(found)), label: found.label + scope.label }
+            : found
         const selectAll = { key: 'a', code: 'KeyA', modifiers: 4 }
         const dbg = wc.debugger
         const wasAttached = dbg.isAttached()
@@ -7416,20 +7467,54 @@ export class ProfileManager {
         }
         return { target: point ? point.label : 'focused element' }
       },
-      waitInTab: async (condition, tabId, timeoutMs) => {
+      waitInTab: async (condition, tabId, timeoutMs, frame) => {
         // Poll the condition in the page. Each probe is its own short evaluation:
         // a single long `await` inside the page would die at exec-js's 5 s cap
         // (cdp-eval.ts), no matter what timeout the caller asked for.
         const wc = this.webContentsForTab(target, tabId)
         const script = waitProbeScript(condition)
         const outcome = await pollUntil({
-          probe: async () => (await evalInWebContents(wc, script)) === true,
+          // A frame is re-resolved on every probe: the one being waited for may
+          // not exist yet, or be replaced by a navigation inside it.
+          probe: async () =>
+            (await (frame ? (await frameScope(wc, frame)).evaluate(script) : evalInWebContents(wc, script))) === true,
           timeoutMs
         })
         if (!outcome.ok) {
           throw new Error(waitTimeoutMessage(condition, outcome.waitedMs, outcome.lastError))
         }
         return { waitedMs: outcome.waitedMs }
+      },
+      listFramesInTab: async (tabId) => listFrames(this.webContentsForTab(target, tabId)),
+      uploadFilesInTab: async (req) => {
+        // Two ways in (commands/frames.ts): straight onto an <input type=file>
+        // with DOM.setFileInputFiles, or a real click whose native file chooser
+        // is intercepted and answered — no macOS dialog either way.
+        const wc = this.webContentsForTab(target, req.tabId)
+        const scope = await frameScope(wc, req.frame)
+        const frameIndex = scope.frame?.index ?? 0
+        const names = req.files.map((f) => f.split('/').pop() ?? f)
+        if (req.input) {
+          await setFilesOnInput(
+            wc,
+            scope.frame,
+            fileInputExpression(req.input.selector, req.input.nth),
+            req.files
+          )
+          return { files: names, via: 'input', target: req.input.selector + scope.label, frame: frameIndex }
+        }
+        const click = req.click!
+        let clicked = ''
+        await answerFileChooser(
+          wc,
+          req.files,
+          async () => {
+            const r = await this.makeContext(target, origin).clickInTab(click)
+            clicked = r.target
+          },
+          req.timeoutMs
+        )
+        return { files: names, via: 'chooser', target: clicked, frame: frameIndex }
       },
       toggleDevToolsInActiveTab: () => {
         // The active tab's inspector, docked on the right into a host view we
@@ -7783,7 +7868,13 @@ export class ProfileManager {
       },
       listHistory: (limit) => profileData().listHistory(limit),
       searchHistory: (query, limit) => profileData().searchHistory(query, limit),
-      clearHistory: () => profileData().clearHistory(),
+      clearHistory: () => {
+        // These hosts say where the user went, so they go with the history.
+        const skipsWiped = !target || this.wipePickerSkips(target.id, (s) => s.clear())
+        const cleared = profileData().clearHistory()
+        if (!skipsWiped) throw new Error('camera picker skip list not wiped')
+        return cleared
+      },
       listPermissions: () => profileData().listPermissions(),
       clearPermissions: () => profileData().clearPermissions(),
       openLocationSettings: () => this.openLocationSettings(),
@@ -7900,6 +7991,17 @@ export class ProfileManager {
         if (!profileId) throw new Error('no target window')
         return this.deps.extensions.serviceWorkerConsole(this.sessionFor(profileId), query)
       },
+      listPickerSkips: () =>
+        pickerSkipsFor(app.getPath('userData'), target?.id ?? DEFAULT_PROFILE_ID).list(),
+      forgetPickerSkip: (host) =>
+        pickerSkipsFor(app.getPath('userData'), target?.id ?? DEFAULT_PROFILE_ID).forget(host),
+      armFreezeProbe: (tabId) =>
+        armFreezeProbe(this.webContentsForTab(target, tabId).debugger as unknown as ProbeDebugger),
+      runFreezeProbe: (tabId, opts) =>
+        runFreezeProbe(
+          this.webContentsForTab(target, tabId).debugger as unknown as ProbeDebugger,
+          opts
+        ),
       readPageConsole: (query) => {
         const { tabId, ...rest } = query
         if (tabId !== undefined) {

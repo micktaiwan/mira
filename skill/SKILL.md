@@ -51,6 +51,8 @@ mira close-window --params '{"windowId":"<id>"}'  # close ONE window (no id: the
 eval "$(mira use --url <substr>)"      # pin a tab → export MIRA_TAB=<uuid> (also: use <id>, use --active)
 mira exec "document.title"             # exec-js in the pinned tab (or the active one if nothing is pinned)
                                        # prints {"ok":true,"result":…}: a shell `case *true*` matches "ok":true
+                                       # Calls share the page's context: a top-level `const d=…` in a second call fails
+                                       # "Identifier 'd' has already been declared". Always wrap in `(()=>{…})()`.
 mira exec --bare "!!document.querySelector('x')"   # the result alone (exit 1 on failure): use it in shell tests
 mira exec --out /tmp/x.json "JSON.stringify(rows)"  # write the result alone to a file; prints the path + size.
                                        # A plain `> file` captures the ENVELOPE, whose `result` is a second
@@ -66,6 +68,9 @@ mira press e --mod meta,shift          # a REAL keystroke (CDP, isTrusted) — f
 mira click --text 'Settings'           # a REAL mouse click (CDP) — also --selector <css>, --at x,y, --nth n, --scroll
 mira snap                              # the page as a numbered list of what you can act on + its visible text
 mira click 12                          # click element [12] of the last snap
+mira frames                            # the tab's iframes, numbered (#0 = top), cross-origin ones included
+mira exec "…" --frame 1                # --frame <n|url piece> on exec/snap/click/type/select/wait/upload
+mira upload r.pdf --click "Add receipt" --frame 1   # click + answer the native file chooser, no dialog
 mira type 3 London                     # replace the text of field [3] of the last snap
 mira select 2 Business                 # pick option "Business" of dropdown [2] (--value <v>: by value)
 mira wait --selector '[role=dialog]'   # wait for it to appear instead of sleeping (--text, --url, --host, --gone, --timeout ms)
@@ -134,6 +139,10 @@ creates the session window anyway. **stdout is a JSON line, not a bare id**
 `TAB=$(mira open <url> -b | python3 -c 'import json,sys; print(json.loads(sys.stdin.read().strip().splitlines()[-1])["id"])')`. A session window is only created when the profile has no window
 open. In-place `nav` still goes to the session window, so it never overwrites the user's active tab.
 The reason: one more window per session multiplies windows for nothing.
+- **Never silence that call** (`mira open … 2>/dev/null`): every targeting failure — several windows
+  or profiles open, no window to use — is printed on **stderr** and is the answer, while stdout stays
+  empty and the pipeline dies with `IndexError: list index out of range`, which reads like a broken
+  script instead of a refusal. Read the refusal, then name the target; see the recipes below.
 
 - **Several profiles open and no `--profile` on the first call: refused**, never guessed (same
   rule as below). A session that already has a window in two profiles must name one too.
@@ -234,21 +243,43 @@ in ONE `mira batch` (milliseconds apart, so the timer does not tick between them
 submit through `mira exec` (`input.value = …; input.form.requestSubmit()`), which worked on a plain
 server-rendered form.
 
-What snap does not see: elements inside iframes or shadow DOM, canvas apps, password and file
+What snap does not see: elements inside shadow DOM, canvas apps, password and file
 fields, and text below the fold (scroll, then snap again). For those, fall back to
-`mira click --selector/--text` and `mira exec`.
+`mira click --selector/--text` and `mira exec`. An iframe is not in the top snap either: snap
+the frame itself with `--frame` (next paragraph).
 
 **Never read an input's value to check that the text landed.** Returning `input.value`, or even
 its length, gets the call refused by a safety check, and the refusal looks like a Mira failure
 while the typing worked. Ask a boolean question instead (`!!input.value`), or read a control that
 changes once the field is filled (the submit button becoming enabled).
 
-**Reading a page whose content lives in a cross-origin iframe** (a hosted artifact or embed: the
-top document's `innerText` holds only the header): `mira exec` cannot reach into the frame, and
-opening the frame's `src` in its own tab usually redirects back to the parent page (the frame
-token is bound to its embedder). What works is reading pixels: `mira click --at <x,y>` on an
-empty spot of the frame to focus it, `mira press Home`, then `mira shot` and `mira press PageDown`
-in a loop until two consecutive shots have the same `md5`, and read the PNGs.
+**A page whose content lives in an iframe, cross-origin included** (a Google Apps Script web app
+renders everything in `iframe#sandboxFrame` on `*.googleusercontent.com`; a hosted artifact, an
+embed, a login provider's modal): the top document's `innerText` holds only the header and
+`click --text` answers `none visible`. **`mira frames`** lists every frame of the tab, nested ones
+included, numbered depth-first (`#0` = the top document, `cross-origin` marks a frame in its own
+process). Then **`--frame <n|url-substring>`** on `exec`, `snap`, `click` (`--text`, `--selector`,
+ref), `type <ref>`, `select`, `wait` and `upload` acts inside that frame: an index from `mira
+frames`, or a piece of the frame's url or its exact `name` (refused with the candidates when
+several match: take the index then).
+
+```bash
+mira frames
+mira exec "document.body.innerText" --frame userCodeAppPanel
+mira snap --frame 1                      # refs of a frame snap are used with the same --frame
+mira click --text "Add receipt" --frame 1
+mira wait --text "Uploaded" --frame 1
+```
+
+Limits: `--at x,y` with `--frame` is in the frame's own viewport coordinates (without `--frame`,
+the tab's, which still reaches a frame by pixel). The click refuses a target covered INSIDE its
+frame, but not one whose iframe is itself covered in the parent. `type --focused` takes no
+`--frame` (it goes wherever focus is). Opening the frame's `src` in its own tab is useless: it
+renders empty or redirects to the parent (the frame token is bound to its embedder). Indexes stay
+valid while the page does not add or remove frames; re-run `mira frames` after a navigation.
+Needs a Mira build of 2026-11-05 or later (`mira commands | grep list-frames`); a tab opened
+before Mira was relaunched on that build must be reloaded once, or `--frame` answers `frames are
+not tracked on this tab`. Without such a build, read pixels: `mira shot`, `mira click --at`.
 
 `mira wait` replaces `sleep`. A `sleep 3` is too long when the page is already ready, and too short
 when it is not — and that second case does not read as "too early", it reads as "the element does
@@ -287,6 +318,34 @@ is: `Mira is responsive … this command itself was slow` (wait, or retry with a
 through, `sample <pid> 3` shows where it is stuck, and only killing the process recovers it, which is
 the user's call (ask first). `Mira closed the connection without answering` means it quit or
 crashed mid-request.
+`Mira is responsive` after a timeout on `exec --tab <id>` can also mean that tab's page is stuck in
+a JS loop (its renderer never answers, Mira itself is fine): do not retry `exec` on it, check
+another tab still answers (`mira tabs`), and run `mira freeze --tab <id>`.
+
+**`mira freeze` names the code that holds a stuck page** (needs the 2026-10-31 code: if `mira commands` has no `freeze-probe`, the running build predates it):
+
+```bash
+mira freeze --tab <id> --arm     # while the page still answers: enable the debugger + load recorder
+mira reload --tab <id>           # then replay what freezes
+mira freeze --tab <id>           # FROZEN or answers, the stacks most seen first, the source around the
+                                 # top frame, and what loaded and when (--samples n, default 5)
+mira freeze --tab <id> --terminate  # also abort the running script: frees the page without closing it
+```
+
+Arm first: `Debugger.enable` cannot reach a blocked main thread, so an unarmed frozen page only reports
+`FROZEN` and why there is no stack, and `--arm` fails with `Debugger.enable timed out`. Arming is off by
+default because it keeps the debugger enabled on that tab until it is closed, **and it can cause the very
+freeze you are looking at**: a third-party module froze under an armed probe and loaded fine unarmed. So a stack from
+an armed page says where the code spins, not why; compare with an unarmed run (a page that sends heartbeats
+to a local server needs no debugger) before blaming anything. Whether Mira itself is the
+cause is a separate question: run the same page in a bare Electron and in a real Chrome window (headless
+Chrome is not a control: it froze on the same module).
+
+Mira also recovers such a page by itself: when a page stops answering on a busy renderer within a minute
+of a navigation (about 30 s frozen), a watchdog takes the camera picker's patch off that host and reloads
+once, which loses what the page held; if it freezes again the host is released for good. A tab armed with
+`mira freeze --arm` is left alone. `mira call list-picker-skips` shows the target profile's hosts (stored in that profile's folder, wiped by `forget` and `clear-history`), `mira call forget-picker-skip
+--params '{"host":"<host>"}'` gives one its picker back.
 
 ## One profile per identity — resolve the profile BEFORE opening
 
@@ -369,7 +428,23 @@ collapses.
 An *Upload* button opens a **native** file picker that nothing drives from the page. So do not let
 it open: **intercept** the `<input type=file>` beforehand, and hand it the file yourself.
 
-**First try `mira upload <file>... [--selector <css>] [--nth <n>]`.** It does step 2 below for you:
+**A button that opens the native file chooser, in any frame: `mira upload <file>... --click
+<target> [--frame <f>]`.** Mira switches on Chromium's file-chooser interception (CDP
+`Page.setInterceptFileChooserDialog`) in every frame of the tab, really clicks the target, catches
+the chooser it opens and hands it the files (`DOM.setFileInputFiles`): no macOS dialog, the page
+gets a genuine `change` with the real `File`s, and Chromium reads the files from disk (no size
+limit, nothing through the socket). `<target>` is `x,y`, a snap ref, something that reads as css
+(`#id`, `.cls`, `[attr]`, `tag[…]`) or visible text; `--click-text` / `--click-selector` say which;
+`--nth` picks among matches. It answers `<files> -> <what it clicked> (file chooser answered)`,
+or fails with `no file chooser opened within 5000ms after the click` (`--timeout <ms>`) when the
+click opened something else, a modal with its own button for instance: `mira snap --frame` it and
+click on. `mira upload <file> --frame <f> [--selector <css>] [--nth n]` takes the same CDP path
+onto an `<input type=file>` already in the DOM of that frame. A chooser that takes one file
+refuses several. ⚠️ **Never `mira click` an upload button bare**: without the interception the
+real macOS file dialog opens on the user's screen, and nothing on the CLI side can close it (it is
+out of process, invisible to accessibility). Same build requirement as `--frame` above.
+
+**On the top document without a click: `mira upload <file>... [--selector <css>] [--nth <n>]`.** It does step 2 below for you:
 base64 in chunks (so a big file passes the exec timeout), `File` with the right name and MIME type,
 `DataTransfer`, `input` + `change` events, and the React `onChange` fallback. It prints the names
 and sizes the input now holds, and fails with the number of matches when the selector finds no
@@ -429,6 +504,13 @@ before concluding.
 
 ## Traps
 
+- **A script that clicks must report the page when it cannot find its target.** Returning a bare
+  `'no <label> button'` hides whether the page already moved on (a multi-step form can advance on its
+  own, or after the first field), and a run that is gated or one-shot is then spent on a blind guess.
+  Find the control by normalized text (`textContent.replace(/\s+/g, ' ').trim()`, `includes`) or by
+  `button[type=submit]`, and in the not-found branch return `location.href` plus the first 600 characters
+  of `document.body.innerText` and the visible button labels. Read the form first (`mira snap`, or one
+  read-only `exec`) to learn the step you are on before scripting a click.
 - **`click --text` reads visible text only.** An icon-only button carries its name in `aria-label`
   or `title`, so `click --text 'Toggle comments'` answers `no match` while the control sits right
   there: use `click --selector "button[aria-label='Toggle comments']"`. `snap` lists such a button
@@ -479,6 +561,14 @@ before concluding.
   `slice()`. Cutting "to be safe" creates a false need for a patch (a second script to fetch the
   end), doubles the calls and misses content. Only split if the page is truly huge, and say so
   explicitly.
+- **A virtualized page is the exception: one `innerText` returns only the rendered blocks.** Notion
+  (public `*.notion.site` pages included) unmounts blocks outside the viewport, so a single
+  `document.body.innerText` holds the visible slice, not the page, and two reads taken at different
+  scroll positions differ (a `diff` of them exits 1 for that reason, not because a read failed). Tell:
+  the text ends mid-page, or a second read returns other blocks. Scroll step by step
+  (`window.scrollBy(0, innerHeight)` or the page's own scroller, a `div` with `overflow: auto`, since
+  `window` may not be the one that moves), collect the text after each step into one array keyed by
+  block, and dedupe on the overlap. Never conclude "the page ends here" from one read.
 - **Type text into a field with `mira type <ref> <text>` (after a `mira snap`), not N `press`
   calls.** A 250-character sentence is 250 round trips with `press`, several minutes; `type` is one
   call that clicks the field for real, selects what is there and inserts the text through CDP.
@@ -493,8 +583,8 @@ before concluding.
   empty, with no error. To replace the content rather than append, `t.select()` before inserting.
   `execCommand` returns `false` when the field is not really focused — the signal to click it
   first, not to retry. ⚠️ **In a cross-origin iframe, `execCommand` stays `false` even after the
-  click**: `mira exec` runs in the top document, which cannot reach the iframe (`click --text` then
-  answers `no match` too). Seen on a login provider's 2FA modal. What works: `mira shot`, read the
+  click** when `mira exec` runs in the top document. Seen on a login provider's 2FA modal. On a
+  build with frames: `mira snap --frame <f>` then `mira type <ref> <text> --frame <f>`. Otherwise: `mira shot`, read the
   coordinates, `mira click --at <x,y>` (screenshot pixels), then `mira type --focused <text>`: it
   replaces the content of whatever field has focus, iframe included, in one call. (Mira builds
   before 2026-10-20 lack `--focused`: one `mira press <char>` per character there.) ⚠️ `mira exec` times out at 5 seconds, so a huge text is still pushed in

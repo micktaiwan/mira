@@ -40,6 +40,15 @@
 //   mira upload <file>... [--selector <css>] [--nth <n>]   put local files into the page's <input type=file>
 //                                   (no native picker; chunked so big files pass the exec timeout;
 //                                    default selector input[type=file], --nth picks among matches)
+//   mira upload <file>... --click <target> [--frame f]   click a button that opens the native file
+//                                   chooser and answer it with the files (CDP interception: no dialog).
+//                                   <target>: x,y | snap ref | css (#id .cls [attr] tag[..]) | text;
+//                                   --click-text / --click-selector to say which. --timeout <ms> (5000)
+//   mira upload <file>... --frame f [--selector <css>]   same CDP path onto an <input type=file> in a frame
+//   mira frames                     every frame of the tab, numbered (#0 = top), cross-origin ones included
+//   --frame <n|url-substring>       on exec / snap / click / type / select / wait / upload: act inside
+//                                   that iframe (index from `mira frames`, or a piece of its url / its name;
+//                                   --at x,y is then in the frame's own coordinates)
 //   mira press <key> [--mod a,b]    send a real keypress (e.g. e, Enter, ArrowDown)
 //   mira click --selector <css>|--text <str>|--at <x,y>   a REAL mouse click (CDP), not a synthetic MouseEvent
 //                                   (--nth <n>: pick among several matches, 1-based; --scroll: scroll it in view first)
@@ -58,6 +67,7 @@
 //                                    stops at the first failure unless --keep-going)
 //   mira reload                     reload the pinned or active tab (on the error page: retries the url that failed)
 //   mira console [--level e][--limit n][--since seq]  captured page console, iframes included (console.* + 403/CORS/CSP/exceptions)
+//   mira freeze [--arm][--samples n][--terminate]  which code holds a stuck page; --arm first, while it answers, then reload
 //   mira shot [path] [--full]       screenshot the pinned/active tab to a PNG (default: userData/screenshots/)
 //                                   (--full: the whole document, not just the viewport)
 //   mira nav <url> [--new-tab|-n]   navigate the pinned/active tab in place (--new-tab: open a fresh tab instead)
@@ -119,10 +129,12 @@ import {
   buildFocus,
   buildActivateTab,
   buildConsole,
+  buildFreeze,
   buildScreenshot,
   formatScreenshot,
   formatTabs,
   formatConsole,
+  formatFreeze,
   formatWindows,
   formatProfiles,
   formatFocus,
@@ -142,6 +154,10 @@ import {
   buildBatch,
   formatBatchResults,
   buildUploadScripts,
+  buildUploadFiles,
+  applyFrame,
+  buildFrames,
+  formatFrames,
   timeoutMessage,
   socketPathError,
   parseCliVersion,
@@ -651,6 +667,9 @@ async function main() {
         readFile: (p) => readFileSync(p, 'utf8')
       })
       if ('error' in cr) return die(cr.error, 2)
+      // --frame: run in that iframe (`mira frames`), cross-origin ones included.
+      const execReq = applyFrame(buildExec(cr.code, tabId), flags.frame)
+      if ('error' in execReq) return die(execReq.error, 2)
       // --out <file>: hand the result to the NEXT tool, bare. Without it the file a
       // redirect captures is the {"ok","result"} envelope, whose `result` is one
       // JSON string inside another — and a python script that iterates it throws
@@ -661,7 +680,7 @@ async function main() {
       // which read as "mira wrote nothing" (2026-10-30).
       if (typeof flags.out === 'string') {
         const outPath = resolve(flags.out)
-        return call(buildExec(cr.code, tabId), socketPath, timeoutMs)
+        return call(execReq, socketPath, timeoutMs)
           .then((res) => {
             if (!res.ok) return report(res, { json })
             const body = execOutBody(res.result)
@@ -685,14 +704,30 @@ async function main() {
       }
       // Default stays the {"ok","result"} envelope (scripts parse it). --bare
       // prints the result alone, so a shell test on `true` cannot match `"ok":true`.
-      if (flags.bare !== true) return send(buildExec(cr.code, tabId), { json })
-      return send(buildExec(cr.code, tabId), {
+      if (flags.bare !== true) return send(execReq, { json })
+      return send(execReq, {
         json,
         pretty: (r) => (typeof r.result === 'string' ? r.result : JSON.stringify(r.result ?? null))
       })
     }
 
     case 'upload': {
+      // --frame / --click: the CDP path (upload-files). Chromium reads the files
+      // from disk, any frame is reachable, and a button that opens the native
+      // file chooser is clicked for real and the chooser answered.
+      if (
+        flags.frame !== undefined ||
+        flags.click !== undefined ||
+        flags['click-text'] !== undefined ||
+        flags['click-selector'] !== undefined
+      ) {
+        const built = buildUploadFiles(positionals.map((p) => resolve(p)), flags, tabId)
+        if ('error' in built) return die(built.error, 2)
+        return send(built.request, {
+          json,
+          pretty: (r) => `${(r.files ?? []).join(', ')} -> ${r.target} (${r.via === 'chooser' ? 'file chooser answered' : 'input set'})`
+        })
+      }
       const files = []
       for (const p of positionals) {
         try {
@@ -718,13 +753,16 @@ async function main() {
       // A real CDP mouse click. The target is resolved INSIDE the page (css
       // selector / visible text / raw viewport coordinates), then clicked at its
       // centre — no hand-built MouseEvent, which real apps ignore anyway.
-      const built = buildClick(tabId, {
-        selector: flags.selector,
-        text: flags.text,
-        ...clickPositional(flags, positionals),
-        nth: flags.nth,
-        scroll: flags.scroll === true
-      })
+      const built = applyFrame(
+        buildClick(tabId, {
+          selector: flags.selector,
+          text: flags.text,
+          ...clickPositional(flags, positionals),
+          nth: flags.nth,
+          scroll: flags.scroll === true
+        }),
+        flags.frame
+      )
       if ('error' in built) return die(built.error, 2)
       return send(built.request, {
         json,
@@ -733,23 +771,34 @@ async function main() {
     }
 
     case 'snap':
-    case 'snapshot':
+    case 'snapshot': {
       // The page as a numbered table of what it lets you do, plus its visible
       // text. The numbers are refs for `click <ref>`, `type`, `select`; any of
       // them is refused once the page moved, so snap again after each action.
-      return send(buildSnapshot(tabId), { json, pretty: (r) => formatSnapshot(r) })
+      const req = applyFrame(buildSnapshot(tabId), flags.frame)
+      if ('error' in req) return die(req.error, 2)
+      return send(req, { json, pretty: (r) => formatSnapshot(r) })
+    }
+
+    case 'frames':
+      // Every frame of the tab, numbered: the index (or a piece of the url) is
+      // what --frame takes on exec / snap / click / type / select / wait / upload.
+      return send(buildFrames(tabId), { json, pretty: (r) => formatFrames(r.frames) })
 
     case 'type': {
-      const built = typePlan(tabId, positionals, flags)
+      const built = applyFrame(typePlan(tabId, positionals, flags), flags.frame)
       if ('error' in built) return die(built.error, 2)
       return send(built.request, { json, pretty: (r) => `typed into ${r.target}` })
     }
 
     case 'select': {
-      const built = buildSelect(tabId, positionals[0], {
-        label: positionals.slice(1).join(' ') || flags.label,
-        value: flags.value
-      })
+      const built = applyFrame(
+        buildSelect(tabId, positionals[0], {
+          label: positionals.slice(1).join(' ') || flags.label,
+          value: flags.value
+        }),
+        flags.frame
+      )
       if ('error' in built) return die(built.error, 2)
       return send(built.request, {
         json,
@@ -759,14 +808,17 @@ async function main() {
 
     case 'wait': {
       // Block until a condition holds in the page, instead of sleeping blind.
-      const built = buildWait(tabId, {
-        selector: flags.selector,
-        text: flags.text,
-        url: flags.url,
-        host: flags.host,
-        gone: flags.gone === true,
-        timeout: flags.timeout
-      })
+      const built = applyFrame(
+        buildWait(tabId, {
+          selector: flags.selector,
+          text: flags.text,
+          url: flags.url,
+          host: flags.host,
+          gone: flags.gone === true,
+          timeout: flags.timeout
+        }),
+        flags.frame
+      )
       if ('error' in built) return die(built.error, 2)
       return send(built.request, { json, pretty: (r) => `${r.condition} after ${r.waitedMs}ms` })
     }
@@ -856,6 +908,9 @@ async function main() {
           pretty: (r) => formatConsole(r.messages)
         }
       )
+
+    case 'freeze':
+      return send(buildFreeze(tabId, flags), { json, pretty: (r) => formatFreeze(r) })
 
     case 'windows':
       return send({ command: 'list-windows' }, { json, pretty: (r) => formatWindows(r.windows) })

@@ -17,6 +17,8 @@ import type {
 } from '.'
 import { buildTabMemoryReport, selectServiceWorkerLogs } from '.'
 import { waitTimeoutMessage, type WaitCondition } from '../wait'
+import type { FrameSpec } from '../frame-target'
+import type { UploadRequest } from './frames'
 
 /** How a click target reads back in the fake's answer (the real one reports the
  * element it actually hit; here the request is all there is). */
@@ -224,15 +226,17 @@ export interface FakeContext {
   /** Cookies set per profile id via cookieJarForProfile (import spy). */
   cookiesSet: Map<string, CookieSetDetails[]>
   /** Code + target passed to execJsInTab (exec-js spy); tabId null = active tab. */
-  execJs: Array<{ code: string; tabId: string | null }>
+  execJs: Array<{ code: string; tabId: string | null; frame?: FrameSpec }>
+  /** Every upload passed to uploadFilesInTab (upload-files spy). */
+  uploads: UploadRequest[]
   /** Key + target + modifiers passed to pressKeyInTab (press-key spy). */
   keyPresses: Array<{ key: string; tabId: string | null; modifiers: string[] | undefined }>
   /** Every click passed to clickInTab (click spy). */
   clicks: ParsedClick[]
   /** Every by-ref typing passed to typeInTab (type-text spy). */
-  typings: Array<{ ref: number | null; text: string; tabId: string | null }>
+  typings: Array<{ ref: number | null; text: string; tabId: string | null; frame?: FrameSpec }>
   /** Every wait passed to waitInTab (wait-for spy). */
-  waits: Array<{ condition: WaitCondition; tabId: string | null; timeoutMs: number }>
+  waits: Array<{ condition: WaitCondition; tabId: string | null; timeoutMs: number; frame?: FrameSpec }>
   /** Flip to make every wait time out, so the failure path is testable. */
   waitFails: { value: boolean }
   /** Sources passed to extractText (run-skill extraction spy). */
@@ -343,8 +347,9 @@ export function makeContext(
   const keyPresses: Array<{ key: string; tabId: string | null; modifiers: string[] | undefined }> =
     []
   const clicks: ParsedClick[] = []
-  const typings: Array<{ ref: number | null; text: string; tabId: string | null }> = []
-  const waits: Array<{ condition: WaitCondition; tabId: string | null; timeoutMs: number }> = []
+  const uploads: UploadRequest[] = []
+  const typings: FakeContext['typings'] = []
+  const waits: FakeContext['waits'] = []
   const waitFails = { value: false }
   const extractCalls: SkillSource[] = []
   const summarizeCalls: Array<{ prompt: string; text: string }> = []
@@ -989,6 +994,34 @@ export function makeContext(
     },
     tracingActive: () => state.tracing.active,
     tracingCategories: async () => ['toplevel', 'ipc', 'mojom'],
+    listPickerSkips: () => ({ learned: [], ruledOut: [] }),
+    forgetPickerSkip: () => {},
+    listFramesInTab: async (tabId?: string) => {
+      if (tabId !== undefined && !state.tabs.tabs.some((t) => t.id === tabId)) {
+        throw new Error(`unknown tab: ${tabId}`)
+      }
+      return [
+        { index: 0, frameId: 'top', parentId: null, url: 'https://a.example/', name: '', depth: 0, sessionId: null, ownTarget: true },
+        { index: 1, frameId: 'f1', parentId: 'top', url: 'https://b.example/panel', name: 'sandboxFrame', depth: 1, sessionId: 's1', ownTarget: true }
+      ]
+    },
+    uploadFilesInTab: async (req: UploadRequest) => {
+      uploads.push(req)
+      return {
+        files: req.files.map((f) => f.split('/').pop() ?? f),
+        via: req.click ? 'chooser' : 'input',
+        target: req.click ? 'clicked' : (req.input?.selector ?? ''),
+        frame: 0
+      }
+    },
+    armFreezeProbe: async () => ({ armed: true, alreadyArmed: false }),
+    runFreezeProbe: async () => ({
+      responsive: true,
+      armed: false,
+      samplesTaken: 0,
+      stacks: [],
+      timeline: []
+    }),
     cookieJarForProfile: (id: string) => {
       if (!state.profiles.some((p) => p.id === id)) throw new Error(`unknown profile: ${id}`)
       const jar = cookiesSet.get(id) ?? []
@@ -1246,7 +1279,8 @@ export function makeContext(
       tooltipHidden.push(true)
       return { hidden: true }
     },
-    execJsInTab: (code: string, tabId?: string) => {
+    execJsInTab: (code: string, tabId?: string, frame?: FrameSpec) => {
+      const withFrame = <T extends object>(o: T): T => (frame ? { ...o, frame } : o)
       // The fake has no real page; it records the call and echoes a marker so the
       // exec-js command's plumbing is testable without Chromium. Mirrors the
       // manager's resolution errors (unknown tab / Settings / no active page).
@@ -1256,14 +1290,14 @@ export function makeContext(
         if (tab.id === state.settingsTabId) {
           return Promise.reject(new Error('not a web page (Settings tab)'))
         }
-        execJs.push({ code, tabId })
+        execJs.push(withFrame({ code, tabId }))
         return Promise.resolve(`ran:${code}`)
       }
       const active = state.tabs.tabs.find((t) => t.id === state.tabs.activeId)
       if (!active || active.id === state.settingsTabId) {
         return Promise.reject(new Error('no active web page'))
       }
-      execJs.push({ code, tabId: null })
+      execJs.push(withFrame({ code, tabId: null }))
       return Promise.resolve(`ran:${code}`)
     },
     pressKeyInTab: (key: string, tabId?: string, modifiers?: string[]) => {
@@ -1309,7 +1343,7 @@ export function makeContext(
         click.target.kind === 'point' ? { x: click.target.x, y: click.target.y } : { x: 10, y: 20 }
       return Promise.resolve({ ...point, target: describeClickTarget(click.target) })
     },
-    typeInTab: (ref: number | null, text: string, tabId?: string) => {
+    typeInTab: (ref: number | null, text: string, tabId?: string, frame?: FrameSpec) => {
       // Same tab resolution as clickInTab; the fake has no page, so the ref is
       // taken at its word (the in-page checks are page-snapshot.test.ts).
       if (tabId !== undefined) {
@@ -1321,16 +1355,21 @@ export function makeContext(
           return Promise.reject(new Error('no active web page'))
         }
       }
-      typings.push({ ref, text, tabId: tabId ?? null })
+      typings.push(frame ? { ref, text, tabId: tabId ?? null, frame } : { ref, text, tabId: tabId ?? null })
       return Promise.resolve({ target: ref === null ? 'focused element' : `[${ref}] <input>` })
     },
-    waitInTab: (condition: WaitCondition, tabId: string | undefined, timeoutMs: number) => {
+    waitInTab: (
+      condition: WaitCondition,
+      tabId: string | undefined,
+      timeoutMs: number,
+      frame?: FrameSpec
+    ) => {
       // Records the wait and answers instantly. Whether the condition ever holds
       // is the page's business; the polling itself is tested in wait.test.ts.
       if (tabId !== undefined && !state.tabs.tabs.some((t) => t.id === tabId)) {
         return Promise.reject(new Error(`unknown tab: ${tabId}`))
       }
-      waits.push({ condition, tabId: tabId ?? null, timeoutMs })
+      waits.push(frame ? { condition, tabId: tabId ?? null, timeoutMs, frame } : { condition, tabId: tabId ?? null, timeoutMs })
       if (waitFails.value) {
         return Promise.reject(new Error(waitTimeoutMessage(condition, timeoutMs)))
       }
@@ -2371,6 +2410,7 @@ export function makeContext(
     magnifierEnabled,
     cookiesSet,
     execJs,
+    uploads,
     keyPresses,
     clicks,
     typings,

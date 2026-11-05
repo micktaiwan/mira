@@ -16,6 +16,9 @@
 import type { MediaPickChoice } from './media-device-picker'
 import { MEDIA_PICK_IPC_CHANNEL } from './media-device-picker'
 
+/** Sync question from the preload, before it patches anything: skip this host? */
+export const MEDIA_PICK_SKIP_IPC_CHANNEL = 'mira:media-device-pick-skip'
+
 /** Which kinds a getUserMedia constraints object asks for. A MediaStream
  * constraint is "wanted" when its value is truthy (true or a constraints
  * object); false / undefined means the kind is not requested. Pure. */
@@ -70,6 +73,13 @@ export function applyChosenDevices(
   if (wantVideo && choice.video) next.video = withDeviceId(c.video, choice.video)
   if (wantAudio && choice.audio) next.audio = withDeviceId(c.audio, choice.audio)
   return next
+}
+
+/** Whether a hostname is among `skipped`, subdomains included. Pure. The list is the
+ * user's own browsing data: it lives in the profile's folder and names no site here.
+ * Why a host lands there: freeze-watchdog.ts. */
+export function skipsDevicePicker(hostname: string, skipped: readonly string[]): boolean {
+  return skipped.some((s) => hostname === s || hostname.endsWith('.' + s))
 }
 
 /** Main-world install function (as a string): patches getUserMedia to route
@@ -137,6 +147,9 @@ export const GUM_SHIM_PRELOAD_SOURCE = `(function () {
   var contextBridge = electron.contextBridge;
   var ipcRenderer = electron.ipcRenderer;
   if (!ipcRenderer) return;
+  try {
+    if (ipcRenderer.sendSync(${JSON.stringify(MEDIA_PICK_SKIP_IPC_CHANNEL)}, location.hostname) === true) return;
+  } catch (_) { /* no answer: keep the picker */ }
   var CHANNEL = ${JSON.stringify(MEDIA_PICK_IPC_CHANNEL)};
   var bridge = {
     pickDevices: function (request) { return ipcRenderer.invoke(CHANNEL, request); }

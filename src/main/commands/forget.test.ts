@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { createCommandRegistry } from '.'
 import { makeContext } from './fake-context'
+import { forgetCommands } from './forget'
+import type { CommandContext } from './context'
 
 const registry = createCommandRegistry()
 
@@ -92,5 +94,21 @@ describe('forget-domain', () => {
     const { ctx } = makeContext()
     const res = await registry.execute('forget-domain', {}, ctx)
     expect(res).toEqual({ ok: false, error: '"domain" is required' })
+  })
+})
+
+describe('forget-site with a failed skip list wipe', () => {
+  it('says so in the reply: a toast is dropped when the window has no focus', async () => {
+    const ctx = {
+      forgetActiveSite: () => ({
+        domain: 'site.test',
+        closed: true,
+        tabId: 't',
+        done: Promise.resolve({ cookiesRemoved: 0, historyRemoved: 0 }),
+        skipsWiped: false
+      }),
+      showToast: () => {}
+    } as unknown as CommandContext
+    expect(await forgetCommands['forget-site'](ctx, undefined)).toMatchObject({ ok: false })
   })
 })

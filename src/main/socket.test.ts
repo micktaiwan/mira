@@ -407,6 +407,18 @@ function setup(): {
     endTerminalSession: () => false,
     autoSleepNow: async () => ({ slept: [], keptForText: [] }),
     getAutoSleep: () => ({ enabled: true, idleHours: 12 }),
+    listPickerSkips: () => ({ learned: [], ruledOut: [] }),
+    forgetPickerSkip: () => {},
+    listFramesInTab: async () => [],
+    uploadFilesInTab: async () => ({ files: [], via: 'input' as const, target: '', frame: 0 }),
+    armFreezeProbe: async () => ({ armed: true, alreadyArmed: false }),
+    runFreezeProbe: async () => ({
+      responsive: true,
+      armed: false,
+      samplesTaken: 0,
+      stacks: [],
+      timeline: []
+    }),
     setAutoSleep: () => ({ enabled: true, idleHours: 12 })
   }
   return { registry: createCommandRegistry(), ctx, loaded }

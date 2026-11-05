@@ -11,6 +11,7 @@
 import { type CommandMap, fail } from './registry'
 import type { CommandContext } from './context'
 import { describeCondition, parseWaitParams, type WaitCondition } from '../wait'
+import { parseFrameParam, type FrameSpec } from '../frame-target'
 
 /** Wait capability slice. */
 export interface WaitContext {
@@ -22,7 +23,8 @@ export interface WaitContext {
   waitInTab: (
     condition: WaitCondition,
     tabId: string | undefined,
-    timeoutMs: number
+    timeoutMs: number,
+    frame?: FrameSpec
   ) => Promise<{ waitedMs: number }>
 }
 
@@ -30,8 +32,12 @@ export const waitCommands: CommandMap<CommandContext> = {
   'wait-for': async (ctx, params) => {
     const parsed = parseWaitParams(params)
     if ('error' in parsed) return { ok: false, error: parsed.error }
+    const frame = parseFrameParam(((params ?? {}) as Record<string, unknown>).frame)
+    if (frame && 'error' in frame) return { ok: false, error: frame.error }
     try {
-      const { waitedMs } = await ctx.waitInTab(parsed.condition, parsed.tabId, parsed.timeoutMs)
+      const { waitedMs } = frame
+        ? await ctx.waitInTab(parsed.condition, parsed.tabId, parsed.timeoutMs, frame)
+        : await ctx.waitInTab(parsed.condition, parsed.tabId, parsed.timeoutMs)
       return { ok: true, waitedMs, condition: describeCondition(parsed.condition) }
     } catch (error) {
       return fail(error)

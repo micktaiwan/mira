@@ -76,6 +76,8 @@ export const TAB_BOUND = new Set([
   'click',
   'wait-for',
   'get-console',
+  'arm-freeze-probe',
+  'freeze-probe',
   'screenshot',
   'snapshot',
   'type-text',
@@ -215,6 +217,7 @@ export const SESSION_VERBS = new Set([
   'shot',
   'screenshot',
   'console',
+  'freeze',
   'nav',
   'navigate',
   'open'
@@ -536,6 +539,58 @@ export function formatConsole(messages) {
       return `${String(m.seq).padStart(4)}  ${level}${src}${msg}${where}`
     })
     .join('\n')
+}
+
+/**
+ * Plan for `mira freeze`: which code holds a stuck page. --arm prepares the tab
+ * (run it while the page answers, then reload), --samples <n> sets how many stacks
+ * to read, --terminate also aborts the running script.
+ *
+ * @param {string|null} tabId
+ * @param {Record<string, string|boolean>} flags
+ * @returns {{ command: string, params: object }}
+ */
+export function buildFreeze(tabId, flags = {}) {
+  const params = {}
+  if (tabId) params.tabId = tabId
+  if (flags.arm === true) return { command: 'arm-freeze-probe', params }
+  if (flags.samples !== undefined && flags.samples !== true) params.samples = Number(flags.samples)
+  if (flags.terminate === true) params.terminate = true
+  return { command: 'freeze-probe', params }
+}
+
+/**
+ * Human-readable rendering of a freeze-probe or arm-freeze-probe reply.
+ *
+ * @param {{ armed?: boolean, alreadyArmed?: boolean, probe?: any }} reply
+ * @returns {string}
+ */
+export function formatFreeze(reply) {
+  const probe = reply?.probe
+  if (!probe) {
+    return reply?.alreadyArmed
+      ? 'already armed: reload the page to record its load'
+      : 'armed: reload the page to record its load, then run mira freeze'
+  }
+  const out = [`page: ${probe.responsive ? 'answers' : 'FROZEN'}  samples: ${probe.samplesTaken}`]
+  if (probe.note) out.push(`note: ${probe.note}`)
+  if (probe.terminated !== undefined) out.push(`terminated: ${probe.terminated}`)
+  for (const stack of probe.stacks ?? []) {
+    out.push(`stack seen ${stack.count}x:`)
+    for (const f of stack.frames) {
+      out.push(`  ${f.functionName}  ${f.url}:${f.line + 1}:${f.column + 1}`)
+    }
+  }
+  if (probe.snippet) out.push(`source: ${probe.snippet}`)
+  if (probe.timeline?.length) {
+    out.push('load:')
+    for (const e of probe.timeline) {
+      out.push(
+        `  ${String(e.atMs).padStart(7)}ms ${e.kind.padEnd(8)} ${e.url}${e.detail ? '  ' + e.detail : ''}`
+      )
+    }
+  }
+  return out.join('\n')
 }
 
 /**
@@ -1183,6 +1238,11 @@ export const BATCH_FORBIDDEN = new Map([
  * @returns {{ request: {command:string, params?:object} } | { error: string }}
  */
 export function buildLineRequest(argv, env) {
+  const built = buildLineRequestRaw(argv, env)
+  return applyFrame(built, parseArgs(argv).flags.frame)
+}
+
+function buildLineRequestRaw(argv, env) {
   const { command, positionals, flags } = parseArgs(argv)
   if (!command) return { error: 'empty line' }
   const forbidden = BATCH_FORBIDDEN.get(command)
@@ -1279,12 +1339,24 @@ export function buildLineRequest(argv, env) {
     }
     case 'windows':
       return { request: { command: 'list-windows' } }
+    case 'frames':
+      return { request: buildFrames(tabId) }
+    case 'upload':
+      // Only the CDP path (upload-files) fits a batch line: one request, the
+      // files read by Chromium from disk. Relative paths are taken from cwd.
+      return buildUploadFiles(
+        positionals.map((p) => (p.startsWith('/') ? p : `${env.cwd}/${p}`)),
+        flags,
+        tabId
+      )
     case 'commands':
       return { request: { command: 'list-commands' } }
     case 'console':
       return {
         request: buildConsole(tabId, { level: flags.level, limit: flags.limit, since: flags.since })
       }
+    case 'freeze':
+      return { request: buildFreeze(tabId, flags) }
     case 'cookies':
     case 'dump-cookies':
       return {
@@ -1550,4 +1622,133 @@ export function formatProxy(r) {
   const webrtc = policies.length === 0 ? 'no live page' : [...new Set(policies)].join(', ')
   const line = `${r.id}: proxy ${setting} | applied ${r.applied ?? '?'} | ${r.url} -> ${r.resolved} | webrtc ${webrtc}`
   return r.blocked ? `${line}\nBLOCKED: ${r.blocked}` : line
+}
+
+/** Page commands that take a `frame` (list-frames index or url substring). */
+export const FRAME_COMMANDS = new Set([
+  'exec-js',
+  'snapshot',
+  'click',
+  'type-text',
+  'select-option',
+  'wait-for',
+  'upload-files'
+])
+
+/**
+ * `--frame <n|url-substring>` → the `frame` param of a page request: an index
+ * from `mira frames` (0 = top document) or a piece of the frame's url (or its
+ * exact name). Takes a built `{request}` (or a bare request) and returns the
+ * same shape; an error passes through untouched. Pure.
+ *
+ * @param {any} built
+ * @param {string|boolean|undefined} frameFlag
+ */
+export function applyFrame(built, frameFlag) {
+  if (frameFlag === undefined || built == null || 'error' in built) return built
+  if (typeof frameFlag !== 'string' || frameFlag.trim() === '') {
+    return { error: '--frame needs a value: an index from `mira frames`, or a piece of the frame url' }
+  }
+  const bare = !('request' in built)
+  const req = bare ? built : built.request
+  if (!FRAME_COMMANDS.has(req.command)) {
+    return { error: `--frame does not apply to ${req.command}` }
+  }
+  if (req.command === 'type-text' && req.params?.focused) {
+    return { error: '--frame does not apply to type --focused (focus is wherever it is)' }
+  }
+  const v = frameFlag.trim()
+  const out = { ...req, params: { ...(req.params ?? {}), frame: /^\d+$/.test(v) ? Number(v) : v } }
+  return bare ? out : { ...built, request: out }
+}
+
+/**
+ * list-frames request.
+ *
+ * @param {string|null} tabId
+ */
+export function buildFrames(tabId) {
+  return { command: 'list-frames', params: tabId ? { tabId } : {} }
+}
+
+/**
+ * One line per frame, indented by depth: `#index url [name=…] [oopif]`. The
+ * index is what --frame takes. Pure.
+ *
+ * @param {Array<{index:number, depth:number, url:string, name?:string, ownTarget?:boolean}>} frames
+ */
+export function formatFrames(frames) {
+  return (frames ?? [])
+    .map((f) => {
+      const tags = [f.name ? `name=${f.name}` : '', f.ownTarget && f.depth > 0 ? 'cross-origin' : '']
+        .filter(Boolean)
+        .join(' ')
+      return `${'  '.repeat(f.depth)}#${f.index} ${f.url || '(no url)'}${tags ? '  ' + tags : ''}`
+    })
+    .join('\n')
+}
+
+/**
+ * The click target of `mira upload --click <target>`: `x,y` is a point, digits
+ * a snapshot ref, something that reads as css (`#id`, `.class`, `[attr]`,
+ * `tag[…]`, `a > b`) a selector, anything else visible text. `--click-text` and
+ * `--click-selector` say it explicitly. Pure.
+ *
+ * @param {Record<string, string|boolean>} flags
+ * @returns {object | null | { error: string }}
+ */
+export function uploadClickTarget(flags) {
+  const given = ['click', 'click-text', 'click-selector'].filter((k) => flags[k] !== undefined)
+  if (given.length === 0) return null
+  if (given.length > 1) return { error: `upload takes one click target, got ${given.map((k) => '--' + k).join(' and ')}` }
+  const v = flags[given[0]]
+  if (typeof v !== 'string' || v.trim() === '') return { error: `--${given[0]} needs a value` }
+  if (given[0] === 'click-text') return { text: v }
+  if (given[0] === 'click-selector') return { selector: v }
+  const t = v.trim()
+  const pt = /^(\d+(?:\.\d+)?)\s*,\s*(\d+(?:\.\d+)?)$/.exec(t)
+  if (pt) return { x: Number(pt[1]), y: Number(pt[2]) }
+  if (/^\d+$/.test(t)) return { ref: Number(t) }
+  if (/^[#.[]/.test(t) || /^[a-z][\w-]*(\[|#|\.|\s*>)/i.test(t)) return { selector: t }
+  return { text: v }
+}
+
+/**
+ * upload-files request: CDP puts the files on an <input type=file> of any frame
+ * (--selector/--nth), or clicks --click and answers the native file chooser it
+ * opens — no macOS dialog, no base64 through the socket. `files` must already be
+ * absolute paths. Pure.
+ *
+ * @param {string[]} files
+ * @param {Record<string, string|boolean>} flags
+ * @param {string|null} tabId
+ */
+export function buildUploadFiles(files, flags, tabId) {
+  if (!files.length) return { error: 'no file given' }
+  const click = uploadClickTarget(flags)
+  if (click && 'error' in click) return click
+  const params = { files }
+  if (click) {
+    if (flags.selector !== undefined) return { error: 'pass --click or --selector, not both' }
+    if (flags.nth !== undefined) {
+      const n = Number(flags.nth)
+      if (!Number.isInteger(n) || n < 1) return { error: '--nth must be a positive integer (1-based)' }
+      if (click.ref === undefined && click.x === undefined) click.nth = n
+    }
+    params.click = click
+  } else {
+    if (typeof flags.selector === 'string') params.selector = flags.selector
+    if (flags.nth !== undefined) {
+      const n = Number(flags.nth)
+      if (!Number.isInteger(n) || n < 1) return { error: '--nth must be a positive integer (1-based)' }
+      params.nth = n
+    }
+  }
+  if (flags.timeout !== undefined) {
+    const ms = Number(flags.timeout)
+    if (!Number.isFinite(ms) || ms <= 0) return { error: '--timeout must be a number of ms' }
+    params.timeoutMs = Math.round(ms)
+  }
+  if (tabId) params.tabId = tabId
+  return applyFrame({ request: { command: 'upload-files', params } }, flags.frame)
 }

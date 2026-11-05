@@ -14,6 +14,7 @@ import {
   selectOptionScript,
   snapshotScript
 } from '../page-snapshot/page-snapshot'
+import { parseFrameParam, type FrameSpec } from '../frame-target'
 
 /** Snapshot capability slice. */
 export interface SnapshotContext {
@@ -24,7 +25,17 @@ export interface SnapshotContext {
    * editable. A null ref skips the click and types into whatever element has
    * focus, iframes included: CDP input goes to the focused frame, which a
    * snapshot (top document only) cannot name. */
-  typeInTab: (ref: number | null, text: string, tabId?: string) => Promise<{ target: string }>
+  typeInTab: (
+    ref: number | null,
+    text: string,
+    tabId?: string,
+    frame?: FrameSpec
+  ) => Promise<{ target: string }>
+}
+
+/** The optional `frame` param, already validated; `undefined` = top document. */
+function frameOf(p: Record<string, unknown>): FrameSpec | undefined | { error: string } {
+  return parseFrameParam(p.frame)
 }
 
 function tabIdOf(p: Record<string, unknown>): string | undefined | { error: string } {
@@ -35,10 +46,16 @@ function tabIdOf(p: Record<string, unknown>): string | undefined | { error: stri
 
 export const snapshotCommands: CommandMap<CommandContext> = {
   snapshot: async (ctx, params) => {
-    const tabId = tabIdOf((params ?? {}) as Record<string, unknown>)
+    const p = (params ?? {}) as Record<string, unknown>
+    const tabId = tabIdOf(p)
     if (typeof tabId === 'object') return { ok: false, error: tabId.error }
+    const frame = frameOf(p)
+    if (frame && 'error' in frame) return { ok: false, error: frame.error }
     try {
-      const snap = groupSnapshot(await ctx.execJsInTab(snapshotScript(), tabId))
+      const raw = frame
+        ? await ctx.execJsInTab(snapshotScript(), tabId, frame)
+        : await ctx.execJsInTab(snapshotScript(), tabId)
+      const snap = groupSnapshot(raw)
       if ('error' in snap) return { ok: false, error: snap.error }
       return { ok: true, ...snap }
     } catch (error) {
@@ -57,8 +74,15 @@ export const snapshotCommands: CommandMap<CommandContext> = {
     }
     const tabId = tabIdOf(p)
     if (typeof tabId === 'object') return { ok: false, error: tabId.error }
+    const frame = frameOf(p)
+    if (frame && 'error' in frame) return { ok: false, error: frame.error }
+    if (frame && ref === null) {
+      return { ok: false, error: '"frame" does not apply to "focused": the focused element is wherever focus is' }
+    }
     try {
-      const { target } = await ctx.typeInTab(ref, p.text, tabId)
+      const { target } = frame
+        ? await ctx.typeInTab(ref, p.text, tabId, frame)
+        : await ctx.typeInTab(ref, p.text, tabId)
       if (ref === null) return { ok: true, focused: true, target }
       return { ok: true, ref, target }
     } catch (error) {
@@ -75,9 +99,13 @@ export const snapshotCommands: CommandMap<CommandContext> = {
     if (hasValue === hasLabel) return { ok: false, error: 'pass exactly one of "value" or "label"' }
     const tabId = tabIdOf(p)
     if (typeof tabId === 'object') return { ok: false, error: tabId.error }
+    const frame = frameOf(p)
+    if (frame && 'error' in frame) return { ok: false, error: frame.error }
     const choice = hasValue ? { value: p.value as string } : { label: p.label as string }
     try {
-      const picked = interpretSelect(await ctx.execJsInTab(selectOptionScript(ref, choice), tabId))
+      const script = selectOptionScript(ref, choice)
+      const raw = frame ? await ctx.execJsInTab(script, tabId, frame) : await ctx.execJsInTab(script, tabId)
+      const picked = interpretSelect(raw)
       if ('error' in picked) return { ok: false, error: picked.error }
       return { ok: true, ref, ...picked }
     } catch (error) {

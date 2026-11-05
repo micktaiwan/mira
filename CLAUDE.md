@@ -118,6 +118,7 @@ Packaging / packaged build details: rule `.claude/rules/packaging.md`.
 
 - **Language**: all code, comments, identifiers and UI text in **English**. French stays for the dialogue.
 - **Public repo**: a regular personal code repo, published on GitHub. No git-crypt encryption, normal descriptive commits.
+- **Privacy**: no tracked file names a site a user visited or a per-site behaviour, however harmless the site looks: such lists are browsing data. They live in the profile's folder, stay out of the logs, and go with `forget-domain` and `clear-history`.
 - **Unversioned local notes**: the personal workflow and the identity of the test profile live in `CLAUDE.local.md`, loaded automatically by Claude Code next to this file when it is present. It is git-excluded: **absent from a public clone, that is normal — do not report its absence or treat it as an error.**
 
 ## The `mira` skill is the public surface of this tool
