@@ -534,6 +534,7 @@ before concluding.
 - Every request without a `tabId` binds to the focused window **at call time**: flaky with several
   windows, prefer an explicit `tabId`. Also true of `nav`/`open`: with no pinned tab (and no session
   window), they target the focused window.
+- **An `exec` sent right after a click that navigates can hit a page with no body** (`TypeError: Cannot read properties of null (reading 'innerText')` on `document.body.innerText`): the old document is gone and the new one has not parsed yet. The click went through, so do not redo it. Run `mira wait --selector body` (or `--host <site>` / `--text <expected>`) before the read, never a blind `sleep`.
 - On a Chromium error page `location.href` is the whole `data:text/html,…` URL, encoded and very long: read `document.location.protocol` or `mira tabs` (url column) instead, and `mira reload --tab <id>` retries the failed url.
 - An asleep tab (lazy-load, discard, auto-sleep; `z` in `mira tabs`) makes page-bound commands fail
   (`tab is asleep`). `mira reload --tab <id>` wakes it without switching the window to it, then
