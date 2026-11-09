@@ -621,6 +621,13 @@ before concluding.
   one probably worked. Measured on a web app: a loop of async execs that each slept ~7 s
   returned eleven timeouts in a row, created all eleven records anyway, and fired twice on six of
   them, leaving every task duplicated.
+- **A read that needs more than 5 s (a chain of async `fetch` calls, a paginated API) is not
+  awaited by `exec`: start it, store its result on `window`, poll.** The script sets
+  `window.__r = "pending"`, runs the async chain without `await`ing it at top level, and ends with
+  `.then(x => window.__r = x, e => window.__r = "ERR " + e); "started"`. Then
+  `mira exec 'window.__r' --bare` in a shell loop, with `mira wait --text <never-present> --timeout 2000`
+  as the pause, until it is no longer `"pending"`. A page navigation wipes `window`, so do not `nav`
+  between the start and the last poll. Only for reads: a write started this way still must not be retried blind.
 
 - **A site behind a Cloudflare managed challenge: read the tab that is already loaded, never
   reload it.** Measured on an account dashboard the user had open: a
