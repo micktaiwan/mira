@@ -74,6 +74,7 @@ mira upload r.pdf --click "Add receipt" --frame 1   # click + answer the native 
 mira type 3 London                     # replace the text of field [3] of the last snap
 mira select 2 Business                 # pick option "Business" of dropdown [2] (--value <v>: by value)
 mira wait --selector '[role=dialog]'   # wait for it to appear instead of sleeping (--text, --url, --host, --gone, --timeout ms)
+# --selector holds only for an element with a non-zero box: a hidden iframe or display:none node times out although it is in the DOM (check with `mira exec`)
 mira batch @script.mira                # N lines over ONE connection: one process, one agent turn (--keep-going)
 mira console --level error --limit 50  # the page's captured console: console.*, 403/CORS/CSP, exceptions
 mira shot /tmp/page.png                # PNG capture of the pinned/active tab (--full = whole page)
@@ -260,7 +261,7 @@ embed, a login provider's modal): the top document's `innerText` holds only the 
 included, numbered depth-first (`#0` = the top document, `cross-origin` marks a frame in its own
 process). Then **`--frame <n|url-substring>`** on `exec`, `snap`, `click` (`--text`, `--selector`,
 ref), `type <ref>`, `select`, `wait` and `upload` acts inside that frame: an index from `mira
-frames`, or a piece of the frame's url or its exact `name` (refused with the candidates when
+frames`, or a piece of the frame's url or of its `name` (an exact name wins) (refused with the candidates when
 several match: take the index then).
 
 ```bash
@@ -601,6 +602,11 @@ before concluding.
 - **`mira type <ref>` can refuse a `contenteditable` combobox** (a chip/tag input such as a Slack invite
   field). Do not fall back to `execCommand`: `mira click --selector '<css of the field>'` to focus it for
   real, then `mira type --focused <text>`, then `mira press Enter` or `,` if the field turns text into tags.
+  Prefer `,` over `Enter` in a modal: `Enter` can leave the value as `a@b.co,` (a pending separator, no tag
+  yet, submit still `disabled`) and the next `exec` may hit `executeJavaScript timed out after 5000ms`
+  while the modal re-renders (re-run it, it is not a failure of the click). Fix: click the field again and
+  `type --focused` the bare address; the tag appears and the submit label changes (`Add member` becomes
+  `Add 1 member`). Judge success by the button's `disabled` and label, never by the field's value.
 - **A tab that is not the active one in its window has no layout at all.** `innerWidth` and
   `innerHeight` read `0x0`, so `snap` returns an empty list, `click --selector` finds nothing, and
   `shot` writes a blank or absurdly narrow PNG (measured: `413×2541` and a 12 KB solid image). This is not the "covered window" case above — the window can be perfectly visible, the

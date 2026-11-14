@@ -135,6 +135,17 @@ describe('pickFrame', () => {
       frameId: 'INNER'
     })
   })
+  it('matches a substring of the frame name, an exact name winning', () => {
+    const named = mergeFrameTrees(appsScript).map((f) =>
+      f.frameId === 'INNER' ? { ...f, name: 'legacy-iframe-2185' } : f
+    )
+    expect(pickFrame(named, { kind: 'match', value: 'legacy-iframe' })).toMatchObject({
+      frameId: 'INNER'
+    })
+    expect(pickFrame(named, { kind: 'match', value: 'legacy-iframe-2185' })).toMatchObject({
+      frameId: 'INNER'
+    })
+  })
   it('refuses an ambiguous match with the candidates, and a miss with the list', () => {
     const amb = pickFrame(frames, { kind: 'match', value: 'googleusercontent' })
     expect(amb).toMatchObject({ error: expect.stringContaining('2 frames match') })

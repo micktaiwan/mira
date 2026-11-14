@@ -187,7 +187,12 @@ export function pickFrame(frames: FrameInfo[], spec: FrameSpec): FrameInfo | { e
     if (!f) return { error: `no frame #${spec.index} (${frames.length} frame(s): ${list()})` }
     return f
   }
-  const hits = frames.filter((f) => f.url.includes(spec.value) || f.name === spec.value)
+  // An exact name wins; otherwise a substring of the url or of the name (a frame
+  // named `legacy-iframe-2185` is reached by `legacy-iframe`).
+  const exact = frames.filter((f) => f.name === spec.value)
+  const hits = exact.length
+    ? exact
+    : frames.filter((f) => f.url.includes(spec.value) || f.name.includes(spec.value))
   if (hits.length === 1) return hits[0]
   if (hits.length === 0) return { error: `no frame matches "${spec.value}" (frames: ${list()})` }
   return {
