@@ -42,6 +42,8 @@ export const BOOLEAN_FLAGS = new Set([
   // exec: --bare prints the result alone instead of the {ok,result} envelope
   // (not --value: select already takes --value <v>).
   'bare',
+  // tabs: --ids prints bare tab ids, one per line (active tab first), for $(...) capture.
+  'ids',
   // proxy: --clear puts the profile back on a direct connection.
   'clear'
 ])
@@ -731,6 +733,21 @@ export function formatTabs(tabs, activeId, now = Date.now()) {
       return `${mark}${sound} ${t.id}  ${ages}  ${title}  ${t.url ?? ''}`
     })
     .join('\n')
+}
+
+/**
+ * `mira tabs --ids`: bare tab ids, one per line, the active tab first. The table
+ * of formatTabs has a variable first column (`*`, `z` or blank), so `awk '{print $2}'`
+ * returns the id for an asleep tab and an age placeholder for a plain one.
+ *
+ * @param {Array<{id:string}>} tabs
+ * @param {string} [activeId]
+ * @returns {string}
+ */
+export function formatTabIds(tabs, activeId) {
+  const ids = (tabs ?? []).map((t) => t.id)
+  if (activeId && ids.includes(activeId)) ids.unshift(...ids.splice(ids.indexOf(activeId), 1))
+  return ids.join('\n')
 }
 
 /**

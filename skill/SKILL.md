@@ -43,6 +43,8 @@ mira tabs                              # tabs (id / ages / title / url); * = act
 mira tabs --window <id>                # ANOTHER window's strip (ids from `mira windows`)
 mira tabs --profile personal           # the user's window of that profile (label or id prefix)
 mira tabs --session                    # YOUR session window's strip (never opens one; --profile if several)
+mira tabs --profile personal --ids     # bare ids, one per line, active first: `ANCHOR=$(mira tabs --profile personal --ids | head -1)`
+                                       # (never awk the table: column 1 is blank/z/* so the id is $1 or $2)
 mira windows                           # open windows (id / profile / tabs), * = focused
 mira profiles                          # every profile (id prefix / label / open) — the target of --profile
                                        # (`mira call list-profiles` prints it as ONE long json line, unreadable

@@ -27,6 +27,8 @@
 //   mira tabs [--window <id>]       list tabs (id / title / url), * = active, z = asleep, ♪ = playing sound
 //   mira tabs --profile <p>         list the user's window of that profile (label or id prefix)
 //                                   (--window: any window from `mira windows`, else the focused one)
+//   mira tabs --ids                 bare tab ids, one per line, active first (for $(mira tabs --profile p --ids | head -1);
+                                //                                   never awk the table: column 1 is blank, z or *, so the id is $1 or $2)
 //   mira tabs --session [--profile <p>]  list THIS Claude session's own window (never opens one)
 //   mira use --url <substr>         resolve a tab by url, print export MIRA_TAB=<id>
 //   mira use --active               pin the focused window's active tab
@@ -133,6 +135,7 @@ import {
   buildScreenshot,
   formatScreenshot,
   formatTabs,
+  formatTabIds,
   formatConsole,
   formatFreeze,
   formatWindows,
@@ -649,7 +652,9 @@ async function main() {
         if (!found.found) return die('tabs --session: this session has no window open yet', 1)
         req.params = { windowId: found.windowId }
       }
-      return send(req, { json, pretty: (r) => formatTabs(r.tabs, r.activeId) })
+      return send(req, { json, pretty: (r) =>
+          flags.ids === true ? formatTabIds(r.tabs, r.activeId) : formatTabs(r.tabs, r.activeId)
+      })
     }
 
     case 'watch':

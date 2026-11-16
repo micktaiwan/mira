@@ -21,6 +21,7 @@ import {
   absolutePath,
   formatScreenshot,
   formatTabs,
+  formatTabIds,
   formatAge,
   formatConsole,
   formatWindows,
@@ -366,6 +367,14 @@ describe('formatAge', () => {
     expect(formatAge(undefined, now)).toBe('-')
     expect(formatAge(Number.NaN, now)).toBe('-')
     expect(formatAge(now + 60_000, now)).toBe('-')
+  })
+})
+
+describe('formatTabIds', () => {
+  it('prints bare ids one per line, the active tab first', () => {
+    expect(formatTabIds([{ id: 'a' }, { id: 'b' }, { id: 'c' }], 'b')).toBe('b\na\nc')
+    expect(formatTabIds([{ id: 'a' }], undefined)).toBe('a')
+    expect(formatTabIds([], 'x')).toBe('')
   })
 })
 
