@@ -621,6 +621,10 @@ before concluding.
   tab, `el.innerText` on an element below `body` comes back as `""` (it depends on layout), while
   `document.body.innerText` still returns the text. Read sub-elements with `textContent` there, and
   `el.click()` from `exec` still fires the page's handlers.
+- **`innerText` is `undefined` on elements that are not an `HTMLElement` (SVG nodes, `<path>`, `<use>`,
+  MathML), so `els.map(e => e.innerText.trim())` over a broad selector (`[role=dialog] *`) throws
+  `TypeError: Cannot read properties of undefined (reading 'trim')`.** Use
+  `(e.textContent || '').trim()`, or filter `e instanceof HTMLElement` first.
 - **A `mira exec` that times out at 5 s has still run in the page, and the action it fired is
   done.** The CLI gives up waiting; the JavaScript does not stop. So an `exec` that does something
   — clicking a button, submitting a form, POSTing — must never contain its own `await sleep`:
@@ -649,6 +653,12 @@ before concluding.
   '[role=dialog]' --gone` then waits on the toast ("Member removed"), and while it shows, a `click`
   on a pager button below it fails with `the target is covered`. Wait for the change itself instead
   (`wait --text 'of 112'`), then for the toast to go before paging.
+- **`wait --text` matches the page's rendered `innerText`, not what `snap` lists.** A button can be in the
+  snap and still time out `--text`: snap names elements by `aria-labelledby` / `aria-label` / `title` /
+  `placeholder` (`jev-snapshot.js`), `--text` does a case-sensitive `includes` on `document.body.innerText`
+  (`wait.ts`), so an icon button with an aria-label, a label cut by CSS `text-transform`, or text inside
+  another frame never matches. When the target is already in the snap, skip the wait: `snap`, then act by
+  its number; or wait on `--selector` (`[aria-label="Manage seats"]`), or add `--frame`.
 - **`mira wait` right after `mira reload` can match the page being replaced.** `reload` answers
   `ok` as soon as it is sent; a `wait --text` launched next found its text "after 1ms" in the
   old document. To know the reload happened, compare `performance.timeOrigin`
