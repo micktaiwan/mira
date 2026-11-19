@@ -556,6 +556,12 @@ describe('buildScreenshot', () => {
     })
     expect(buildScreenshot(undefined, null, env).request.params.fullPage).toBeUndefined()
   })
+
+  it('refuses a flag-looking path instead of writing "-o.png"', async () => {
+    const { buildLineRequest } = await import('./mira-core.mjs')
+    const r = buildLineRequest(['shot', '--full', '-o', '/tmp/x.png'], { cwd: '/work', home: '/Users/me' })
+    expect(r.error).toMatch(/positional/)
+  })
 })
 
 describe('formatScreenshot', () => {
@@ -563,6 +569,12 @@ describe('formatScreenshot', () => {
     expect(formatScreenshot({ path: '/tmp/a.png', width: 1280, height: 720, bytes: 51200 })).toBe(
       '/tmp/a.png  1280×720  50 KB  (viewport)'
     )
+  })
+
+  it('flags a capture too narrow to be a laid-out page', () => {
+    const line = formatScreenshot({ path: '/tmp/a.png', width: 237, height: 2585, bytes: 1024, fullPage: true })
+    expect(line).toContain('NARROW')
+    expect(line).toContain('activate-tab')
   })
 
   it('says out loud when the page was cut off', () => {
@@ -715,7 +727,7 @@ describe('sessionTarget', () => {
   it('sends the snap verbs to the session window, aliases included', () => {
     // `snap`, `type` and `select` are CLI names, not registry names: without them
     // here, `mira snap` read the user's focused tab while `exec` read the session's.
-    for (const command of ['snap', 'snapshot', 'type', 'select']) {
+    for (const command of ['snap', 'snapshot', 'type', 'select', 'upload', 'frames']) {
       expect(sessionTarget({ command, env })).toEqual({ sessionId: 'sess-1', pid: 4242 })
     }
   })

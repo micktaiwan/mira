@@ -218,6 +218,8 @@ export const SESSION_VERBS = new Set([
   'reload',
   'shot',
   'screenshot',
+  'upload',
+  'frames',
   'console',
   'freeze',
   'nav',
@@ -861,7 +863,13 @@ export function formatScreenshot(res) {
   const kb = Math.round((res.bytes ?? 0) / 1024)
   const scope = res.fullPage ? 'full page' : 'viewport'
   const cut = res.clamped ? ' — CUT OFF: the page is taller than a capture can be' : ''
-  return `${res.path}  ${res.width}×${res.height}  ${kb} KB  (${scope})${cut}`
+  // A tab that is not on top of its window has no layout: the PNG comes out a few
+  // hundred px wide. Say so, or a blank-looking capture passes for the page.
+  const narrow =
+    res.width < 400
+      ? ' — NARROW: a tab that is not the active one of its window has no layout; `mira call activate-tab --params \'{"id":"<tab>"}\'` on a tab of your own session window, then shoot again'
+      : ''
+  return `${res.path}  ${res.width}×${res.height}  ${kb} KB  (${scope})${cut}${narrow}`
 }
 
 /**
@@ -998,7 +1006,13 @@ export function buildClick(tabId, opts = {}) {
   ].filter(([, v]) => v !== null)
   if (named.length === 0) return { error: 'click needs --selector, --text, --ref <n> or --at x,y' }
   if (named.length > 1) {
-    return { error: `click takes one target, got ${named.map(([k]) => '--' + k).join(' and ')}` }
+    const both = named.length === 2 && named[0][0] === 'selector' && named[1][0] === 'text'
+    const hint = both
+      ? ' (--selector and --text cannot narrow each other: use --selector alone, e.g. "button", with --nth n, or `mira snap` and click its ref; --text keeps the deepest element carrying the text, which can be a heading)'
+      : ''
+    return {
+      error: `click takes one target, got ${named.map(([k]) => '--' + k).join(' and ')}${hint}`
+    }
   }
   const [kind, value] = named[0]
   const params = {}
@@ -1323,6 +1337,9 @@ function buildLineRequestRaw(argv, env) {
       return { request: buildReload(tabId) }
     case 'shot':
     case 'screenshot':
+      if (typeof positionals[0] === 'string' && positionals[0].startsWith('-') && positionals[0] !== '-') {
+        return { error: `shot takes the output path as a positional argument (mira shot /tmp/page.png), not a flag: got "${positionals[0]}"` }
+      }
       return buildScreenshot(positionals[0], tabId, {
         full: flags.full === true,
         cwd: env.cwd,

@@ -191,20 +191,33 @@ export function clickTargetScript(
     return style.visibility !== 'hidden' && style.display !== 'none'
   })
   if (visible.length === 0) {
-    return { ok: false, reason: els.length > 0 ? 'found ' + els.length + ' match(es), none visible' : 'no match' }
+    if (els.length > 0) return { ok: false, reason: 'found ' + els.length + ' match(es), none visible' }
+    ${
+      target.kind === 'text'
+        ? `// --text only reads visible text: an icon or a link named through aria-label/title is
+    // invisible to it, so point at the attribute instead of a bare 'no match'.
+    const n = ${v}.toLowerCase()
+    const named = Array.from(document.querySelectorAll('[aria-label],[title]')).find((el) =>
+      ((el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('title') || '')).toLowerCase().includes(n)
+    )
+    if (named) return { ok: false, reason: 'no match in visible text, but <' + named.tagName.toLowerCase() + '> carries it in aria-label/title: use --selector (or a snap ref)' }`
+        : ''
+    }
+    return { ok: false, reason: 'no match' }
   }
   if (nth > visible.length) {
     return { ok: false, reason: 'asked for match ' + nth + ' of ' + visible.length }
   }
   const el = visible[nth - 1]
-  if (scroll) el.scrollIntoView({ block: 'center', inline: 'center' })
+  // behavior 'instant': a page with CSS scroll-behavior: smooth would otherwise animate and leave the rect off-screen.
+  if (scroll) el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' })
   const r = el.getBoundingClientRect()
   const x = r.left + r.width / 2
   const y = r.top + r.height / 2
   const w = window.innerWidth
   const h = window.innerHeight
   if (x < 0 || y < 0 || x > w || y > h) {
-    return { ok: false, reason: 'the target is outside the viewport (at ' + Math.round(x) + ',' + Math.round(y) + ' of ' + w + '×' + h + '); pass scroll:true' }
+    return { ok: false, reason: 'the target is outside the viewport (at ' + Math.round(x) + ',' + Math.round(y) + ' of ' + w + '×' + h + ')' + (scroll ? ' even after scrolling it into view (nested scroll container or fixed layout: scroll it with mira exec, then click --at)' : '; pass scroll:true') }
   }
   // What the page actually gets clicked on at that point. When it is neither the
   // target nor one of its children, something covers it (a modal, a sticky bar)

@@ -82,6 +82,8 @@ mira console --level error --limit 50  # the page's captured console: console.*,
 mira shot /tmp/page.png                # PNG capture of the pinned/active tab (--full = whole page)
 mira reload                            # reload the pinned or active tab (on the error page: retries the failed url)
 mira open example.com [-b]             # OPEN X → new tab, leaves the current tab alone (-b: hidden tab)
+                                       # several profiles open (the usual case): add --profile <label> or it is refused
+mira close-tab --tab <id>              # close ONE tab (not `close --tab`, which does not exist)
 mira nav example.com                   # "go to X" → loads in place, OVERWRITES the pinned/active tab (-n: new tab)
 mira done                              # close this Claude session's windows (see below)
 mira focus [--window <id>]             # bring ONE window to the front — FORBIDDEN unless explicitly asked
@@ -246,6 +248,16 @@ in ONE `mira batch` (milliseconds apart, so the timer does not tick between them
 submit through `mira exec` (`input.value = …; input.form.requestSubmit()`), which worked on a plain
 server-rendered form.
 
+**The same refusal hits a composer that re-renders after navigation** (a chat input that moves or remounts while the page settles): snapping right before `type <ref>` still fails. Skip the numbered path: `mira click --selector '[contenteditable=true]'` (or the field's CSS) to focus it for real, then `mira type --focused <text>`.
+
+**`type <ref>` also refuses a field that a wrapper overlays** (`ref is covered by <div>`), typical of custom-styled forms (store developer portals, design-system inputs) whose real `<input>` sits under a styled div. Same way out: `mira click --selector '<css of the field>'` then `mira type --focused <text>`; do not retry the ref.
+
+**A button that `click` refuses as invisible may still be the right one** (`offsetParent` is `null`: hidden by an ancestor, or `position: fixed`). Check with `mira exec` which element is really shown (often a sibling with the same label), and only if none is, fire it from the page: `mira exec "document.querySelector('<css>').click()"`. That click is untrusted (`isTrusted: false`), so confirm the effect (a code sent, a field appearing) instead of trusting the `ok`.
+
+**A tab that vanished mid-flow (`unknown tab: <id>`) was closed by the site** (a redirect, a popup that replaced itself, a session timeout). Do not keep retrying `--tab <id>`: `mira tabs` to see what is left, and if the page is gone, `mira open <url>` and pin the new id (`MIRA_TAB`).
+
+**A popup opened by a click (OAuth consent, SSO) may be unreachable.** It can open off-screen (top-left corner) and not appear in `list-tabs`, so no `--tab` can target it. Do not retry the click. Look for a way to avoid the popup (an already-authenticated session, a redirect flow instead of a popup, or `mira exec` reading the page's `window.open` target URL to open it as a normal tab), and if none exists, say the step is the user's.
+
 What snap does not see: elements inside shadow DOM, canvas apps, password and file
 fields, and text below the fold (scroll, then snap again). For those, fall back to
 `mira click --selector/--text` and `mira exec`. An iframe is not in the top snap either: snap
@@ -284,6 +296,8 @@ cross-origin frame shows up a moment after the page reports loaded (its process 
 `mira frames` lists only `#0` while the DOM has an `<iframe>`, run it again a few seconds later.
 On a Google Apps Script web app the url piece `userCodeAppPanel` matches two frames (the sandbox
 and the UI inside it); the UI is the inner one, `--frame userHtmlFrame`.
+
+**A hosted claude.ai artifact is such a page** (`claude.ai/artifact/<id>`, including one owned by another organization, which the `Artifact` tool refuses to read): its content sits in an iframe on `*.claudeusercontent.com`. `mira frames` often lists an `about:blank` frame before it (reading that one returns empty): pick the frame whose url is the claudeusercontent one, e.g. `mira exec "document.body.innerText" --frame 2`, and use the index, not a url piece, when several match.
 Needs a Mira build of 2026-11-05 or later (`mira commands | grep list-frames`); a tab opened
 before Mira was relaunched on that build must be reloaded once, or `--frame` answers `frames are
 not tracked on this tab`. Without such a build, read pixels: `mira shot`, `mira click --at`.
@@ -306,6 +320,8 @@ and each line can override it with its own `--tab`. Three verbs are not allowed 
 (never returns), `use` (only prints an export for the shell) and `batch` itself. `nav` and `open`
 require a named tab there, otherwise they refuse — without a named window, a page can load in the
 wrong profile.
+A line is tokenized like a shell: quotes group and are **removed**. JSON in a `type --focused` line must
+be wrapped in single quotes (`type --focused '{"a":1}'`), otherwise the page receives `{a:1}`.
 
 `mira console` saves opening the devtools to understand why a page breaks: the per-tab buffer keeps
 `console.*` **and** what the browser emits on its own (failed loads, 403, CORS, CSP, uncaught
@@ -421,6 +437,8 @@ collapses.
 
 - Without a path, the file goes to `userData/screenshots/shot-<timestamp>.png` and the CLI says
   where.
+- A background tab (`-b`) can answer `Unable to capture screenshot`. Open the page in a session
+  window instead (`mira nav --profile <p> <url>`, then `mira shot --profile <p>`).
 - The path is made absolute from the calling shell's cwd, `~` included; the daemon refuses a
   relative path, because Mira's cwd has nothing to do with yours.
 - Extension: `.png` is mandatory (added if missing, refused if different) — the bytes are PNG.
@@ -518,10 +536,27 @@ before concluding.
   `button[type=submit]`, and in the not-found branch return `location.href` plus the first 600 characters
   of `document.body.innerText` and the visible button labels. Read the form first (`mira snap`, or one
   read-only `exec`) to learn the step you are on before scripting a click.
+- **A button label can carry icon-font characters** (private-use code points, e.g. `"Add"`),
+  so `textContent === 'Add'` and `innerText.trim() === 'Add'` find nothing. Strip them first
+  (`.replace(/[-]/g, '').trim()`) or use `includes`. To list the real text, print
+  `[...b.textContent].map(c => c.charCodeAt(0))` instead of guessing.
+- **A Radix dropdown trigger (`aria-haspopup="menu"`, `aria-expanded="false"`) ignores a script `.click()`
+  and synthetic pointer events** (`exec` clicks are untrusted), and in a background tab (`-b`) `mira click`
+  does not land either. Focus the trigger and dispatch `new KeyboardEvent('keydown', {key: 'ArrowDown',
+  code: 'ArrowDown', bubbles: true, cancelable: true})`: the menu opens (`aria-expanded` is read before
+  the re-render, so it still prints `false`; check `[role=menuitem]` after a second).
+- **`click` takes one target: `--selector` plus `--text` is refused**, and `--text` alone can land on a heading that carries the same words as the button (a confirm dialog titled "Delete App" with a "Delete App" button). Use `mira snap` and click the ref, or `--selector 'button'` with `--nth n`.
 - **`click --text` reads visible text only.** An icon-only button carries its name in `aria-label`
   or `title`, so `click --text 'Toggle comments'` answers `no match` while the control sits right
   there: use `click --selector "button[aria-label='Toggle comments']"`. `snap` lists such a button
-  as `"button"` or `"?"`, which is the tell that its name is not in the DOM text.
+  as `"button"` or `"?"`, which is the tell that its name is not in the DOM text. The same holds for a
+  link or a `div` acting as a button (a Back arrow, a list row whose label is an `aria-label`): the
+  answer is `no match` even when the element is on screen, and newer builds say the text sits in an
+  `aria-label`/`title`. Use `--selector '[aria-label=Back]'`, or the `snap` ref. When several elements
+  share the attribute (a hidden twin), pick the shown one in `exec` (`.find((x) => x.offsetParent)`).
+- **A password input in a third-party UI can read as bullets** (`•••`) until its reveal toggle
+  (`[aria-label^="Show or hide password"]`) is clicked: `input.value` then holds the mask, not the
+  secret, so a hash or a comparison of it is wrong without any error. Reveal first, read, re-hide.
 - **A disabled button says why in a tooltip, and there is no hover verb.** When an action is greyed
   out, the reason hangs on its tooltip trigger (Base UI marks it `[data-base-ui-tooltip-trigger]`) and
   never shows up in the page text. Fire the

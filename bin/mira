@@ -39,6 +39,10 @@
 //                                    A string result lands VERBATIM (text, not JSON) — wrap the code in
 //                                    JSON.stringify(…) when the file is meant for a JSON parser)
 //                                   (--bare: the result alone, exit 1 on failure — for shell tests)
+//                                   (5 s cap: a script that awaits longer fails with `executeJavaScript timed out after 5000ms`,
+//                                    yet it KEEPS RUNNING in the page. Never sleep inside exec: wait with
+//                                    `mira wait` or a shell sleep between execs; for a long async read, store the
+//                                    result on `window` and poll it)
 //   mira upload <file>... [--selector <css>] [--nth <n>]   put local files into the page's <input type=file>
 //                                   (no native picker; chunked so big files pass the exec timeout;
 //                                    default selector input[type=file], --nth picks among matches)
@@ -66,7 +70,8 @@
 //                                   which SITE the tab is on (after a login redirect), use --host
 //   mira batch <@file|-> [--keep-going]   run many lines over ONE connection: one process, one agent turn
 //                                   (a line = what you'd type after `mira`; # comments and blanks ignored;
-//                                    stops at the first failure unless --keep-going)
+//                                    stops at the first failure unless --keep-going; quotes are shell-style and
+//                                    STRIPPED: wrap JSON in single quotes, `type --focused '{"a":1}'`)
 //   mira reload                     reload the pinned or active tab (on the error page: retries the url that failed)
 //   mira console [--level e][--limit n][--since seq]  captured page console, iframes included (console.* + 403/CORS/CSP/exceptions)
 //   mira freeze [--arm][--samples n][--terminate]  which code holds a stuck page; --arm first, while it answers, then reload
