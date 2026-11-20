@@ -41,6 +41,7 @@ effect and no process launched. It is the living source; what follows is only th
 ```bash
 mira tabs                              # tabs (id / ages / title / url); * = active, z = asleep, ♪ = sound
 mira tabs --window <id>                # ANOTHER window's strip (ids from `mira windows`)
+mira tabs --all                        # every open window, one section each; plain `mira tabs` shows ONE window, so a tab in another profile looks missing
 mira tabs --profile personal           # the user's window of that profile (label or id prefix)
 mira tabs --session                    # YOUR session window's strip (never opens one; --profile if several)
 mira tabs --profile personal --ids     # bare ids, one per line, active first: `ANCHOR=$(mira tabs --profile personal --ids | head -1)`
@@ -211,7 +212,7 @@ What to do when input is dropped, in this order:
    covered window.
 2. Redo the step in a hidden tab of one of the user's own windows, where input was measured to
    land: `MIRA_NO_SESSION_WINDOW=1 mira open <url> -b --window <id>` (id from `mira windows`), then
-   `--tab <id>` on every command, and `mira call close-tab --params '{"id":"<id>"}'` at the end.
+   `--tab <id>` on every command, and `mira close-tab --tab <id>` at the end (it exits 1 if the tab is already gone, e.g. closed by the page or the user: the goal is met, ignore it).
 3. Tell the user the window is covered. Never `mira focus`.
 
 `mira click` is the mouse counterpart of `mira press`, and exists for the same reason: a
@@ -437,7 +438,7 @@ collapses.
 
 - Without a path, the file goes to `userData/screenshots/shot-<timestamp>.png` and the CLI says
   where.
-- A background tab (`-b`) can answer `Unable to capture screenshot`. Open the page in a session
+- A background tab (`-b`) can answer `Unable to capture screenshot`, `capture came back empty` or `UnknownVizError` (and `snap` comes back empty). Open the page in a session
   window instead (`mira nav --profile <p> <url>`, then `mira shot --profile <p>`).
 - The path is made absolute from the calling shell's cwd, `~` included; the daemon refuses a
   relative path, because Mira's cwd has nothing to do with yours.
@@ -580,7 +581,7 @@ before concluding.
   it the visible tab. A tab can also be asleep right after a redirect (seen once, after an OAuth
   consent page; cause not established): when an `exec` chained after a click that navigates answers
   `tab is asleep`, the click itself went through, so wake the tab and read the result instead of
-  redoing the click. `exec` never wakes a tab on its own (waking races the page load). Auto-sleep puts a loaded tab to sleep once it has gone 12 h (setting:
+  redoing the click. `exec` never wakes a tab on its own (waking races the page load). Waking reloads the stored url, so form state typed into an asleep tab is already gone: re-fill after waking, and read the page before assuming a half-filled form survived. Auto-sleep puts a loaded tab to sleep once it has gone 12 h (setting:
   `get-auto-sleep` / `set-auto-sleep`, Settings > Tabs) without being on screen (counted from its
   opening if it never was), except the active, pinned, keep-awake and
   audible tabs and a page holding typed, unsent text; `mira call auto-sleep --params

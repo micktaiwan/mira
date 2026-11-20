@@ -217,7 +217,7 @@ export function clickTargetScript(
   const w = window.innerWidth
   const h = window.innerHeight
   if (x < 0 || y < 0 || x > w || y > h) {
-    return { ok: false, reason: 'the target is outside the viewport (at ' + Math.round(x) + ',' + Math.round(y) + ' of ' + w + '×' + h + ')' + (scroll ? ' even after scrolling it into view (nested scroll container or fixed layout: scroll it with mira exec, then click --at)' : '; pass scroll:true') }
+    return { ok: false, reason: 'the target is outside the viewport (at ' + Math.round(x) + ',' + Math.round(y) + ' of ' + w + '×' + h + ')' + (scroll ? ' even after scrolling it into view (nested scroll container or fixed layout: scroll it with mira exec, then click --at)' : '; pass scroll:true (CLI: add --scroll to the click)') }
   }
   // What the page actually gets clicked on at that point. When it is neither the
   // target nor one of its children, something covers it (a modal, a sticky bar)

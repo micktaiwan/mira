@@ -26,6 +26,7 @@
 // Usage:
 //   mira tabs [--window <id>]       list tabs (id / title / url), * = active, z = asleep, ♪ = playing sound
 //   mira tabs --profile <p>         list the user's window of that profile (label or id prefix)
+//   mira tabs --all                 every open window's tabs, one section per window (default lists the focused window only)
 //                                   (--window: any window from `mira windows`, else the focused one)
 //   mira tabs --ids                 bare tab ids, one per line, active first (for $(mira tabs --profile p --ids | head -1);
                                 //                                   never awk the table: column 1 is blank, z or *, so the id is $1 or $2)
@@ -614,6 +615,34 @@ async function main() {
 
   switch (command) {
     case 'tabs': {
+      // --all: every open window's strip, one section per window. Before this
+      // the flag was silently ignored and only the focused window's tabs came
+      // back, so a tab living in another profile's window looked missing.
+      if (flags.all === true) {
+        if (flags.window !== undefined || flags.profile !== undefined || flags.session === true)
+          return die('tabs: --all cannot be combined with --window, --profile or --session', 2)
+        const wins = await call({ command: 'list-windows' }, socketPath, timeoutMs).catch((e) =>
+          die(e.message, 2)
+        )
+        if (!wins.ok) return die(JSON.stringify(wins), 1)
+        const out = []
+        for (const w of wins.windows ?? []) {
+          const r = await call(
+            { command: 'list-tabs', params: { windowId: w.id ?? w.windowId } },
+            socketPath,
+            timeoutMs
+          ).catch((e) => die(e.message, 2))
+          if (!r.ok) return die(JSON.stringify(r), 1)
+          out.push(
+            flags.ids === true
+              ? formatTabIds(r.tabs, r.activeId)
+              : `== window ${w.id ?? w.windowId} (${w.profileLabel ?? w.profile ?? w.profileId ?? '?'}) ==\n` +
+                  formatTabs(r.tabs, r.activeId)
+          )
+        }
+        process.stdout.write(out.join('\n') + '\n')
+        return
+      }
       const req = { command: 'list-tabs' }
       if (typeof flags.window === 'string') req.params = { windowId: flags.window }
       // --profile without --session: the user's window of that profile. Resolved
@@ -899,6 +928,9 @@ async function main() {
       // Capture the pinned/active tab to a PNG. The path is resolved against
       // THIS shell's cwd (Mira's own is unrelated and its daemon refuses a
       // relative one); no path at all means userData/screenshots/shot-<ts>.png.
+      if (flags.out !== undefined || flags.output !== undefined || flags.path !== undefined) {
+        return die('shot: the path is positional, not a flag: `mira shot <path.png> [--full]` (--out is not a flag)', 2)
+      }
       const built = buildScreenshot(positionals[0], tabId, {
         full: flags.full === true,
         cwd: process.cwd(),
