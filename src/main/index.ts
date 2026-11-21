@@ -1,6 +1,7 @@
 // MUST be the first import: its module-level side effect enables the extension
 // lib's `debug` logging before that lib binds its instances (see log.ts).
 import { initLogging } from './log'
+import { closeKeyRepeatGuard } from './close-key-repeat'
 import { applyChromiumSwitches } from './chromium-switches'
 import { app, BrowserWindow, dialog, globalShortcut, ipcMain, session } from 'electron'
 import { join } from 'path'
@@ -38,6 +39,7 @@ import { normalizeHistory, type HistoryEntry } from './history-store'
 import { normalizePermissions, type PermissionGrant } from './permission-store'
 import { normalizeSettings, type AppSettings } from './settings-store'
 import { buildAppMenu } from './menu'
+import { GLOBAL_SHORTCUTS } from './shortcuts'
 import { installStealth } from './stealth'
 import { isExpectedExit, processGoneLine } from './frame-trace'
 import {
@@ -632,7 +634,10 @@ app.whenReady().then(async () => {
       // contextForMenu, not contextForFocused: a close from the menu is a USER
       // close, so closing the last window quits Mira through the confirmation
       // gate — a socket close never does (see TabDetachContext.closeWindow).
-      closeWindow: () => runDetached('close-window', {}, profiles.contextForMenu()),
+      closeWindow: () => {
+        if (closeKeyRepeatGuard.isHeld(Date.now())) return
+        runDetached('close-window', {}, profiles.contextForMenu())
+      },
       newTab: () => runDetached('new-tab', {}, profiles.contextForFocused()),
       duplicateTab: () => runDetached('duplicate-active-tab', {}, profiles.contextForFocused()),
       // Menu context like closeWindow: Cmd+W on the last tab closes the window
@@ -640,6 +645,9 @@ app.whenReady().then(async () => {
       // With the embedded terminal holding the keyboard, Cmd+W ends its claude
       // session instead of closing the tab behind it (closeKeyCommand).
       closeTab: () => {
+        // A key repeat that reached the menu without passing a webContents input
+        // hook (no view focused right after a close): part of a held Cmd+W.
+        if (closeKeyRepeatGuard.isHeld(Date.now())) return
         const ctx = profiles.contextForMenu()
         runDetached(closeKeyCommand(ctx.terminalFocused()), {}, ctx)
       },
@@ -649,8 +657,10 @@ app.whenReady().then(async () => {
         runDetached('set-window-fullscreen', { fullScreen: false }, profiles.contextForFocused()),
       groupDuplicateTabs: () =>
         runDetached('group-duplicate-tabs', {}, profiles.contextForFocused()),
-      closeTabToRecent: () =>
-        runDetached('close-active-tab', { focus: 'recent' }, profiles.contextForMenu()),
+      closeTabToRecent: () => {
+        if (closeKeyRepeatGuard.isHeld(Date.now())) return
+        runDetached('close-active-tab', { focus: 'recent' }, profiles.contextForMenu())
+      },
       forgetSite: () => runDetached('forget-site', {}, profiles.contextForFocused()),
       // Cmd+Alt+Backspace: wipe this site's cookies + storage and reload, so the
       // page comes back signed out. The command owns the toast.
@@ -733,7 +743,7 @@ app.whenReady().then(async () => {
   // the M key sits where QWERTY has ';' (virtual keycode 41), so 'M' alone would
   // bind the AZERTY ',' key instead. Register both accelerators: 'M' covers
   // QWERTY, ';' covers the physical M key on AZERTY.
-  const FOCUS_ACCELERATORS = ['CommandOrControl+Shift+M', 'CommandOrControl+Shift+;']
+  const FOCUS_ACCELERATORS = [GLOBAL_SHORTCUTS.focusApp, 'CommandOrControl+Shift+;']
   for (const accelerator of FOCUS_ACCELERATORS) {
     const registered = globalShortcut.register(accelerator, () =>
       runDetached('focus-app', {}, profiles.contextForFocused())
@@ -748,7 +758,7 @@ app.whenReady().then(async () => {
   // Toggle the fullscreen media gallery (collect + download every media on the
   // active page). Cmd+Shift+M is taken by focus-app, so this adds Alt. Same AZERTY
   // caveat as above: the physical M sits on QWERTY ';', so register both keycodes.
-  const MEDIA_ACCELERATORS = ['CommandOrControl+Alt+Shift+M', 'CommandOrControl+Alt+Shift+;']
+  const MEDIA_ACCELERATORS = [GLOBAL_SHORTCUTS.mediaGallery, 'CommandOrControl+Alt+Shift+;']
   for (const accelerator of MEDIA_ACCELERATORS) {
     const registered = globalShortcut.register(accelerator, () =>
       runDetached('toggle-media-gallery', {}, profiles.contextForFocused())

@@ -9,6 +9,105 @@
 // buildHomePage is pure and tested; profiles.ts gathers the stats and interpolates.
 
 import { docThemeVars, type DocTheme } from './doc-theme'
+import { GLOBAL_SHORTCUTS, SHORTCUTS, formatAccelerator, type ShortcutName } from './shortcuts'
+
+/** One row of the home page's shortcut panel. `keys` name entries of SHORTCUTS
+ * (shown joined, e.g. "⌘↑ ⌘↓"); `literal` is for gestures no accelerator
+ * describes (Cmd+scroll) and the system-wide hotkeys. */
+interface HelpRow {
+  desc: string
+  keys?: ShortcutName[]
+  literal?: string
+}
+
+/** The help panel, read from the shortcut table so it cannot drift from what the
+ * menu binds. home-doc.test.ts fails when a SHORTCUTS entry is missing here. */
+export const HELP_SECTIONS: Array<{ title: string; rows: HelpRow[] }> = [
+  {
+    title: 'Tabs',
+    rows: [
+      { desc: 'New tab', keys: ['newTab'] },
+      { desc: 'Close tab', keys: ['closeTab'] },
+      { desc: 'Close + back to last viewed', keys: ['closeTabToRecent'] },
+      { desc: 'Close + forget site', keys: ['forgetSite'] },
+      { desc: 'Clear site data + reload', keys: ['clearSiteData'] },
+      { desc: 'Reopen closed', keys: ['reopenTab'] },
+      { desc: 'Duplicate tab', keys: ['duplicateTab'] },
+      { desc: 'Previous / next', keys: ['prevTab', 'nextTab'] },
+      { desc: 'Recently viewed tabs', keys: ['recentTabBack', 'recentTabForward'] },
+      { desc: 'Move tab to top', keys: ['moveTabToTop'] },
+      { desc: 'Move tab into folder', keys: ['fileTabIntoFolder'] },
+      { desc: 'Reveal tab in sidebar', keys: ['revealTab'] },
+      { desc: 'Sleep tab (free RAM)', keys: ['discardTab'] },
+      { desc: 'Wake all tabs', keys: ['wakeAllTabs'] }
+    ]
+  },
+  {
+    title: 'Navigate',
+    rows: [
+      { desc: 'Command palette', keys: ['commandPalette'] },
+      { desc: 'Command palette (alt)', keys: ['commandPaletteShift'] },
+      { desc: 'Address bar', keys: ['openLocation'] },
+      { desc: 'Back', keys: ['back'] },
+      { desc: 'Go to root domain', keys: ['rootDomain'] },
+      { desc: 'Reload', keys: ['reload'] },
+      { desc: 'Hard reload', keys: ['hardReload'] },
+      { desc: 'Find in page', keys: ['find'] },
+      { desc: 'Find next / prev', keys: ['findNext', 'findPrevious'] },
+      { desc: 'Add to favorites', keys: ['addBookmark'] },
+      { desc: 'Fill login from vault', keys: ['fillLogin'] },
+      { desc: 'Zoom in / out / reset', keys: ['zoomIn', 'zoomOut', 'zoomReset'] }
+    ]
+  },
+  {
+    title: 'Layout',
+    rows: [
+      { desc: 'Tab sidebar', keys: ['toggleTabsPanel'] },
+      { desc: 'AI panel', keys: ['toggleSkillPane'] },
+      { desc: 'Zen mode', keys: ['toggleZen'] },
+      { desc: 'Settings', keys: ['settings'] },
+      { desc: 'Developer tools', keys: ['toggleDevTools'] },
+      { desc: 'Fullscreen', keys: ['toggleFullScreen'] },
+      { desc: 'Close window', keys: ['closeWindow'] },
+      { desc: 'Quit', keys: ['quit'] }
+    ]
+  },
+  {
+    title: 'System-wide',
+    rows: [
+      { desc: 'Focus Mira', literal: formatAccelerator(GLOBAL_SHORTCUTS.focusApp) },
+      { desc: 'Media gallery', literal: formatAccelerator(GLOBAL_SHORTCUTS.mediaGallery) },
+      { desc: 'Magnifier', literal: '⌘ + scroll' }
+    ]
+  }
+]
+
+/** SHORTCUTS entries the panel leaves out on purpose: a second key for the same
+ * action, already shown through its twin. */
+export const HELP_OMITTED: ShortcutName[] = ['zoomInPlus']
+
+function helpRowHtml(row: HelpRow): string {
+  const keys = row.literal ?? (row.keys ?? []).map((k) => formatAccelerator(SHORTCUTS[k])).join(' ')
+  return `<div class="sc-row"><span class="desc">${escapeHtml(row.desc)}</span><kbd>${escapeHtml(keys)}</kbd></div>`
+}
+
+function helpColumnsHtml(): string {
+  return HELP_SECTIONS.map((section) => {
+    const rows = section.rows.map(helpRowHtml).join('\n          ')
+    const extra =
+      section.title === 'System-wide'
+        ? `
+          <h3 style="margin-top:16px">Getting started</h3>
+          <div class="sc-row"><span class="desc">Type a URL or search in the bar above</span></div>
+          <div class="sc-row"><span class="desc">Press ⌘K for any command</span></div>
+          <div class="sc-row"><span class="desc">Switch profiles from the menu bar</span></div>`
+        : ''
+    return `<div class="sc-col">
+          <h3>${escapeHtml(section.title)}</h3>
+          ${rows}${extra}
+        </div>`
+  }).join('\n        ')
+}
 
 /** The session snapshot the home page renders. All primitives so this file stays
  * decoupled from Electron and the status-domain types — profiles.ts formats the
@@ -292,50 +391,7 @@ export function buildHomePage(stats: HomeStats): string {
         <span class="sc-caret" aria-hidden="true"></span>
       </summary>
       <div class="sc-grid">
-        <div class="sc-col">
-          <h3>Tabs</h3>
-          <div class="sc-row"><span class="desc">New tab</span><kbd>⌘T</kbd></div>
-          <div class="sc-row"><span class="desc">Close tab</span><kbd>⌘W</kbd></div>
-          <div class="sc-row"><span class="desc">Close + forget site</span><kbd>⌘⌥W</kbd></div>
-          <div class="sc-row"><span class="desc">Clear site data + reload</span><kbd>⌘⌥⌫</kbd></div>
-          <div class="sc-row"><span class="desc">Reopen closed</span><kbd>⌘⇧T</kbd></div>
-          <div class="sc-row"><span class="desc">Duplicate tab</span><kbd>⌘⇧D</kbd></div>
-          <div class="sc-row"><span class="desc">Prev / next</span><kbd>⌘↑ ↓</kbd></div>
-          <div class="sc-row"><span class="desc">Sleep tab (free RAM)</span><kbd>⌘S</kbd></div>
-          <div class="sc-row"><span class="desc">Wake all tabs</span><kbd>⌘⇧A</kbd></div>
-        </div>
-        <div class="sc-col">
-          <h3>Navigate</h3>
-          <div class="sc-row"><span class="desc">Command palette</span><kbd>⌘K</kbd></div>
-          <div class="sc-row"><span class="desc">Back / forward</span><kbd>⌘← →</kbd></div>
-          <div class="sc-row"><span class="desc">Recently viewed tabs</span><kbd>⌘⌥← →</kbd></div>
-          <div class="sc-row"><span class="desc">Reload</span><kbd>⌘R</kbd></div>
-          <div class="sc-row"><span class="desc">Hard reload</span><kbd>⌘⇧R</kbd></div>
-          <div class="sc-row"><span class="desc">Find in page</span><kbd>⌘F</kbd></div>
-          <div class="sc-row"><span class="desc">Find next / prev</span><kbd>⌘G ⌘⇧G</kbd></div>
-          <div class="sc-row"><span class="desc">Add to favorites</span><kbd>⌘D</kbd></div>
-          <div class="sc-row"><span class="desc">Zoom in / out / reset</span><kbd>⌘= − 0</kbd></div>
-        </div>
-        <div class="sc-col">
-          <h3>Layout</h3>
-          <div class="sc-row"><span class="desc">Tab sidebar</span><kbd>⌘B</kbd></div>
-          <div class="sc-row"><span class="desc">AI panel</span><kbd>⌘J</kbd></div>
-          <div class="sc-row"><span class="desc">Zen mode</span><kbd>⌘⇧H</kbd></div>
-          <div class="sc-row"><span class="desc">Settings</span><kbd>⌘,</kbd></div>
-          <div class="sc-row"><span class="desc">Developer tools</span><kbd>⌥⌘I</kbd></div>
-          <div class="sc-row"><span class="desc">Fullscreen</span><kbd>⌃⌘F</kbd></div>
-          <div class="sc-row"><span class="desc">Close window</span><kbd>⌘⇧W</kbd></div>
-        </div>
-        <div class="sc-col">
-          <h3>System-wide</h3>
-          <div class="sc-row"><span class="desc">Focus Mira</span><kbd>⌘⇧M</kbd></div>
-          <div class="sc-row"><span class="desc">Media gallery</span><kbd>⌘⌥⇧M</kbd></div>
-          <div class="sc-row"><span class="desc">Magnifier</span><kbd>⌘ + scroll</kbd></div>
-          <h3 style="margin-top:16px">Getting started</h3>
-          <div class="sc-row"><span class="desc">Type a URL or search in the bar above</span></div>
-          <div class="sc-row"><span class="desc">Press ⌘K for any command</span></div>
-          <div class="sc-row"><span class="desc">Switch profiles from the menu bar</span></div>
-        </div>
+        ${helpColumnsHtml()}
       </div>
     </details>
     <div class="foot">Type an address above, or press ⌘K to search</div>

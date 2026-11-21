@@ -342,6 +342,7 @@ import { inputReadiness, underlaysSurvive, viewShown } from './input-underlay'
 import { locationAuthStatus, requestLocationAuthorization } from './mac-location'
 import { extractionScript, type SkillSource } from './skills'
 import { allowQuitNow, noteQuitOrigin, suppressQuitPrompt } from './quit'
+import { closeKeyRepeatGuard, isRepeatedCloseKey } from './close-key-repeat'
 import {
   type AppSettings,
   withHomeUrl,
@@ -5346,6 +5347,12 @@ export class ProfileManager {
     // window it was wired against.
     wc.on('before-input-event', (event, input) => {
       if (input.type !== 'keyDown') return
+      // A held Cmd+W closes one tab, not one per key repeat (close-key-repeat.ts).
+      if (isRepeatedCloseKey(input, process.platform)) {
+        closeKeyRepeatGuard.noteRepeat(Date.now())
+        event.preventDefault()
+        return
+      }
       const mod = process.platform === 'darwin' ? input.meta : input.control
       if (!mod) return
       const pw = this.ownerByWebContents(wc) ?? initialPw

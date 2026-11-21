@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { buildHomePage, homePageUrl, isMiraHomeUrl, type HomeStats } from './home-doc'
+import {
+  buildHomePage,
+  homePageUrl,
+  isMiraHomeUrl,
+  HELP_OMITTED,
+  HELP_SECTIONS,
+  type HomeStats
+} from './home-doc'
+import { SHORTCUTS, type ShortcutName } from './shortcuts'
 
 const base: HomeStats = {
   profileLabel: 'Personal',
@@ -47,11 +55,22 @@ describe('buildHomePage', () => {
   it('lists the corrected / added keyboard shortcuts', () => {
     const html = buildHomePage(base)
     // The forget-site command (Cmd+Alt+W) and the shortcuts previously missing.
-    expect(html).toContain('<kbd>⌘⌥W</kbd>') // Close + forget site
-    expect(html).toContain('<kbd>⌘⇧R</kbd>') // Hard reload
-    expect(html).toContain('<kbd>⌘⌥← →</kbd>') // Recent tabs
+    expect(html).toContain('<kbd>⌥⌘W</kbd>') // Close + forget site
+    expect(html).toContain('<kbd>⇧⌘R</kbd>') // Hard reload
+    expect(html).toContain('<kbd>⌥⌘← ⌥⌘→</kbd>') // Recent tabs
     // Wake all tabs is Cmd+Shift+A, NOT Cmd+Shift+R (the old bug).
-    expect(html).toMatch(/Wake all tabs<\/span><kbd>⌘⇧A<\/kbd>/)
+    expect(html).toMatch(/Wake all tabs<\/span><kbd>⇧⌘A<\/kbd>/)
+    // Sleep tab is Alt+Cmd+S; the hand-written panel once showed ⌘S.
+    expect(html).toMatch(/Sleep tab \(free RAM\)<\/span><kbd>⌥⌘S<\/kbd>/)
+    expect(html).toMatch(/Reveal tab in sidebar<\/span><kbd>⇧⌘E<\/kbd>/)
+  })
+
+  it('shows every shortcut the menu binds (the panel cannot drift)', () => {
+    const shown = new Set(HELP_SECTIONS.flatMap((s) => s.rows.flatMap((r) => r.keys ?? [])))
+    const missing = (Object.keys(SHORTCUTS) as ShortcutName[]).filter(
+      (k) => !shown.has(k) && !HELP_OMITTED.includes(k)
+    )
+    expect(missing).toEqual([])
   })
 
   it('renders the shortcuts panel as a collapsed <details>', () => {

@@ -50,6 +50,13 @@ export const SHORTCUTS = {
 
 export type ShortcutName = keyof typeof SHORTCUTS
 
+/** System-wide hotkeys (globalShortcut, index.ts), live even when Mira is in the
+ * background. index.ts also registers the AZERTY twin of each ('M' → ';'). */
+export const GLOBAL_SHORTCUTS = {
+  focusApp: 'CommandOrControl+Shift+M',
+  mediaGallery: 'CommandOrControl+Alt+Shift+M'
+} as const
+
 const MODIFIER_SYMBOLS: Record<string, string> = {
   control: '⌃',
   ctrl: '⌃',
