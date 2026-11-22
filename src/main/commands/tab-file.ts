@@ -1,4 +1,4 @@
-// Tab-file domain: Cmd+Right files a tab into the folder drawn right above it in
+// Tab-file domain: Ctrl+Cmd+Right files a tab into the folder drawn right above it in
 // the sidebar, the way Kova's Cmd+Right files a pane under the subject right
 // above it in Cmd+P.
 //
@@ -17,7 +17,7 @@ import { type CommandMap, fail } from './registry'
 import type { CommandContext } from './context'
 import type { TabGroupMember } from './tab-top'
 
-/** What Cmd+Right does to a tab. */
+/** What Ctrl+Cmd+Right does to a tab. */
 export type FilePlan =
   /** Join `folderId`: move the tab to `toIndex` in the strip (the slot right
    * after the folder's last member, so it renders as that member's successor),
@@ -28,7 +28,7 @@ export type FilePlan =
   /** Nothing to do: the tab is pinned, or already in a folder. */
   | { kind: 'stay' }
 
-/** Pure: Cmd+Right's plan for tab `id`. Null on an unknown id. `folders` is the
+/** Pure: Ctrl+Cmd+Right's plan for tab `id`. Null on an unknown id. `folders` is the
  * sidebar's folder list, in the order it draws them. */
 export function planFileIntoFolder(
   tabs: readonly TabGroupMember[],
@@ -76,7 +76,7 @@ export interface TabFileContext {
 }
 
 export const tabFileCommands: CommandMap<CommandContext> = {
-  // Cmd+Right (Tab menu, palette, socket, MCP): file a tab into the folder right
+  // Ctrl+Cmd+Right (Tab menu, palette, socket, MCP): file a tab into the folder right
   // above it, or into a new folder. `id` omitted → the active tab.
   'file-tab-into-folder': (ctx, params) => {
     const { id, title, edit } = (params ?? {}) as Partial<FileTabIntoFolderParams>

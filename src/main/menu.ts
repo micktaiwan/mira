@@ -38,7 +38,7 @@ export interface AppMenuHandlers {
    * pinned grid, its folder, or the loose tabs. Wired to move-tab-to-top. */
   moveTabToTop: () => void
   /** File the active tab into the folder right above it in the sidebar, or a new
-   * folder (Cmd+Right). Wired to file-tab-into-folder. */
+   * folder (Ctrl+Cmd+Right). Wired to file-tab-into-folder. */
   fileTabIntoFolder: () => void
   /** Navigate the focused window back / forward in its history. Wired to the
    * back / forward commands so the Cmd+Arrow accelerators stay pilotable. */
@@ -352,7 +352,7 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
         registerAccelerator: false,
         click: () => handlers.moveTabToTop()
       },
-      // Display-only accelerator too: Cmd+Right is taken by wireTabShortcuts.
+      // Display-only accelerator too: Ctrl+Cmd+Right is taken by wireTabShortcuts.
       {
         label: 'Move Tab into Folder',
         accelerator: SHORTCUTS.fileTabIntoFolder,
@@ -420,7 +420,7 @@ export function appMenuTemplate(handlers: AppMenuHandlers): MenuItemConstructorO
       label: 'History',
       submenu: [
         { label: 'Back', accelerator: SHORTCUTS.back, click: () => handlers.goBack() },
-        // No key: Cmd+Right files the tab into a folder (wireTabShortcuts).
+        // No key: Cmd+Right is left to text fields (end of line).
         { label: 'Forward', click: () => handlers.goForward() },
         // Up to the site root: strips subdomain + path + query in one press
         // (transverse.labanquepostale.fr/xo_/… → labanquepostale.fr). Not a

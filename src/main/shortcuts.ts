@@ -25,7 +25,7 @@ export const SHORTCUTS = {
   recentTabBack: 'CmdOrCtrl+Alt+Left',
   recentTabForward: 'CmdOrCtrl+Alt+Right',
   moveTabToTop: 'CmdOrCtrl+Alt+Up',
-  fileTabIntoFolder: 'CmdOrCtrl+Right',
+  fileTabIntoFolder: 'Ctrl+Cmd+Right',
   revealTab: 'CmdOrCtrl+Shift+E',
   closeWindow: 'CmdOrCtrl+Shift+W',
   find: 'CmdOrCtrl+F',

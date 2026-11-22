@@ -541,6 +541,14 @@ before concluding.
   so `textContent === 'Add'` and `innerText.trim() === 'Add'` find nothing. Strip them first
   (`.replace(/[-]/g, '').trim()`) or use `includes`. To list the real text, print
   `[...b.textContent].map(c => c.charCodeAt(0))` instead of guessing.
+- **Labels also hide runs of whitespace and newlines** (`"Cancel  at period end"`): an exact
+  `textContent === '...'` match fails even without icons, so always normalize with `/\s+/g` and use
+  `includes` or a regex. A button that is disabled until a form settles (debounced validation) can
+  re-disable itself after the first `.click()`: wait for `!b.disabled` in the same script, or re-find it.
+- **`uninstall-extension` closes every tab that extension owns** (its own app pages included): a later
+  `close-tab` on those ids exits 1 ("that tab no longer exists"), so list tabs again instead of looping
+  over saved ids. An app that needs its extension as a bridge ("Extension bridge timeout") is unusable
+  without it: reinstall for the task, then uninstall again.
 - **A Radix dropdown trigger (`aria-haspopup="menu"`, `aria-expanded="false"`) ignores a script `.click()`
   and synthetic pointer events** (`exec` clicks are untrusted), and in a background tab (`-b`) `mira click`
   does not land either. Focus the trigger and dispatch `new KeyboardEvent('keydown', {key: 'ArrowDown',

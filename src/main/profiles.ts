@@ -5373,10 +5373,11 @@ export class ProfileManager {
         this.moveTabToTopIn(pw)
         event.preventDefault()
       }
-      // Cmd+Right: file the active tab into the folder right above it, or open a
-      // new folder's name field (Kova's Cmd+Right on a pane in Cmd+P). Taken from
-      // Forward, which has no key now: Cmd+Right never reaches a text field.
-      else if (!input.shift && !input.alt && input.key === 'ArrowRight') {
+      // Ctrl+Cmd+Right: file the active tab into the folder right above it, or open
+      // a new folder's name field. Not plain Cmd+Right (end of line in any text
+      // field) nor Cmd+Shift+Right (select to end of line): taking either filed the
+      // tab whenever the user edited text. Plain Cmd+Right goes to the page.
+      else if (input.control && !input.shift && !input.alt && input.key === 'ArrowRight') {
         this.fileTabIntoFolderIn(pw, undefined, { edit: true })
         event.preventDefault()
       } else if (input.alt && input.key === 'ArrowLeft') {
