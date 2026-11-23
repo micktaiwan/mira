@@ -45,6 +45,8 @@ mira tabs --all                        # every open window, one section each; pl
 mira tabs --profile personal           # the user's window of that profile (label or id prefix)
 mira tabs --session                    # YOUR session window's strip (never opens one; --profile if several)
 mira tabs --profile personal --ids     # bare ids, one per line, active first: `ANCHOR=$(mira tabs --profile personal --ids | head -1)`
+                                       # a profile with SEVERAL windows is refused (rc=2, "pick one with --window", ids listed on stderr): $ANCHOR is then
+                                       # empty. Use `mira tabs --window <id> --ids | head -1` (ids from `mira windows`), and test `[ -n "$ANCHOR" ]`
                                        # (never awk the table: column 1 is blank/z/* so the id is $1 or $2)
 mira windows                           # open windows (id / profile / tabs), * = focused
 mira profiles                          # every profile (id prefix / label / open) — the target of --profile
@@ -248,6 +250,11 @@ second**: the ticking text sits in the form context the guard compares. Separate
 in ONE `mira batch` (milliseconds apart, so the timer does not tick between them), or fill and
 submit through `mira exec` (`input.value = …; input.form.requestSubmit()`), which worked on a plain
 server-rendered form.
+A plain `input.value = …` followed by a click on the submit button can be silently ignored (seen on a
+server-rendered sudo-mode email-code form): set the value through the native setter
+(`Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(i, code)`), dispatch
+`input`, then `form.requestSubmit()`. This holds for server-rendered forms only; a React field
+rewrites any programmatic value (see the `execCommand` note further down).
 
 **The same refusal hits a composer that re-renders after navigation** (a chat input that moves or remounts while the page settles): snapping right before `type <ref>` still fails. Skip the numbered path: `mira click --selector '[contenteditable=true]'` (or the field's CSS) to focus it for real, then `mira type --focused <text>`.
 
@@ -554,6 +561,7 @@ before concluding.
   does not land either. Focus the trigger and dispatch `new KeyboardEvent('keydown', {key: 'ArrowDown',
   code: 'ArrowDown', bubbles: true, cancelable: true})`: the menu opens (`aria-expanded` is read before
   the re-render, so it still prints `false`; check `[role=menuitem]` after a second).
+- **A header button of a widget (assistant, chat, support panel) that `mira click` reports as clicked but that opens no panel, in a `-b` tab, is not proof the panel does not exist.** Before concluding it is missing, redo the click in a hidden tab of the user's own window (§ "What to do when input is dropped", step 2) and re-read the page text.
 - **`click` takes one target: `--selector` plus `--text` is refused**, and `--text` alone can land on a heading that carries the same words as the button (a confirm dialog titled "Delete App" with a "Delete App" button). Use `mira snap` and click the ref, or `--selector 'button'` with `--nth n`.
 - **`click --text` reads visible text only.** An icon-only button carries its name in `aria-label`
   or `title`, so `click --text 'Toggle comments'` answers `no match` while the control sits right
@@ -582,6 +590,7 @@ before concluding.
   windows, prefer an explicit `tabId`. Also true of `nav`/`open`: with no pinned tab (and no session
   window), they target the focused window.
 - **An `exec` sent right after a click that navigates can hit a page with no body** (`TypeError: Cannot read properties of null (reading 'innerText')` on `document.body.innerText`): the old document is gone and the new one has not parsed yet. The click went through, so do not redo it. Run `mira wait --selector body` (or `--host <site>` / `--text <expected>`) before the read, never a blind `sleep`. The same crash follows `nav` + `wait --host`: a site that redirects through an identity provider on the same registrable domain (`example.com` → `login.example.com`) satisfies `--host` on the first hop, then the document is replaced. Chain `wait --host <site>` with `wait --selector body` (or `--text <something only the final page has>`) before the first `exec`.
+- **`mira wait` is a condition, not a delay**: `mira wait 3` is refused (`wait needs --selector, --text, --url or --host`), and with `>/dev/null 2>&1` that refusal vanishes, so the next `exec` runs on a half-rendered page. After a `reload`/`nav` on a SPA, `body` exists long before the content: `mira wait --selector <the element you are about to read> --timeout 15000` (e.g. `textarea` for a form), then `exec`. A script that parses the result and indexes into it should check the count first.
 - On a Chromium error page `location.href` is the whole `data:text/html,…` URL, encoded and very long: read `document.location.protocol` or `mira tabs` (url column) instead, and `mira reload --tab <id>` retries the failed url.
 - An asleep tab (lazy-load, discard, auto-sleep; `z` in `mira tabs`) makes page-bound commands fail
   (`tab is asleep`). `mira reload --tab <id>` wakes it without switching the window to it, then
@@ -594,6 +603,9 @@ before concluding.
   opening if it never was), except the active, pinned, keep-awake and
   audible tabs and a page holding typed, unsent text; `mira call auto-sleep --params
   '{"dryRun":true}'` lists what the next sweep would take.
+- **Never press `Escape` to dismiss a browser-extension overlay (password-manager autofill popup) inside a modal.** The key reaches the page, which closes the modal itself and drops everything typed in it (a payment-provider verification modal lost its filled form this way, forcing the whole verification again). Dismiss the overlay by clicking a neutral spot inside the modal (its title), or ignore it and continue. After any key press in a modal, re-read the modal before the next step, and guard the read (`document.querySelector('[role=dialog]')?.innerText`): a bare `document.body.innerText` pipeline throws on `undefined` once the modal is gone.
+- **A poll for "step X is ready" must read the modal's own text, not `document.body.innerText`.** The page behind a modal keeps its text (a settings row labelled "Authenticator app" matched a poll meant for the modal's 2FA step and reported ready too early). Scope the check to `[role=dialog]` (or the frame), and prefer an element only the target step has (`mira wait --selector '[role=dialog] input[autocomplete=one-time-code]'`).
+- **A background tab opened with `mira open -b` can sit on a "Please wait…" interstitial and fall asleep** before it resolves (seen with an email-verification link): `activate-tab` then answers `tab is asleep`. Wake it with `mira reload --tab <id>`, then `mira wait --tab <id> --text <expected text>`; for a one-shot link that may be consumed on load, open it in the foreground (`mira open <url>` without `-b`) instead.
 - **Every tab carries three ages** (columns between the id and the title, in this order): since it
   opened, since it was last visited, since its page last changed — `3d`, `4h`, or `-` when the data
   is missing (a tab never looked at, or restored from a session older than the feature). In JSON

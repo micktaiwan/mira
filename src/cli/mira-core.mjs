@@ -333,7 +333,7 @@ export function matchProfileId(profiles, flag) {
   const exact = hits.filter((p) => (p.label ?? '').toLowerCase() === needle)
   if (exact.length === 1) return { id: exact[0].id }
   const lines = hits.map((p) => `  ${p.label ?? ''} [${p.id}]`).join('\n')
-  return { error: `"${flag}" matches several profiles; be more specific:\n${lines}` }
+  return { error: `"${flag}" matches several profiles; be more specific (pass the full label in quotes, e.g. --profile "<label>", or an id prefix; a bare word like "pro" is a substring):\n${lines}` }
 }
 
 /**
@@ -923,7 +923,7 @@ export function resolveNavTarget(windows, opts = {}, labels = {}) {
     if (distinct.length > 1) {
       const lines = distinct.map((id) => `  ${nameOf(id)}`).join('\n')
       return {
-        error: `"${opts.profileFlag}" matches several profiles; be more specific:\n${lines}`
+        error: `"${opts.profileFlag}" matches several profiles; be more specific (pass the full label in quotes, e.g. --profile "<label>", or an id prefix; a bare word like "pro" is a substring):\n${lines}`
       }
     }
     if (hits.length > 1) {
@@ -969,7 +969,7 @@ export function buildWait(tabId, opts = {}) {
     ['url', str(opts.url)],
     ['host', str(opts.host)]
   ].filter(([, v]) => v !== null)
-  if (named.length === 0) return { error: 'wait needs --selector, --text, --url or --host' }
+  if (named.length === 0) return { error: 'wait needs --selector, --text, --url or --host (it waits for a page condition, not a duration: for a SPA reload, wait --selector on the element you will read, e.g. textarea)' }
   if (named.length > 1) {
     return { error: `wait takes one condition, got ${named.map(([k]) => '--' + k).join(' and ')}` }
   }
