@@ -425,6 +425,11 @@ function report(res, { json, pretty } = {}) {
     // Stale id: the tab was closed (or lives in a profile/window not reachable). Say what to do.
     process.stderr.write('hint: that tab no longer exists; run `mira tabs` (or `mira tabs --profile <p>`) to get the current id, then pass it with --tab.\n')
   }
+  if (!res.ok && /capture came back empty|Unable to capture screenshot|UnknownVizError/.test(String(res.error ?? ''))) {
+    // A tab that is not the active one of its window (every `open -b` tab) has no layout: it cannot be captured,
+    // and `snap` / `wait --text` see an empty page. Say what to do.
+    process.stderr.write('hint: this tab is probably not the active one of its window (a `-b` tab has no layout). Run `mira call activate-tab --params \'{"id":"<tab>"}\'` on a tab of your own session window, then retry shot / snap / wait.\n')
+  }
   stream.write(text + '\n', () => process.exit(res.ok ? 0 : 1))
 }
 

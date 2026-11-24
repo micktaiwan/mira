@@ -445,8 +445,8 @@ collapses.
 
 - Without a path, the file goes to `userData/screenshots/shot-<timestamp>.png` and the CLI says
   where.
-- A background tab (`-b`) can answer `Unable to capture screenshot`, `capture came back empty` or `UnknownVizError` (and `snap` comes back empty). Open the page in a session
-  window instead (`mira nav --profile <p> <url>`, then `mira shot --profile <p>`).
+- A background tab (`-b`) can answer `Unable to capture screenshot`, `capture came back empty` or `UnknownVizError` ; the same missing layout makes `snap` come back empty and `wait --text` time out on text that sits in the app's rendered chrome (a sidebar, a menu). Run `mira call activate-tab --params '{"id":"<tab>"}'` on the tab (it must be in your own session window), then retry; or open the page in a session
+  window instead (`mira nav --profile <p> <url>`, then `mira shot --profile <p>`). The CLI prints this hint after such a shot error.
 - The path is made absolute from the calling shell's cwd, `~` included; the daemon refuses a
   relative path, because Mira's cwd has nothing to do with yours.
 - Extension: `.png` is mandatory (added if missing, refused if different) — the bytes are PNG.
@@ -591,6 +591,7 @@ before concluding.
   window), they target the focused window.
 - **An `exec` sent right after a click that navigates can hit a page with no body** (`TypeError: Cannot read properties of null (reading 'innerText')` on `document.body.innerText`): the old document is gone and the new one has not parsed yet. The click went through, so do not redo it. Run `mira wait --selector body` (or `--host <site>` / `--text <expected>`) before the read, never a blind `sleep`. The same crash follows `nav` + `wait --host`: a site that redirects through an identity provider on the same registrable domain (`example.com` → `login.example.com`) satisfies `--host` on the first hop, then the document is replaced. Chain `wait --host <site>` with `wait --selector body` (or `--text <something only the final page has>`) before the first `exec`.
 - **`mira wait` is a condition, not a delay**: `mira wait 3` is refused (`wait needs --selector, --text, --url or --host`), and with `>/dev/null 2>&1` that refusal vanishes, so the next `exec` runs on a half-rendered page. After a `reload`/`nav` on a SPA, `body` exists long before the content: `mira wait --selector <the element you are about to read> --timeout 15000` (e.g. `textarea` for a form), then `exec`. A script that parses the result and indexes into it should check the count first.
+- **`exec` has a 5000ms `executeJavaScript` ceiling**: an expression that returns a `Promise` waiting that long or longer (`await new Promise(r => setTimeout(r, 5000))`) fails with `executeJavaScript timed out after 5000ms`, whatever the delay. Never wait inside `exec`: wait in the shell, or use `mira wait --selector/--text --timeout <ms>`, then run a synchronous `exec` that reads the result.
 - On a Chromium error page `location.href` is the whole `data:text/html,…` URL, encoded and very long: read `document.location.protocol` or `mira tabs` (url column) instead, and `mira reload --tab <id>` retries the failed url.
 - An asleep tab (lazy-load, discard, auto-sleep; `z` in `mira tabs`) makes page-bound commands fail
   (`tab is asleep`). `mira reload --tab <id>` wakes it without switching the window to it, then
@@ -665,6 +666,11 @@ before concluding.
   while the modal re-renders (re-run it, it is not a failure of the click). Fix: click the field again and
   `type --focused` the bare address; the tag appears and the submit label changes (`Add member` becomes
   `Add 1 member`). Judge success by the button's `disabled` and label, never by the field's value.
+- **A code split over several boxes (device-code pages such as GitHub `/login/device`, OTP inputs)** takes
+  only the first character with `type --focused`: the page moves focus per box and the rest is lost
+  (the read-back shows `6___-____`). Do not retry the type. Set each box with the native value setter
+  (`Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input, ch)`), dispatch an
+  `input` event per box, then read the values back before clicking submit.
 - **A tab that is not the active one in its window has no layout at all.** `innerWidth` and
   `innerHeight` read `0x0`, so `snap` returns an empty list, `click --selector` finds nothing, and
   `shot` writes a blank or absurdly narrow PNG (measured: `413×2541` and a 12 KB solid image). This is not the "covered window" case above — the window can be perfectly visible, the
@@ -696,6 +702,12 @@ before concluding.
   `mira exec 'window.__r' --bare` in a shell loop, with `mira wait --text <never-present> --timeout 2000`
   as the pause, until it is no longer `"pending"`. A page navigation wipes `window`, so do not `nav`
   between the start and the last poll. Only for reads: a write started this way still must not be retried blind.
+
+- **Reading a page's JavaScript source (bundles, chunks): `fetch()` it from the tab, not `curl`.**
+  A CDN may serve brotli even when `curl` did not ask for it, so the saved file is binary, and a
+  `while read url; do curl -o … ; done` loop can write nothing at all without an error. From the
+  page, `fetch(url).then(r => r.text())` returns decoded text (use the async recipe above for
+  several chunks, and `window.__r` to hand the text back).
 
 - **A site behind a Cloudflare managed challenge: read the tab that is already loaded, never
   reload it.** Measured on an account dashboard the user had open: a
