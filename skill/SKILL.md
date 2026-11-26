@@ -147,6 +147,7 @@ creates the session window anyway. **stdout is a JSON line, not a bare id**
 `TAB=$(mira open <url> -b | python3 -c 'import json,sys; print(json.loads(sys.stdin.read().strip().splitlines()[-1])["id"])')`. A session window is only created when the profile has no window
 open. In-place `nav` still goes to the session window, so it never overwrites the user's active tab.
 The reason: one more window per session multiplies windows for nothing.
+- **`--tab "$T"` with an empty `$T` is refused** (exit 2): it used to fall back to the focused window's active tab, i.e. the user's page, so a failed `open | parse` made `shot`/`exec`/`click` act on the wrong page. Check `[ -n "$T" ]` after parsing; the `profile already open` line is on stderr, so parse stdout alone (`2>/dev/null` is fine only on the parse, never on a bare `open`).
 - **Never silence that call** (`mira open … 2>/dev/null`): every targeting failure — several windows
   or profiles open, no window to use — is printed on **stderr** and is the answer, while stdout stays
   empty and the pipeline dies with `IndexError: list index out of range`, which reads like a broken

@@ -423,7 +423,7 @@ function report(res, { json, pretty } = {}) {
   }
   if (!res.ok && /^unknown tab:/.test(String(res.error ?? ''))) {
     // Stale id: the tab was closed (or lives in a profile/window not reachable). Say what to do.
-    process.stderr.write('hint: that tab no longer exists; run `mira tabs` (or `mira tabs --profile <p>`) to get the current id, then pass it with --tab.\n')
+    process.stderr.write('hint: that tab no longer exists; run `mira tabs` (or `mira tabs --profile <p>`) to get the current id, then pass it with --tab. If no listed tab matches the page, it was closed: `mira open <url>` and use the new id.\n')
   }
   if (!res.ok && /capture came back empty|Unable to capture screenshot|UnknownVizError/.test(String(res.error ?? ''))) {
     // A tab that is not the active one of its window (every `open -b` tab) has no layout: it cannot be captured,
@@ -459,6 +459,10 @@ async function main() {
   if (badSocket) return die(badSocket, 2)
   const json = flags.json === true
   let tabId = resolveTabId({ flagTab: flags.tab, envTab: process.env.MIRA_TAB })
+  // `--tab "$T"` with an empty $T (a failed `mira open | parse`) must not silently target the focused window's
+  // active tab, which is the user's page: an explicit --tab that resolves to nothing is an error.
+  if ('tab' in flags && typeof flags.tab !== 'string') return die('--tab needs a tab id (got none): the variable you passed is empty; `mira open` prints a JSON line, take its "id"', 2)
+  if (typeof flags.tab === 'string' && flags.tab.trim() === '') return die('--tab needs a tab id, got an empty string: the variable you passed is empty (a failed `mira open | parse`?); refusing to fall back to the active tab', 2)
 
   if (!command || command === 'help' || flags.help) {
     process.stdout.write(
