@@ -203,7 +203,9 @@ export function clickTargetScript(
     if (named) return { ok: false, reason: 'no match in visible text, but <' + named.tagName.toLowerCase() + '> carries it in aria-label/title: use --selector (or a snap ref)' }`
         : ''
     }
-    return { ok: false, reason: 'no match' }
+    // A hidden page (background tab) may not have rendered lazy content (infinite scroll,
+    // 'Load more' buttons): say so instead of a bare 'no match'.
+    return { ok: false, reason: document.hidden ? 'no match, and the page is hidden: lazy-loaded content (a Load more button) may not be rendered in a background tab; redo it in the session window (mira nav <url>) with --scroll' : 'no match' }
   }
   if (nth > visible.length) {
     return { ok: false, reason: 'asked for match ' + nth + ' of ' + visible.length }
