@@ -81,6 +81,10 @@ describe('delivery probe scripts', () => {
     expect(deliveryVerdict(observable, page.run(readDeliveryScript(true)))).toBe('unknown')
   })
 
+  it('does not judge a click aimed at a named frame', () => {
+    expect(armDeliveryScript('mouse', { x: 5, y: 5 }, true)).toBe('false')
+  })
+
   it('does not judge a click with no element under the point', () => {
     const page = fakePage({ under: null })
     expect(page.run(armDeliveryScript('mouse', { x: 10, y: 20 }))).toBe(false)

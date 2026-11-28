@@ -46,6 +46,7 @@ import {
   type PermissionsRequest
 } from './extension-permissions'
 import { ExtensionPopoutRegistry, shouldAttachPopout } from './extension-popout'
+import { resolveLastFocusedWindow } from './extension-last-focused'
 import {
   toExtensionInfo,
   serviceWorkerLogLevel,
@@ -256,6 +257,7 @@ export class ExtensionsService {
     })
     this.bySession.set(ses, instance)
     fixPermissionsContains(instance)
+    fixLastFocusedWindow(instance)
     // AFTER the lib, unlike every shim above: its service-worker preload
     // rebuilds chrome.runtime from scratch and then freezes `chrome`, so an
     // onMessageExternal installed earlier would be thrown away with the
@@ -1391,6 +1393,38 @@ function fixPermissionsContains(instance: ElectronChromeExtensions): void {
       readGranted(event) as GrantedPermissions | null,
       (request ?? {}) as PermissionsRequest
     )
+}
+
+interface LibStoreInternals {
+  ctx?: {
+    store?: {
+      windows?: Set<BrowserWindow>
+      lastFocusedWindowId?: number
+      getLastFocusedWindow?: () => BrowserWindow | null | undefined
+    }
+  }
+}
+
+/** Make the lib's "current window" survive the close of the window it
+ * remembers (extension-last-focused.ts): getCurrent answered null after an
+ * extension popout closed, and Bitwarden's "New item" did nothing. The repaired
+ * id is written back, since tabs.query({windowId: CURRENT}) reads the raw id. */
+function fixLastFocusedWindow(instance: ElectronChromeExtensions): void {
+  const store = (instance as unknown as LibStoreInternals).ctx?.store
+  if (
+    !store ||
+    !(store.windows instanceof Set) ||
+    typeof store.getLastFocusedWindow !== 'function'
+  ) {
+    console.warn('[mira] last-focused window fix skipped: the lib store changed shape')
+    return
+  }
+  const windows = store.windows
+  store.getLastFocusedWindow = () => {
+    const win = resolveLastFocusedWindow(store.lastFocusedWindowId, windows)
+    if (win) store.lastFocusedWindowId = win.id
+    return win
+  }
 }
 
 /** Short extension id from a service-worker scope (chrome-extension://<id>/),

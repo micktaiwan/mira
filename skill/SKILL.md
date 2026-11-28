@@ -302,7 +302,7 @@ the tab's, which still reaches a frame by pixel). The click refuses a target cov
 frame, but not one whose iframe is itself covered in the parent. `type --focused` takes no
 `--frame` (it goes wherever focus is). Opening the frame's `src` in its own tab is useless: it
 renders empty or redirects to the parent (the frame token is bound to its embedder). Indexes stay
-valid while the page does not add or remove frames; re-run `mira frames` after a navigation. A
+valid while the page does not add or remove frames; re-run `mira frames` after a navigation (a popup or panel frame that closed leaves `no frame #N (… frames: …)`: re-list, do not retry). A click with `--frame` is never judged by the `input was dropped` check (the top document cannot see events of another frame), so its success is read from the frame's own state. A
 cross-origin frame shows up a moment after the page reports loaded (its process attaches late): if
 `mira frames` lists only `#0` while the DOM has an `<iframe>`, run it again a few seconds later.
 On a Google Apps Script web app the url piece `userCodeAppPanel` matches two frames (the sandbox

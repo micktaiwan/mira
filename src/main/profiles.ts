@@ -4620,7 +4620,8 @@ export class ProfileManager {
     wc: WebContents,
     kind: InputKind,
     point: { x: number; y: number } | undefined,
-    dispatch: () => Promise<void>
+    dispatch: () => Promise<void>,
+    inFrame = false
   ): Promise<void> {
     const read = async (final: boolean): Promise<unknown> => {
       try {
@@ -4632,7 +4633,7 @@ export class ProfileManager {
     }
     let observable: unknown = false
     try {
-      observable = await evalInWebContents(wc, armDeliveryScript(kind, point))
+      observable = await evalInWebContents(wc, armDeliveryScript(kind, point, inFrame))
     } catch {
       // No probe, no verdict: the dispatch goes out as it always did.
     }
@@ -7419,7 +7420,7 @@ export class ProfileManager {
         try {
           await this.dispatchChecked(wc, 'mouse', point, async () => {
             for (const ev of events) await dbg.sendCommand('Input.dispatchMouseEvent', ev)
-          })
+          }, Boolean(scope.frame))
         } finally {
           // Only detach a debugger we attached; leave stealth's in place.
           if (!wasAttached) dbg.detach()
@@ -7461,7 +7462,7 @@ export class ProfileManager {
               for (const ev of mouseDispatchEvents(point.x, point.y)) {
                 await dbg.sendCommand('Input.dispatchMouseEvent', ev)
               }
-            })
+            }, Boolean(scope.frame))
           }
           await dbg.sendCommand('Input.dispatchKeyEvent', {
             type: 'keyDown',

@@ -55,7 +55,15 @@ export const DELIVERY_READ_INTERVAL_MS = 40
  *
  * `point` is where a click is about to land; a key press goes to whatever holds
  * focus. */
-export function armDeliveryScript(kind: InputKind, point?: { x: number; y: number }): string {
+export function armDeliveryScript(
+  kind: InputKind,
+  point?: { x: number; y: number },
+  inFrame = false
+): string {
+  // A click aimed at a named frame (`--frame`) lands in that frame's document,
+  // whatever sits under the same point in the top one (a div, a shadow host
+  // wrapping the iframe): the top document cannot judge it.
+  if (inFrame) return 'false'
   const events = JSON.stringify(EVENTS[kind])
   const target =
     kind === 'mouse' && point
